@@ -99,11 +99,35 @@ class Settings:
     log_level: str = "INFO"
 
     send_watch_alerts: bool = False
+    send_approaching_alerts: bool = True
     send_armed_reaction_alerts: bool = True
+    send_sweep_intrabar_alerts: bool = True
     min_reaction_distance_pips: float = 80.0
-    reaction_alert_cooldown_minutes: int = 15
+    approaching_alert_distance_pips: float = 150.0
+    armed_alert_distance_pips: float = 80.0
+    imminent_reaction_distance_pips: float = 50.0
+    allow_far_prep_alerts: bool = True
+    far_prep_alert_distance_pips: float = 250.0
+    max_far_prep_alerts_per_session: int = 1
+    reaction_alert_cooldown_minutes: int = 20
+    max_alerts_per_zone_per_session: int = 3
     max_reaction_alerts_per_session: int = 5
     send_triggered_only: bool = False
+
+    min_normal_reaction_target_pips: float = 50.0
+    preferred_reaction_target_pips: float = 100.0
+    allow_vwap_1r_target: bool = True
+    min_vwap_target_pips: float = 30.0
+    min_rr_normal: float = 1.5
+    min_rr_vwap_scalp: float = 1.0
+
+    enable_reentry_analysis: bool = True
+    reentry_max_wait_minutes: int = 30
+    reentry_require_new_entry: bool = True
+    reentry_require_choch: bool = True
+    reentry_require_fvg_or_ifvg: bool = True
+    reentry_max_volatility_state: str = "elevated"
+    reentry_no_chase_max_distance_pips: float = 80.0
 
     @classmethod
     def from_env(cls, env_file: str | os.PathLike[str] | None = ".env") -> "Settings":
@@ -150,11 +174,33 @@ class Settings:
             ledger_db_path=os.getenv("LEDGER_DB_PATH", "data/dazro_ledger.sqlite"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             send_watch_alerts=_bool(os.getenv("SEND_WATCH_ALERTS"), False),
+            send_approaching_alerts=_bool(os.getenv("SEND_APPROACHING_ALERTS"), True),
             send_armed_reaction_alerts=_bool(os.getenv("SEND_ARMED_REACTION_ALERTS"), True),
+            send_sweep_intrabar_alerts=_bool(os.getenv("SEND_SWEEP_INTRABAR_ALERTS"), True),
             min_reaction_distance_pips=_float("MIN_REACTION_DISTANCE_PIPS", 80.0),
-            reaction_alert_cooldown_minutes=_int("REACTION_ALERT_COOLDOWN_MINUTES", 15),
+            approaching_alert_distance_pips=_float("APPROACHING_ALERT_DISTANCE_PIPS", 150.0),
+            armed_alert_distance_pips=_float("ARMED_ALERT_DISTANCE_PIPS", 80.0),
+            imminent_reaction_distance_pips=_float("IMMINENT_REACTION_DISTANCE_PIPS", 50.0),
+            allow_far_prep_alerts=_bool(os.getenv("ALLOW_FAR_PREP_ALERTS"), True),
+            far_prep_alert_distance_pips=_float("FAR_PREP_ALERT_DISTANCE_PIPS", 250.0),
+            max_far_prep_alerts_per_session=_int("MAX_FAR_PREP_ALERTS_PER_SESSION", 1),
+            reaction_alert_cooldown_minutes=_int("REACTION_ALERT_COOLDOWN_MINUTES", 20),
+            max_alerts_per_zone_per_session=_int("MAX_ALERTS_PER_ZONE_PER_SESSION", 3),
             max_reaction_alerts_per_session=_int("MAX_REACTION_ALERTS_PER_SESSION", 5),
             send_triggered_only=_bool(os.getenv("SEND_TRIGGERED_ONLY"), False),
+            min_normal_reaction_target_pips=_float("MIN_NORMAL_REACTION_TARGET_PIPS", 50.0),
+            preferred_reaction_target_pips=_float("PREFERRED_REACTION_TARGET_PIPS", 100.0),
+            allow_vwap_1r_target=_bool(os.getenv("ALLOW_VWAP_1R_TARGET"), True),
+            min_vwap_target_pips=_float("MIN_VWAP_TARGET_PIPS", 30.0),
+            min_rr_normal=_float("MIN_RR_NORMAL", 1.5),
+            min_rr_vwap_scalp=_float("MIN_RR_VWAP_SCALP", 1.0),
+            enable_reentry_analysis=_bool(os.getenv("ENABLE_REENTRY_ANALYSIS"), True),
+            reentry_max_wait_minutes=_int("REENTRY_MAX_WAIT_MINUTES", 30),
+            reentry_require_new_entry=_bool(os.getenv("REENTRY_REQUIRE_NEW_ENTRY"), True),
+            reentry_require_choch=_bool(os.getenv("REENTRY_REQUIRE_CHOCH"), True),
+            reentry_require_fvg_or_ifvg=_bool(os.getenv("REENTRY_REQUIRE_FVG_OR_IFVG"), True),
+            reentry_max_volatility_state=os.getenv("REENTRY_MAX_VOLATILITY_STATE", "elevated"),
+            reentry_no_chase_max_distance_pips=_float("REENTRY_NO_CHASE_MAX_DISTANCE_PIPS", 80.0),
         )
 
     @property

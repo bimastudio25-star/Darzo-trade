@@ -79,6 +79,29 @@ XAUUSD pip conversion uses the project symbol spec:
 
 Distance filters use pips through `dazro_trade/core/symbols.py`, so broker quote precision can be changed in one place.
 
+Automatic alert milestones are deliberately sparse:
+
+- `300+ pips`: plan/watch only, no automatic alert.
+- `250-300 pips`: one far-prep alert per session for important liquidity.
+- `150 pips`: approaching alert.
+- `80 pips`: armed reaction alert.
+- `50 pips`: imminent reaction alert.
+- live sweep: `SWEEPING_INTRABAR`, wait for candle close.
+- confirmed sweep: still no trade until M1/M5/M15 confirmation, target, stop, spread, and target-space gates pass.
+
+Hard execution gates:
+
+- Short is invalidated if current price is already above stop.
+- Long is invalidated if current price is already below stop.
+- If entry area has already been missed, the bot marks it as `ENTERED`/played and does not chase.
+- Stop hit starts `REENTRY_WATCH`; the old setup is dead and re-entry must be validated from scratch.
+
+Target policy:
+
+- Normal reactions need at least 50 pips clean target space, preferably 100 pips.
+- VWAP 1R scalp is allowed only when VWAP is a logical target, at least 30 pips away, with RR >= 1.
+- Extended 5R-10R targets are runner context, not proof that a trade is valid.
+
 The bot does not read real heatmap, gamma exposure, or institutional orderflow from MT5. It uses explicit proxy scores such as `liquidity_pressure_proxy` from observable Level 1 behavior: range expansion, wick rejection, tick-volume expansion, failed follow-through, VWAP extension, and repeated sweeps. These are probabilities, not certainty.
 
 Trend following and reversal are classifications built from price, volume, VWAP, deviations, structure, liquidity, sweep, and momentum. They are not raw data feeds. Trend following remains preferred; reversal needs external liquidity taken, failure, displacement, M1/M5 confirmation, and valid targets.

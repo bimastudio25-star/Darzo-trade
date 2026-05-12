@@ -93,7 +93,7 @@ def test_h1_near_without_ltf_chain_stays_watch():
         current_price=103.0,
         spread=1.0,
     )
-    assert decision.state in {"WATCH", "ARMED"}
+    assert decision.state in {"WATCH", "ARMED", "ENTERED"}
     assert not decision.telegram_allowed
     assert decision.rejection_reasons
 
@@ -112,8 +112,8 @@ def test_m15_sweep_m5_confirmation_m1_trigger_becomes_triggered():
         spread=1.0,
         session_name="London",
     )
-    assert decision.state == "TRIGGERED"
-    assert decision.telegram_allowed
+    assert decision.state == "ENTERED"
+    assert not decision.telegram_allowed
     assert decision.primary_zone is not None
     assert decision.primary_zone.timeframe == "M15"
 
@@ -188,7 +188,7 @@ def test_telegram_message_decision_before_zone_events():
         session_name="London",
     )
     message = format_scalping_decision(decision)
-    assert message.splitlines()[0] == "XAUUSD - SETUP BUY VALIDO"
+    assert message.splitlines()[0] == "XAUUSD - DECISIONE OPERATIVA"
     assert message.index("Setup:") < message.index("Eventi rilevati:")
 
 
@@ -237,6 +237,10 @@ def test_scanner_auto_is_silent_for_first_scan_and_watch_reports():
     assert scanner._maybe_send_automatic_signal(watch, "London") is False
     assert sender.sent == []
 
+    triggered.state = "TRIGGERED"
+    triggered.score = 95
+    triggered.rejection_reasons = []
+    triggered.reason_codes = ["test_confirmed"]
     assert scanner._maybe_send_automatic_signal(triggered, "London") is True
     assert len(sender.sent) == 1
     assert scanner._maybe_send_automatic_signal(triggered, "London") is False

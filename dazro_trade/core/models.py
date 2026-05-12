@@ -7,7 +7,22 @@ from typing import Any, Literal
 from dazro_trade.core.context import SignalContext
 
 Direction = Literal["BUY", "SELL"]
-SetupState = Literal["WATCH", "ARMED", "TRIGGERED", "ENTERED", "INVALIDATED", "EXPIRED"]
+SetupState = Literal[
+    "WATCH",
+    "APPROACHING",
+    "ARMED",
+    "SWEEPING_INTRABAR",
+    "CONFIRMED_SWEEP",
+    "TRIGGERED",
+    "ENTERED",
+    "STOP_HIT",
+    "REENTRY_WATCH",
+    "REENTRY_CANDIDATE",
+    "REENTRY_VALID",
+    "NO_REENTRY",
+    "INVALIDATED",
+    "EXPIRED",
+]
 ZoneRole = Literal["HTF_CONTEXT", "LTF_SETUP", "ENTRY_TRIGGER", "TARGET"]
 
 

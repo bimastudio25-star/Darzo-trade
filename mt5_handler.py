@@ -3,6 +3,7 @@ import time
 import MetaTrader5 as mt5
 import pandas as pd
 from config import TIMEFRAMES
+from dazro_trade.core.symbols import get_symbol_spec
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +59,30 @@ class MT5Handler:
         tick = mt5.symbol_info_tick(self.symbol)
         return round((tick.ask + tick.bid) / 2, 2) if tick else 0.0
 
-    def get_spread_pips(self, pip_value: float) -> tuple[float, bool]:
+    def get_tick_snapshot(self) -> dict:
+        tick = mt5.symbol_info_tick(self.symbol)
+        if not tick:
+            return {"symbol": self.symbol, "ok": False, "reason": "tick_unavailable"}
+        spec = get_symbol_spec(self.symbol or "XAUUSD")
+        bid = float(tick.bid)
+        ask = float(tick.ask)
+        mid = round((ask + bid) / 2, spec.digits)
+        spread_price = abs(ask - bid)
+        return {
+            "symbol": self.symbol,
+            "ok": True,
+            "bid": round(bid, spec.digits),
+            "ask": round(ask, spec.digits),
+            "mid": mid,
+            "spread_price": round(spread_price, spec.digits),
+            "spread_pips": round(spread_price / spec.pip_size, 2),
+            "time": getattr(tick, "time", None),
+        }
+
+    def get_spread_pips(self, pip_value: float | None = None) -> tuple[float, bool]:
         tick = mt5.symbol_info_tick(self.symbol)
         if not tick:
             return 999.0, False
-        spread = abs(tick.ask - tick.bid) / pip_value
+        spec = get_symbol_spec(self.symbol or "XAUUSD")
+        spread = abs(tick.ask - tick.bid) / (pip_value or spec.pip_size)
         return round(spread, 2), True

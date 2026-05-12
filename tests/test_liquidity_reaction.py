@@ -50,7 +50,7 @@ def test_4722_external_high_stays_in_liquidity_map_reaction_band():
     target = [item for item in pools if item.level == 4722.33 and item.side == "buy_side"]
     assert target
     assert target[0].distance_pips == 337.0
-    assert target[0].distance_band == "reaction_250_500_pips"
+    assert target[0].distance_band == "remote_300_plus_pips"
 
 
 def test_intrabar_sweep_is_not_triggered_until_close():
@@ -143,6 +143,10 @@ def test_reaction_alert_is_deduplicated_same_level_same_session():
 
     sender = Sender()
     scanner = ScalpingScanner(Settings(telegram_token="x", telegram_chat_id="1"), telegram_bot=sender)
+    near_pool = pool(level=4720.40)
+    near_pool.distance_pips = 144.0
+    near_pool.distance_points = 1.44
+    near_pool.metadata["distance_band"] = "reaction_80_150_pips"
     decision = ScalpingDecision(
         symbol="XAUUSD",
         setup_type="LIQUIDITY_REACTION",
@@ -153,8 +157,8 @@ def test_reaction_alert_is_deduplicated_same_level_same_session():
         htf_context={},
         intraday_context={},
         liquidity={
-            "pools": [pool().__dict__ | {"distance_band": "reaction_250_500_pips"}],
-            "sweeps": [{"pool_id": pool().id, "status": "SWEEPING_INTRABAR", "level": 4722.33, "reason_codes": ["external_liquidity_in_reaction_band"]}],
+            "pools": [near_pool.__dict__ | {"distance_band": near_pool.distance_band}],
+            "sweeps": [{"pool_id": near_pool.id, "status": "SWEEPING_INTRABAR", "level": near_pool.level, "reason_codes": ["external_liquidity_in_reaction_band"]}],
         },
     )
     scanner.latest_analysis = decision

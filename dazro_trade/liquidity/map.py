@@ -29,13 +29,7 @@ class LiquidityPool:
 
     @property
     def distance_band(self) -> str:
-        if self.distance_pips < 80:
-            return "under_80_pips"
-        if self.distance_pips < 250:
-            return "reaction_80_250_pips"
-        if self.distance_pips < 500:
-            return "reaction_250_500_pips"
-        return "remote_500_plus_pips"
+        return classify_distance_pips(self.distance_pips)
 
 
 def build_liquidity_map(
@@ -71,13 +65,17 @@ def build_liquidity_map(
 
 
 def classify_distance_pips(distance_pips: float) -> str:
+    if distance_pips < 50:
+        return "under_50_pips"
     if distance_pips < 80:
-        return "under_80_pips"
+        return "reaction_50_80_pips"
+    if distance_pips < 150:
+        return "reaction_80_150_pips"
     if distance_pips < 250:
-        return "reaction_80_250_pips"
-    if distance_pips < 500:
-        return "reaction_250_500_pips"
-    return "remote_500_plus_pips"
+        return "approaching_150_250_pips"
+    if distance_pips < 300:
+        return "far_prep_250_300_pips"
+    return "remote_300_plus_pips"
 
 
 def important_reaction_pools(pools: list[LiquidityPool], min_pips: float = 80.0, max_pips: float = 500.0) -> list[LiquidityPool]:
