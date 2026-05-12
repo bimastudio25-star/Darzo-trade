@@ -1,0 +1,10 @@
+MetaTrader5
+anthropic
+python-telegram-bot
+pandas
+numpy
+python-dotenv
+requests
+pytest
+pydantic
+openai
