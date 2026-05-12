@@ -98,6 +98,13 @@ class Settings:
     ledger_db_path: str = "data/dazro_ledger.sqlite"
     log_level: str = "INFO"
 
+    send_watch_alerts: bool = False
+    send_armed_reaction_alerts: bool = True
+    min_reaction_distance_pips: float = 80.0
+    reaction_alert_cooldown_minutes: int = 15
+    max_reaction_alerts_per_session: int = 5
+    send_triggered_only: bool = False
+
     @classmethod
     def from_env(cls, env_file: str | os.PathLike[str] | None = ".env") -> "Settings":
         if env_file:
@@ -142,6 +149,12 @@ class Settings:
             orderflow_confidence_level=os.getenv("ORDERFLOW_CONFIDENCE_LEVEL", "LOW"),
             ledger_db_path=os.getenv("LEDGER_DB_PATH", "data/dazro_ledger.sqlite"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            send_watch_alerts=_bool(os.getenv("SEND_WATCH_ALERTS"), False),
+            send_armed_reaction_alerts=_bool(os.getenv("SEND_ARMED_REACTION_ALERTS"), True),
+            min_reaction_distance_pips=_float("MIN_REACTION_DISTANCE_PIPS", 80.0),
+            reaction_alert_cooldown_minutes=_int("REACTION_ALERT_COOLDOWN_MINUTES", 15),
+            max_reaction_alerts_per_session=_int("MAX_REACTION_ALERTS_PER_SESSION", 5),
+            send_triggered_only=_bool(os.getenv("SEND_TRIGGERED_ONLY"), False),
         )
 
     @property

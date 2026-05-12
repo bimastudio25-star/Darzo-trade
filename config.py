@@ -18,6 +18,12 @@ CONFIG = {
     "send_auto_zone_events": False,
     "send_auto_no_trade_messages": False,
     "max_alerts_per_scan": 1,
+    "send_watch_alerts": False,
+    "send_armed_reaction_alerts": True,
+    "min_reaction_distance_pips": 80,
+    "reaction_alert_cooldown_minutes": 15,
+    "max_reaction_alerts_per_session": 5,
+    "send_triggered_only": False,
 }
 
 TIMEFRAMES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}

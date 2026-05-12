@@ -91,6 +91,8 @@ class ScalpingScanner:
         self.latest_zones: list[SetupZone] = []
         self.trades: list[VirtualTrade] = []
         self.stats = ScannerStats()
+        self.reaction_alerts: dict[str, datetime] = {}
+        self.reaction_alert_session_counts: dict[str, int] = {}
 
     async def initialize(self) -> None:
         if self.mt5_handler is not None:
@@ -214,6 +216,8 @@ class ScalpingScanner:
             log.info("first_silent_scan_completed")
             return False
         if not self.auto_signals_enabled or not decision.telegram_allowed:
+            if self._maybe_send_reaction_alert(decision, session):
+                return True
             if decision.state != "TRIGGERED":
                 log.info("no_trade_internal reason=%s", self.stats.last_filter_reason)
             return False
@@ -232,6 +236,74 @@ class ScalpingScanner:
             return True
         log.warning("signal_send_failed key=%s result=%s", key, result)
         return False
+
+    def _maybe_send_reaction_alert(self, decision: ScalpingDecision, session: str) -> bool:
+        if self.settings.send_triggered_only or not self.settings.send_armed_reaction_alerts:
+            return False
+        sweeps = decision.liquidity.get("sweeps", []) if decision.liquidity else []
+        if decision.state not in {"ARMED", "WATCH"} or not sweeps:
+            return False
+        sweep = sweeps[0]
+        if sweep.get("status") not in {"ARMED", "SWEEPING_INTRABAR", "CONFIRMED_SWEEP"}:
+            return False
+        pool = self._pool_for_sweep(sweep.get("pool_id"))
+        distance_pips = float(pool.get("distance_pips", 0) if pool else 0)
+        if distance_pips < self.settings.min_reaction_distance_pips and sweep.get("status") == "ARMED":
+            return False
+        count = self.reaction_alert_session_counts.get(session, 0)
+        if count >= self.settings.max_reaction_alerts_per_session:
+            return False
+        key = f"{decision.symbol}:{sweep.get('pool_id')}:{sweep.get('status')}:{session}"
+        now = datetime.now(timezone.utc)
+        last = self.reaction_alerts.get(key)
+        if last and (now - last) < timedelta(minutes=self.settings.reaction_alert_cooldown_minutes):
+            log.info("reaction_alert_skipped_cooldown key=%s", key)
+            return False
+        text = self._format_reaction_alert(decision, sweep, pool)
+        result = self.telegram_bot.send_text(text)
+        if result.get("ok"):
+            self.reaction_alerts[key] = now
+            self.reaction_alert_session_counts[session] = count + 1
+            log.info("reaction_alert_sent key=%s", key)
+            return True
+        return False
+
+    def _pool_for_sweep(self, pool_id: str | None) -> dict | None:
+        if self.latest_analysis is None or not pool_id:
+            return None
+        for pool in self.latest_analysis.liquidity.get("pools", []):
+            if pool.get("id") == pool_id:
+                return pool
+        return None
+
+    @staticmethod
+    def _format_reaction_alert(decision: ScalpingDecision, sweep: dict, pool: dict | None) -> str:
+        pool_type = pool.get("pool_type") if pool else "liquidity"
+        distance = pool.get("distance_pips") if pool else "-"
+        confluences = []
+        if pool:
+            confluences.extend(pool.get("confluences", []))
+        confluences.extend(sweep.get("reason_codes", []))
+        lines = [
+            f"{decision.symbol} - POSSIBILE REAZIONE LIQUIDITY",
+            f"Livello: {sweep.get('level')}",
+            f"Tipo: {pool_type}",
+            f"Distanza: {distance} pips",
+            f"Stato: {sweep.get('status')}",
+            "Confluence:",
+        ]
+        lines.extend(f"- {item}" for item in confluences[:8])
+        lines.extend(
+            [
+                "Serve conferma:",
+                "- close back inside",
+                "- M1/M5 CHoCH",
+                "- FVG/IFVG dopo sweep",
+                "NO ENTRY ANCORA.",
+                "Disclaimer: Paper/demo signal only. No real-money execution.",
+            ]
+        )
+        return "\n".join(lines)
 
     def _create_virtual_trade(self, decision: ScalpingDecision, signal_key: str) -> None:
         if decision.primary_zone is None or not decision.entry_area:
@@ -348,6 +420,12 @@ class ScalpingScanner:
         remote = len([z for z in self.latest_zones if z.role == "HTF_CONTEXT" and (z.distance_from_price or 0) > 8])
         if remote:
             lines.append(f"\nZone HTF di contesto non operative: {remote}")
+        if self.latest_analysis:
+            reaction = self.latest_analysis.liquidity.get("reaction_pools", [])[:5]
+            if reaction:
+                lines.append("\nLiquidity 80+ pips in reaction map:")
+                for pool in reaction:
+                    lines.append(f"- {pool.get('timeframe')} {pool.get('pool_type')} {pool.get('level')} distanza={pool.get('distance_pips')} pips ({pool.get('distance_band')})")
         return "\n".join(lines)
 
     def format_scan_report(self, decision: ScalpingDecision | None = None) -> str:

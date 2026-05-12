@@ -63,10 +63,25 @@ Setup states:
 
 - `WATCH`: interesting zone, not operational.
 - `ARMED`: price is close and LTF confluence is forming.
+- `SWEEPING_INTRABAR`: liquidity is being taken on the live candle; this is observation only.
+- `CONFIRMED_SWEEP`: a closed candle took liquidity and closed back inside.
 - `TRIGGERED`: M15/M5/M1 chain is confirmed and Telegram may send one signal.
 - `ENTERED`: entry area was already touched; do not chase.
 - `INVALIDATED`: technical invalidation broke.
 - `EXPIRED`: setup is stale.
+
+Liquidity reaction alerts are not trade signals. A reaction alert can say that XAUUSD is sweeping or approaching external liquidity, but the bot still requires closed-candle confirmation, M1/M5 structure, displacement, FVG/IFVG context, spread, RR, and deduplication before an operational signal is sent.
+
+XAUUSD pip conversion uses the project symbol spec:
+
+- `pip_size = 0.01`
+- `80 pips = 0.80` price distance
+
+Distance filters use pips through `dazro_trade/core/symbols.py`, so broker quote precision can be changed in one place.
+
+The bot does not read real heatmap, gamma exposure, or institutional orderflow from MT5. It uses explicit proxy scores such as `liquidity_pressure_proxy` from observable Level 1 behavior: range expansion, wick rejection, tick-volume expansion, failed follow-through, VWAP extension, and repeated sweeps. These are probabilities, not certainty.
+
+Trend following and reversal are classifications built from price, volume, VWAP, deviations, structure, liquidity, sweep, and momentum. They are not raw data feeds. Trend following remains preferred; reversal needs external liquidity taken, failure, displacement, M1/M5 confirmation, and valid targets.
 
 ## Telegram Commands
 

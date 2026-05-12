@@ -70,14 +70,35 @@ def format_scalping_decision(decision: ScalpingDecision) -> str:
         f"- External: {decision.liquidity.get('external_low', '-')} / {decision.liquidity.get('external_high', '-')}",
         f"- Internal: {decision.liquidity.get('price_vs_range', 'unknown')}",
         f"- Sweep rilevato: {decision.liquidity.get('m15_sweep', 'none')}",
-        "",
-        "Setup:",
+    ]
+    reaction_pools = decision.liquidity.get("reaction_pools", []) or []
+    sweeps = decision.liquidity.get("sweeps", []) or []
+    if reaction_pools:
+        lines.append("- Reaction levels 80+ pips:")
+        for pool in reaction_pools[:3]:
+            lines.append(f"  {pool.get('timeframe')} {pool.get('pool_type')} {pool.get('level')} ({pool.get('distance_pips')} pips, {pool.get('distance_band')})")
+    if sweeps:
+        lines.append("- Sweep status:")
+        for sweep in sweeps[:3]:
+            lines.append(f"  {sweep.get('status')} {sweep.get('level')} score={sweep.get('score')}")
+    if decision.liquidity.get("vwap"):
+        vw = decision.liquidity["vwap"]
+        lines.append(f"- VWAP: {vw.get('vwap')} | z-score {vw.get('z_score')} | 2sigma {vw.get('upper_2')}/{vw.get('lower_2')}")
+    if decision.liquidity.get("volume_profile"):
+        vp = decision.liquidity["volume_profile"]
+        cracks = vp.get("volume_cracks") or []
+        lines.append(f"- Volume profile: POC {vp.get('poc')} | cracks {cracks[:2]}")
+    lines.extend(
+        [
+            "",
+            "Setup:",
         f"- Tipo: {decision.setup_type}",
         f"- Direzione: {direction_label}",
         f"- Stato: {decision.state}",
         f"- Score: {decision.score}/100",
         f"- Confidenza: {decision.confidence}",
-    ]
+        ]
+    )
     if zone is not None:
         lines.extend(
             [

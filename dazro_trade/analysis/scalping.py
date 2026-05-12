@@ -6,7 +6,12 @@ from typing import Any, Iterable, Literal
 
 import pandas as pd
 
+from dazro_trade.analysis.volume_profile import build_volume_profile
+from dazro_trade.analysis.vwap import vwap_snapshot
 from dazro_trade.core.models import ScalpingDecision, SetupState, SetupZone, ZoneRole
+from dazro_trade.core.symbols import price_to_pips, pips_to_price
+from dazro_trade.liquidity.map import LiquidityPool, build_liquidity_map, important_reaction_pools
+from dazro_trade.liquidity.sweep import SweepEvent, detect_sweeps_for_pools
 
 DirectionWord = Literal["BUY", "SELL"]
 TradeDirection = Literal["LONG", "SHORT", "WAIT"]
@@ -21,6 +26,10 @@ class ScalpingConfig:
     max_m5_distance_points: float = 5.0
     max_m15_distance_points: float = 8.0
     max_htf_context_distance_points: float = 50.0
+    max_m1_distance_pips: float = 250.0
+    max_m5_distance_pips: float = 500.0
+    max_m15_distance_pips: float = 800.0
+    min_reaction_distance_pips: float = 80.0
     min_signal_score: int = 85
     min_rr: float = 2.0
     entry_buffer_points: float = 0.30
@@ -91,8 +100,20 @@ def evaluate_scalping_setup(
 
     missing = [tf for tf in ("M1", "M5", "M15") if _frame_empty(frames.get(tf))]
     htf_context = build_htf_context(frames, price)
+    volume_profile = build_volume_profile(frames.get("M15", pd.DataFrame()))
+    vwap = vwap_snapshot(frames.get("M15", pd.DataFrame()), price)
+    liquidity_pools = build_liquidity_map(frames, symbol=symbol, current_price=price)
+    sweep_events = detect_sweeps_for_pools(
+        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=500),
+        frames.get("M1", frames.get("M5", pd.DataFrame())),
+        m5_df=frames.get("M5"),
+        m1_df=frames.get("M1"),
+        vwap_df=frames.get("M15"),
+        volume_profile=volume_profile,
+        current_candle_closed=True,
+    )
     zones = build_zones(frames, symbol=symbol, current_price=price, config=cfg)
-    liquidity = build_liquidity_context(frames, price)
+    liquidity = build_liquidity_context(frames, price, pools=liquidity_pools, sweeps=sweep_events, vwap=vwap, volume_profile=volume_profile)
     intraday_context = build_intraday_context(frames, price)
     if missing:
         return ScalpingDecision(
@@ -112,6 +133,52 @@ def evaluate_scalping_setup(
         )
 
     primary = choose_primary_zone(zones, price, cfg)
+    top_sweep = sweep_events[0] if sweep_events else None
+    if top_sweep is not None and top_sweep.status == "accepted_breakout":
+        return _decision_from_sweep(
+            top_sweep,
+            symbol=symbol,
+            price=price,
+            htf_context=htf_context,
+            intraday_context={**intraday_context, "session": session_name},
+            liquidity=liquidity,
+            now=now,
+            config=cfg,
+            forced_state="WATCH",
+            rejection_reasons=["accepted_breakout_not_reversal"],
+        )
+    if primary is None and top_sweep is not None:
+        if top_sweep.status == "TRIGGERED":
+            return _decision_from_sweep(
+                top_sweep,
+                symbol=symbol,
+                price=price,
+                htf_context=htf_context,
+                intraday_context={**intraday_context, "session": session_name, "confirmations_present": top_sweep.reason_codes, "confirmations_missing": []},
+                liquidity=liquidity,
+                now=now,
+                config=cfg,
+                forced_state="TRIGGERED",
+                rejection_reasons=[],
+            )
+        if top_sweep.status in {"ARMED", "SWEEPING_INTRABAR", "CONFIRMED_SWEEP"}:
+            reason = {
+                "ARMED": "remote_liquidity_found_but_not_armed",
+                "SWEEPING_INTRABAR": "sweep_intrabar_waiting_closed_candle",
+                "CONFIRMED_SWEEP": "sweep_confirmed_missing_m1_choch",
+            }.get(top_sweep.status, "liquidity_reaction_watch")
+            return _decision_from_sweep(
+                top_sweep,
+                symbol=symbol,
+                price=price,
+                htf_context=htf_context,
+                intraday_context={**intraday_context, "session": session_name},
+                liquidity=liquidity,
+                now=now,
+                config=cfg,
+                forced_state="ARMED",
+                rejection_reasons=[reason, *top_sweep.reason_codes],
+            )
     if primary is None:
         remote_count = len([z for z in zones if z.role == "HTF_CONTEXT" and (z.distance_from_price or 0) > cfg.max_m15_distance_points])
         return ScalpingDecision(
@@ -144,7 +211,7 @@ def evaluate_scalping_setup(
     m5_displacement = detect_displacement(_closed_frame(frames["M5"]), primary.direction)
     m5_structure = detect_structure_confirmation(_closed_frame(frames["M5"]), primary.direction)
     m1_trigger = detect_micro_trigger(_closed_frame(frames["M1"]), primary.direction)
-    fvg_after_sweep = primary.zone_type in {"bullish_fvg", "bearish_fvg", "bullish_ifvg", "bearish_ifvg"}
+    fvg_after_sweep = primary.zone_type in {"bullish_fvg", "bearish_fvg", "bullish_ifvg", "bearish_ifvg"} and bool(sweep_events)
     htf_alignment = htf_allows_direction(htf_context, primary.direction)
     rr_payload = build_risk_targets(primary, direction, cfg)
 
@@ -189,7 +256,7 @@ def evaluate_scalping_setup(
         spread_ok=spread <= max_spread,
         rr_ok=rr_payload["rr"] >= cfg.min_rr,
         entry_already_touched=interactions.entry_area_touched,
-        distance=primary.distance_from_price or 0.0,
+        distance=price_to_pips(symbol, primary.distance_from_price or 0.0),
     )
 
     state = classify_setup_state(
@@ -216,6 +283,7 @@ def evaluate_scalping_setup(
             "confirmations_missing": confirmations_missing,
             "session": session_name,
             "touch": interactions.__dict__,
+            "sweep_events": [event.__dict__ for event in sweep_events[:3]],
         }
     )
 
@@ -224,6 +292,8 @@ def evaluate_scalping_setup(
         rejection_reasons.insert(0, "Entry area gia toccata, non inseguire")
     if primary.role == "HTF_CONTEXT":
         rejection_reasons.insert(0, "Zona HTF usata come contesto, non entry scalping")
+    if primary.zone_type in {"bullish_fvg", "bearish_fvg"} and not sweep_events:
+        rejection_reasons.append("fvg_without_liquidity_penalty")
     if score < cfg.min_signal_score:
         rejection_reasons.append(f"score {score}/{cfg.min_signal_score}")
 
@@ -312,11 +382,13 @@ def choose_primary_zone(zones: Iterable[SetupZone], current_price: float, config
     for zone in zones:
         distance = zone_distance(zone, current_price)
         zone.distance_from_price = distance
-        if zone.timeframe == "M15" and distance <= cfg.max_m15_distance_points:
+        distance_pips = price_to_pips(zone.symbol, distance)
+        zone.metadata["distance_pips"] = round(distance_pips, 1)
+        if zone.timeframe == "M15" and distance_pips <= cfg.max_m15_distance_pips:
             operative.append(zone)
-        elif zone.timeframe == "M5" and distance <= cfg.max_m5_distance_points:
+        elif zone.timeframe == "M5" and distance_pips <= cfg.max_m5_distance_pips:
             operative.append(zone)
-        elif zone.timeframe == "M1" and distance <= cfg.max_m1_distance_points:
+        elif zone.timeframe == "M1" and distance_pips <= cfg.max_m1_distance_pips:
             operative.append(zone)
     if not operative:
         return None
@@ -379,7 +451,7 @@ def score_setup(
     score += 10 if fvg_after_sweep else 0
     score += 5 if spread_ok else -15
     score += 10 if rr_ok else -20
-    if distance > 8:
+    if distance > 800:
         score -= 30
     if entry_already_touched:
         score -= 50
@@ -417,24 +489,34 @@ def build_risk_targets(zone: SetupZone, direction: TradeDirection, config: Scalp
     if direction == "LONG":
         stop = round(zone.low - cfg.invalidation_buffer_points, 2)
         risk = max(entry - stop, 0.01)
-        targets = [
-            {"label": "TP1", "price": round(entry + risk, 2), "basis": "1R"},
-            {"label": "TP2", "price": round(entry + risk * 2, 2), "basis": "2R/liquidity interna"},
-            {"label": "TP3", "price": round(entry + risk * 3, 2), "basis": "runner liquidity M15"},
-        ]
+        targets = _dynamic_r_targets(entry, risk, "LONG")
     elif direction == "SHORT":
         stop = round(zone.high + cfg.invalidation_buffer_points, 2)
         risk = max(stop - entry, 0.01)
-        targets = [
-            {"label": "TP1", "price": round(entry - risk, 2), "basis": "1R"},
-            {"label": "TP2", "price": round(entry - risk * 2, 2), "basis": "2R/liquidity interna"},
-            {"label": "TP3", "price": round(entry - risk * 3, 2), "basis": "runner liquidity M15"},
-        ]
+        targets = _dynamic_r_targets(entry, risk, "SHORT")
     else:
         stop = None
         risk = 0.0
         targets = []
     return {"entry_area": (entry_low, entry_high), "entry": entry, "stop": stop, "targets": targets, "rr": 2.0 if risk else 0.0}
+
+
+def _dynamic_r_targets(entry: float, risk: float, direction: TradeDirection) -> list[dict[str, Any]]:
+    targets = []
+    for multiple in range(1, 11):
+        price = entry + risk * multiple if direction == "LONG" else entry - risk * multiple
+        if multiple == 1:
+            basis = "1R primo take profit / gestione rischio"
+        elif multiple == 2:
+            basis = "2R liquidity interna"
+        elif multiple == 3:
+            basis = "3R continuation target"
+        elif multiple <= 5:
+            basis = "runner solo se momentum e spazio reale"
+        else:
+            basis = "extended runner 6R-10R solo senza ostacoli HTF"
+        targets.append({"label": f"TP{multiple}", "price": round(price, 2), "basis": basis, "r_multiple": multiple})
+    return targets
 
 
 def build_htf_context(frames: dict[str, pd.DataFrame], price: float) -> dict[str, Any]:
@@ -466,10 +548,26 @@ def build_intraday_context(frames: dict[str, pd.DataFrame], price: float) -> dic
     }
 
 
-def build_liquidity_context(frames: dict[str, pd.DataFrame], price: float) -> dict[str, Any]:
+def build_liquidity_context(
+    frames: dict[str, pd.DataFrame],
+    price: float,
+    *,
+    pools: list[LiquidityPool] | None = None,
+    sweeps: list[SweepEvent] | None = None,
+    vwap: Any | None = None,
+    volume_profile: Any | None = None,
+) -> dict[str, Any]:
     m15 = _closed_frame(frames.get("M15"))
+    liquidity_pools = pools or []
+    sweep_events = sweeps or []
     if _frame_empty(m15):
-        return {"external": "unknown", "internal": "unknown", "price": price}
+        return {
+            "external": "unknown",
+            "internal": "unknown",
+            "price": price,
+            "pools": [pool.__dict__ | {"distance_band": pool.distance_band} for pool in liquidity_pools[:20]],
+            "sweeps": [event.__dict__ for event in sweep_events[:10]],
+        }
     high = float(m15["h"].tail(50).max())
     low = float(m15["l"].tail(50).min())
     return {
@@ -477,6 +575,11 @@ def build_liquidity_context(frames: dict[str, pd.DataFrame], price: float) -> di
         "external_low": round(low, 2),
         "price_vs_range": "premium" if price > (high + low) / 2 else "discount",
         "price": price,
+        "pools": [pool.__dict__ | {"distance_band": pool.distance_band} for pool in liquidity_pools[:20]],
+        "reaction_pools": [pool.__dict__ | {"distance_band": pool.distance_band} for pool in important_reaction_pools(liquidity_pools)[:10]],
+        "sweeps": [event.__dict__ for event in sweep_events[:10]],
+        "vwap": vwap.__dict__ if vwap is not None else None,
+        "volume_profile": volume_profile.__dict__ if volume_profile is not None else None,
     }
 
 
@@ -573,9 +676,11 @@ def zone_role_for_timeframe(timeframe: str) -> ZoneRole:
 
 def enrich_zone_distance(zone: SetupZone, current_price: float, config: ScalpingConfig) -> None:
     zone.distance_from_price = zone_distance(zone, current_price)
+    distance_pips = price_to_pips(zone.symbol, zone.distance_from_price)
+    zone.metadata["distance_pips"] = round(distance_pips, 1)
     if zone.role == "HTF_CONTEXT":
         zone.metadata["classification"] = "HTF_CONTEXT" if zone.distance_from_price <= config.max_htf_context_distance_points else "REMOTE_HTF_CONTEXT"
-    elif zone.distance_from_price <= config.max_m15_distance_points:
+    elif distance_pips <= config.max_m15_distance_pips:
         zone.metadata["classification"] = "OPERATIVE_ZONE"
     else:
         zone.metadata["classification"] = "REMOTE_ZONE"
@@ -745,6 +850,81 @@ def _zone_events(zones: Iterable[SetupZone], price: float) -> list[dict[str, Any
             }
         )
     return events
+
+
+def _decision_from_sweep(
+    sweep: SweepEvent,
+    *,
+    symbol: str,
+    price: float,
+    htf_context: dict[str, Any],
+    intraday_context: dict[str, Any],
+    liquidity: dict[str, Any],
+    now: datetime,
+    config: ScalpingConfig,
+    forced_state: SetupState,
+    rejection_reasons: list[str],
+) -> ScalpingDecision:
+    direction: DirectionWord = "SELL" if sweep.direction == "bearish_reversal_candidate" else "BUY"
+    trade_direction: TradeDirection = "SHORT" if direction == "SELL" else "LONG"
+    zone_low = sweep.level - pips_to_price(symbol, 25)
+    zone_high = sweep.level + pips_to_price(symbol, 25)
+    zone = SetupZone(
+        id=f"{symbol}_sweep_{round(sweep.level, 2)}".replace(".", "_"),
+        symbol=symbol,
+        timeframe=sweep.timeframe,
+        zone_type="buy_side_liquidity_sweep" if direction == "SELL" else "sell_side_liquidity_sweep",
+        role="LTF_SETUP",
+        state=forced_state,
+        direction=direction,
+        low=round(zone_low, 2),
+        high=round(zone_high, 2),
+        reason_codes=list(sweep.reason_codes),
+        score=max(sweep.score, config.min_signal_score if forced_state == "TRIGGERED" else sweep.score),
+        distance_from_price=round(abs(price - sweep.level), 2),
+        metadata={
+            "sweep_status": sweep.status,
+            "penetration_pips": sweep.penetration_pips,
+            "liquidity_level": sweep.level,
+        },
+    )
+    rr_payload = build_risk_targets(zone, trade_direction, config)
+    setup_type = "REVERSAL_SHORT" if trade_direction == "SHORT" else "REVERSAL_LONG"
+    if sweep.accepted_breakout:
+        setup_type = "TREND_FOLLOWING_SHORT" if trade_direction == "SHORT" else "TREND_FOLLOWING_LONG"
+    return ScalpingDecision(
+        symbol=symbol,
+        setup_type=setup_type if forced_state == "TRIGGERED" else "LIQUIDITY_REACTION",
+        direction=trade_direction,
+        state=forced_state,
+        score=zone.score,
+        confidence=round(zone.score / 100, 2),
+        htf_context=htf_context,
+        intraday_context={
+            **intraday_context,
+            "confirmations_present": list(sweep.reason_codes) if forced_state == "TRIGGERED" else [],
+            "confirmations_missing": rejection_reasons if forced_state != "TRIGGERED" else [],
+        },
+        liquidity=liquidity,
+        primary_zone=zone,
+        entry_area=rr_payload["entry_area"],
+        stop=rr_payload["stop"],
+        targets=rr_payload["targets"],
+        invalidation=rr_payload["stop"],
+        reason_codes=list(sweep.reason_codes),
+        rejection_reasons=rejection_reasons,
+        events=[
+            {
+                "type": "LIQUIDITY_SWEEP",
+                "status": sweep.status,
+                "level": sweep.level,
+                "direction": sweep.direction,
+                "score": sweep.score,
+                "reason_codes": sweep.reason_codes,
+            }
+        ],
+        timestamp_utc=now,
+    )
 
 
 __all__ = [
