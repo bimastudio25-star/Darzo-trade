@@ -177,6 +177,8 @@ class Settings:
     strategy_conflict_tolerance_pips: float = 50.0
     send_strategy_conflict_alert: bool = True
     strategy_independent_both_policy: str = "send_both"
+    session_bias_enabled: bool = True
+    session_bias_asia_range_max_pips: float = 35.0
 
     liquidity_expansion_enabled: bool = True
     liquidity_expansion_lookback_h1: int = 60
@@ -341,6 +343,8 @@ class Settings:
             strategy_conflict_tolerance_pips=_float("STRATEGY_CONFLICT_TOLERANCE_PIPS", 50.0),
             send_strategy_conflict_alert=_bool(os.getenv("SEND_STRATEGY_CONFLICT_ALERT"), True),
             strategy_independent_both_policy=os.getenv("STRATEGY_INDEPENDENT_BOTH_POLICY", "send_both"),
+            session_bias_enabled=_bool(os.getenv("SESSION_BIAS_ENABLED"), True),
+            session_bias_asia_range_max_pips=_float("SESSION_BIAS_ASIA_RANGE_MAX_PIPS", 35.0),
             liquidity_expansion_enabled=_bool(os.getenv("LIQUIDITY_EXPANSION_ENABLED"), True),
             liquidity_expansion_lookback_h1=_int("LIQUIDITY_EXPANSION_LOOKBACK_H1", 60),
             liquidity_expansion_range_in_range_max_pips=_float("LIQUIDITY_EXPANSION_RANGE_IN_RANGE_MAX_PIPS", 30.0),

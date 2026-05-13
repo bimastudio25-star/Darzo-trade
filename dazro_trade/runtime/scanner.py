@@ -21,6 +21,7 @@ from dazro_trade.analysis.scalping import (
 from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evaluate_statistical_scalp
 from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, evaluate_liquidity_expansion
 from dazro_trade.runtime.coordinator import CoordinatorDecision, combine_strategy_results
+from dazro_trade.runtime.session_bias import SessionRelationship, apply_session_bias_to_strategy, classify_session_relationship
 from dazro_trade.risk.manager import RiskManager
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
@@ -128,6 +129,7 @@ class ScalpingScanner:
         self.latest_adelin_result: dict[str, Any] | None = None
         self.latest_liquidity_expansion_signal: LiquidityExpansionSignal | None = None
         self.latest_coordinator_decision: CoordinatorDecision | None = None
+        self.latest_session_bias: SessionRelationship | None = None
         self.latest_zones: list[SetupZone] = []
         self.trades: list[VirtualTrade] = []
         self.stats = ScannerStats()
@@ -239,6 +241,15 @@ class ScalpingScanner:
         self._track_virtual_entries(market_data, now, previous_scan)
         self.last_scan = now
 
+        if self.settings.session_bias_enabled:
+            self.latest_session_bias = classify_session_relationship(
+                market_data,
+                now,
+                symbol=self.last_symbol,
+                timezone_name=self.settings.timezone,
+                broker_time_offset_hours=self.settings.broker_time_offset_hours,
+                asia_range_max_pips=self.settings.session_bias_asia_range_max_pips,
+            )
         sent = False
         was_first_silent_scan = self.first_silent_scan_pending
         if not manual:
@@ -1434,6 +1445,21 @@ class ScalpingScanner:
             lines.append("Strategy 1.0 rejected reasons:")
             for r in adelin_rejected[:5]:
                 lines.append(f"- {r}")
+        bias = self.latest_session_bias
+        if bias is not None:
+            lines.extend([
+                "",
+                "SESSION BIAS",
+                f"Active session: {bias.active_session}",
+                f"Label: {bias.label}",
+                f"Directional bias: {bias.directional_bias} | confidence: {bias.confidence}",
+                f"Swept level: {bias.swept_level or '-'}",
+                f"Asia range pips: {bias.asia_range.get('range_pips')} | London: {bias.london_range.get('range_pips')} | NY: {bias.ny_range.get('range_pips')}",
+            ])
+            if bias.reason_codes:
+                lines.append("Reasons:")
+                for r in bias.reason_codes[:4]:
+                    lines.append(f"- {r}")
         return "\n".join(lines)
 
     def format_watch(self) -> str:
