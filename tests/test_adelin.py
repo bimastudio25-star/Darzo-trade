@@ -126,8 +126,13 @@ def test_confluence_engine_modes_and_levels():
     assert full["score"] <= 100
     assert full["setup_mode"] == "LIQ_VP_NT_FVG_A_PLUS"
     assert score_setup(sweep=None, volume_confluence={"confluence": True}, number_theory={"confluence": True}, levels=levels, spread_pips=2.0)["score"] == 0
-    assert score_setup(sweep=sweep, volume_confluence={"confluence": False}, number_theory={"confluence": True}, levels=levels, spread_pips=2.0)["setup_mode"] != "LIQ_VP_NT_FVG_A_PLUS"
-    assert score_setup(sweep=sweep, volume_confluence={"confluence": True}, number_theory={"confluence": False}, levels=levels, spread_pips=2.0)["setup_mode"] != "LIQ_VP_NT_FVG_A_PLUS"
+    a_plus_with_only_nt = score_setup(sweep=sweep, volume_confluence={"confluence": False}, number_theory={"confluence": True}, levels=levels, spread_pips=2.0)
+    assert a_plus_with_only_nt["setup_mode"] == "LIQ_VP_NT_FVG_A_PLUS"
+    a_plus_with_only_vc = score_setup(sweep=sweep, volume_confluence={"confluence": True}, number_theory={"confluence": False}, levels=levels, spread_pips=2.0)
+    assert a_plus_with_only_vc["setup_mode"] == "LIQ_VP_NT_FVG_A_PLUS"
+    neither_vc_nor_nt = score_setup(sweep=sweep, volume_confluence={"confluence": False}, number_theory={"confluence": False}, levels=levels, spread_pips=2.0)
+    assert neither_vc_nor_nt["setup_mode"] == "NO_TRADE"
+    assert "volume_crack_and_number_theory_both_missing" in neither_vc_nor_nt["rejected"]
     assert calculate_vwap_scalp("LONG", 100.0, {"vwap": 101.0, "std": 1.0}, PIP)["setup_mode"] == "VWAP_STD_RESEARCH_1R"
 
 

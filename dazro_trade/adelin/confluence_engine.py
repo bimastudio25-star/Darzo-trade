@@ -120,11 +120,13 @@ def score_setup(
     if not entry_available:
         rejected.append("entry_touched_no_chase")
     score = 0 if not liquidity_ok else max(0, min(100, sum(components.values())))
+    vc_or_nt_ok = volume_ok or nt_ok
+    if not vc_or_nt_ok:
+        rejected.append("volume_crack_and_number_theory_both_missing")
     hard_filters = {
         "liquidity_swept": liquidity_ok,
         "fvg_or_ifvg_post_liq": fvg_ok,
-        "volume_crack_or_lvn": volume_ok,
-        "number_theory": nt_ok,
+        "vc_or_nt_present": vc_or_nt_ok,
         "target_clean": target_ok,
         "spread_ok": spread_ok,
         "entry_available": entry_available,
@@ -136,7 +138,7 @@ def score_setup(
     elif score >= a_plus_score and all(hard_filters.values()) and ideal_target_ok:
         mode = "LIQ_VP_NT_FVG_A_PLUS"
         verdict = "TRIGGERED"
-    elif score >= min_score and liquidity_ok and fvg_ok and target_ok and spread_ok and entry_available:
+    elif score >= min_score and liquidity_ok and fvg_ok and vc_or_nt_ok and target_ok and spread_ok and entry_available:
         mode = "LIQ_VP_NT_FVG_SCALP"
         verdict = "TRIGGERED"
     elif liquidity_ok:

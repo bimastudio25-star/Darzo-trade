@@ -170,6 +170,13 @@ class Settings:
     adelin_send_rejection_debug: bool = False
     adelin_send_vwap_research: bool = True
 
+    auto_signal_old_scalping: bool = False
+    show_old_scalping_in_analisi: bool = True
+    strategy_coordinator_enabled: bool = True
+    strategy_a_plus_plus_tolerance_pips: float = 30.0
+    strategy_conflict_tolerance_pips: float = 50.0
+    send_strategy_conflict_alert: bool = True
+
     liquidity_expansion_enabled: bool = True
     liquidity_expansion_lookback_h1: int = 60
     liquidity_expansion_range_in_range_max_pips: float = 30.0
@@ -326,6 +333,12 @@ class Settings:
             adelin_news_gate_enabled=_bool(os.getenv("ADELIN_NEWS_GATE_ENABLED"), True),
             adelin_send_rejection_debug=_bool(os.getenv("ADELIN_SEND_REJECTION_DEBUG"), False),
             adelin_send_vwap_research=_bool(os.getenv("ADELIN_SEND_VWAP_RESEARCH"), True),
+            auto_signal_old_scalping=_bool(os.getenv("AUTO_SIGNAL_OLD_SCALPING"), False),
+            show_old_scalping_in_analisi=_bool(os.getenv("SHOW_OLD_SCALPING_IN_ANALISI"), True),
+            strategy_coordinator_enabled=_bool(os.getenv("STRATEGY_COORDINATOR_ENABLED"), True),
+            strategy_a_plus_plus_tolerance_pips=_float("STRATEGY_A_PLUS_PLUS_TOLERANCE_PIPS", 30.0),
+            strategy_conflict_tolerance_pips=_float("STRATEGY_CONFLICT_TOLERANCE_PIPS", 50.0),
+            send_strategy_conflict_alert=_bool(os.getenv("SEND_STRATEGY_CONFLICT_ALERT"), True),
             liquidity_expansion_enabled=_bool(os.getenv("LIQUIDITY_EXPANSION_ENABLED"), True),
             liquidity_expansion_lookback_h1=_int("LIQUIDITY_EXPANSION_LOOKBACK_H1", 60),
             liquidity_expansion_range_in_range_max_pips=_float("LIQUIDITY_EXPANSION_RANGE_IN_RANGE_MAX_PIPS", 30.0),

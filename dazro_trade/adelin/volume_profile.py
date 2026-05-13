@@ -41,11 +41,23 @@ def build_volume_profile(
     step = (high - low) / n_bins
     buckets = [0.0 for _ in range(n_bins)]
     for _, row in frame.iterrows():
-        typical = (float(row["h"]) + float(row["l"]) + float(row["c"])) / 3
-        if typical < low or typical > high:
+        row_h = float(row["h"])
+        row_l = float(row["l"])
+        vol = float(row.get("vol", 1) or 1)
+        span_low = max(row_l, low)
+        span_high = min(row_h, high)
+        if span_high <= span_low:
             continue
-        idx = min(max(int((typical - low) / step), 0), n_bins - 1)
-        buckets[idx] += float(row.get("vol", 1) or 1)
+        first_bin = min(max(int((span_low - low) / step), 0), n_bins - 1)
+        last_bin = min(max(int((span_high - low) / step), 0), n_bins - 1)
+        candle_range = max(row_h - row_l, step * 0.5)
+        for b in range(first_bin, last_bin + 1):
+            bin_low_edge = low + b * step
+            bin_high_edge = low + (b + 1) * step
+            overlap = min(bin_high_edge, span_high) - max(bin_low_edge, span_low)
+            if overlap <= 0:
+                continue
+            buckets[b] += vol * (overlap / candle_range)
     total = sum(buckets)
     if total <= 0:
         return _empty_profile(high, low, n_bins)

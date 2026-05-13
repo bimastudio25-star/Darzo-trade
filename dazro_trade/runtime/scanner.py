@@ -20,6 +20,7 @@ from dazro_trade.analysis.scalping import (
 )
 from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evaluate_statistical_scalp
 from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, evaluate_liquidity_expansion
+from dazro_trade.runtime.coordinator import CoordinatorDecision, combine_strategy_results
 from dazro_trade.risk.manager import RiskManager
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
@@ -239,14 +240,27 @@ class ScalpingScanner:
         sent = False
         was_first_silent_scan = self.first_silent_scan_pending
         if not manual:
-            if not was_first_silent_scan and self._maybe_send_adelin_signal(adelin_result, session, now):
-                sent = True
+            lex_signal = None
+            if self.settings.liquidity_expansion_enabled and not was_first_silent_scan:
+                lex_signal = self._compute_liquidity_expansion_signal(market_data, session, now)
+            if self.settings.strategy_coordinator_enabled and not was_first_silent_scan:
+                coord = combine_strategy_results(
+                    adelin_result,
+                    lex_signal,
+                    zone_tolerance_pips=self.settings.strategy_a_plus_plus_tolerance_pips,
+                    conflict_tolerance_pips=self.settings.strategy_conflict_tolerance_pips,
+                    symbol=self.last_symbol,
+                )
+                sent = self._dispatch_coordinator(coord, adelin_result, lex_signal, session, now)
             else:
+                if not was_first_silent_scan and self._maybe_send_adelin_signal(adelin_result, session, now):
+                    sent = True
+                if lex_signal is not None:
+                    self._send_liquidity_expansion(lex_signal, session, now)
+            if not sent and self.settings.auto_signal_old_scalping and not was_first_silent_scan:
                 sent = self._maybe_send_automatic_signal(decision, session)
         if self.settings.statistical_scalp_enabled and not manual and not was_first_silent_scan:
             self._maybe_send_statistical_scalp(market_data, session, now)
-        if self.settings.liquidity_expansion_enabled and not manual and not was_first_silent_scan:
-            self._maybe_send_liquidity_expansion(market_data, session, now)
         if decision.state in {"WATCH", "ARMED", "ENTERED"} and decision.rejection_reasons:
             self.stats.setups_rejected += 1
         return {
@@ -481,19 +495,19 @@ class ScalpingScanner:
         ]
         return "\n".join(lines)
 
-    def _maybe_send_liquidity_expansion(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> bool:
+    def _compute_liquidity_expansion_signal(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> LiquidityExpansionSignal | None:
         if self.first_silent_scan_pending or self.paused:
-            return False
+            return None
         if self.last_price is None:
-            return False
+            return None
         if self.last_spread is not None and self.last_spread > self.settings.liquidity_expansion_max_spread_pips:
             log.info("liquidity_expansion_skipped reason=spread_too_high spread=%s", self.last_spread)
-            return False
+            return None
         required = ("M1", "M5", "M15", "H1")
         for tf in required:
             frame = market_data.get(tf)
             if frame is None or len(frame) == 0:
-                return False
+                return None
         signal = evaluate_liquidity_expansion(
             market_data["M1"],
             market_data["M5"],
@@ -507,14 +521,17 @@ class ScalpingScanner:
             now_utc=now,
         )
         if signal is None:
-            return False
+            return None
         if signal.rr_tp1 < self.settings.liquidity_expansion_min_rr_tp1:
             log.info("liquidity_expansion_skipped reason=rr_tp1_below_floor rr=%s floor=%s", signal.rr_tp1, self.settings.liquidity_expansion_min_rr_tp1)
-            return False
+            return None
         count = self.liquidity_expansion_session_counts.get(session, 0)
         if count >= self.settings.liquidity_expansion_max_per_session:
             log.info("liquidity_expansion_skipped reason=session_cap session=%s count=%s", session, count)
-            return False
+            return None
+        return signal
+
+    def _send_liquidity_expansion(self, signal: LiquidityExpansionSignal, session: str, now: datetime) -> bool:
         level = signal.reference.h1_ref_low if signal.direction == "LONG" else signal.reference.h1_ref_high
         dedup_key = f"liqexp:{self.last_symbol}:{signal.direction}:{round(level, 1)}:{session}:{now.date().isoformat()}"
         if dedup_key in self.deduplicator.sent_keys:
@@ -539,6 +556,7 @@ class ScalpingScanner:
         if not result.get("ok"):
             log.warning("liquidity_expansion_send_failed key=%s result=%s", dedup_key, result)
             return False
+        count = self.liquidity_expansion_session_counts.get(session, 0)
         self.deduplicator.sent_keys.add(dedup_key)
         self.liquidity_expansion_session_counts[session] = count + 1
         self.stats.liquidity_expansion_sent += 1
@@ -576,6 +594,129 @@ class ScalpingScanner:
         ))
         log.info("liquidity_expansion_sent key=%s rr_tp1=%s", dedup_key, signal.rr_tp1)
         return True
+
+    def _maybe_send_liquidity_expansion(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> bool:
+        signal = self._compute_liquidity_expansion_signal(market_data, session, now)
+        if signal is None:
+            return False
+        return self._send_liquidity_expansion(signal, session, now)
+
+    def _dispatch_coordinator(
+        self,
+        coord: CoordinatorDecision,
+        adelin_result: dict[str, Any] | None,
+        lex_signal: LiquidityExpansionSignal | None,
+        session: str,
+        now: datetime,
+    ) -> bool:
+        mode = coord.combined_mode
+        if mode == "NO_TRADE":
+            return False
+        if mode == "STRATEGY_1_ONLY":
+            return self._maybe_send_adelin_signal(adelin_result, session, now)
+        if mode == "STRATEGY_2_ONLY":
+            return self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+        if mode == "A_PLUS_PLUS":
+            return self._send_a_plus_plus(coord, adelin_result, lex_signal, session, now)
+        if mode == "CONFLICT":
+            if self.settings.send_strategy_conflict_alert:
+                self._send_strategy_conflict_alert(coord, session, now)
+            return False
+        if mode == "INDEPENDENT_BOTH":
+            sent_a = self._maybe_send_adelin_signal(adelin_result, session, now)
+            sent_b = self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+            return sent_a or sent_b
+        return False
+
+    def _send_a_plus_plus(
+        self,
+        coord: CoordinatorDecision,
+        adelin_result: dict[str, Any] | None,
+        lex_signal: LiquidityExpansionSignal | None,
+        session: str,
+        now: datetime,
+    ) -> bool:
+        if not coord.strategy_1_signal or lex_signal is None:
+            return False
+        s1 = coord.strategy_1_signal
+        level = lex_signal.reference.h1_ref_low if lex_signal.direction == "LONG" else lex_signal.reference.h1_ref_high
+        dedup_key = f"aplusplus:{self.last_symbol}:{lex_signal.direction}:{round(level, 1)}:{session}:{now.date().isoformat()}"
+        if dedup_key in self.deduplicator.sent_keys:
+            return False
+        if self.settings.liquidity_expansion_require_risk_ok:
+            risk_payload = {
+                "signal_id": dedup_key,
+                "entry": s1.get("entry"),
+                "sl": s1.get("sl"),
+                "tp": (s1.get("tp1") or {}).get("price") if isinstance(s1.get("tp1"), dict) else s1.get("tp1"),
+                "direction": "BUY" if lex_signal.direction == "LONG" else "SELL",
+            }
+            risk = self.risk.validate(risk_payload, spread=self.last_spread or 0.0, session=session)
+            if not risk.get("accepted", False):
+                log.info("a_plus_plus_rejected_by_risk reasons=%s", risk.get("rejection_reasons"))
+                return False
+        text = self._format_a_plus_plus_message(s1, lex_signal, coord)
+        result = self.telegram_bot.send_text(text)
+        if not result.get("ok"):
+            log.warning("a_plus_plus_send_failed key=%s result=%s", dedup_key, result)
+            return False
+        self.deduplicator.sent_keys.add(dedup_key)
+        self.stats.signals_sent += 1
+        self.stats.liquidity_expansion_sent += 1
+        if self.settings.liquidity_expansion_require_risk_ok:
+            self.risk.register_signal(dedup_key)
+        log.info("a_plus_plus_sent key=%s distance_pips=%s", dedup_key, coord.distance_pips)
+        return True
+
+    def _send_strategy_conflict_alert(self, coord: CoordinatorDecision, session: str, now: datetime) -> bool:
+        dedup_key = f"conflict:{self.last_symbol}:{session}:{now.date().isoformat()}:{round(coord.distance_pips or 0, 1)}"
+        if dedup_key in self.deduplicator.sent_keys:
+            return False
+        s1 = coord.strategy_1_signal or {}
+        s2 = coord.strategy_2_signal or {}
+        lines = [
+            f"{self.last_symbol} - STRATEGY CONFLICT",
+            f"Strategy 1.0: {s1.get('direction', '-')} @ {s1.get('entry', '-')}",
+            f"Strategy 2.0: {s2.get('direction', '-')} @ {s2.get('entry', '-')}",
+            f"Distance: {coord.distance_pips} pips",
+            "",
+            "Auto-signals soppressi su questa zona. Decisione manuale richiesta.",
+            "Disclaimer: Paper/demo signal only. No real-money execution.",
+        ]
+        result = self.telegram_bot.send_text("\n".join(lines))
+        if result.get("ok"):
+            self.deduplicator.sent_keys.add(dedup_key)
+            log.info("strategy_conflict_alert_sent key=%s", dedup_key)
+            return True
+        return False
+
+    @staticmethod
+    def _format_a_plus_plus_message(adelin_signal: dict[str, Any], lex_signal: LiquidityExpansionSignal, coord: CoordinatorDecision) -> str:
+        direction = lex_signal.direction
+        tp1 = adelin_signal.get("tp1") or {}
+        tp2 = adelin_signal.get("tp2") or {}
+        lines = [
+            f"{lex_signal.symbol} - A++ SETUP (STRATEGY 1.0 + 2.0 CONFLUENCE)",
+            f"Direzione: {direction}",
+            f"Distance fra entry 1.0 e 2.0: {coord.distance_pips} pips",
+            "",
+            "STRATEGY 1.0 (Adelin):",
+            f"Entry: {adelin_signal.get('entry')}",
+            f"Stop: {adelin_signal.get('sl')} ({adelin_signal.get('sl_pips', '-')} pips)",
+            f"TP1: {tp1.get('price', '-')} (RR {tp1.get('rr', '-')})",
+            f"TP2: {tp2.get('price', '-')} (RR {tp2.get('rr', '-')})",
+            "",
+            "STRATEGY 2.0 (Liquidity Expansion):",
+            f"H1 level: {('LOW' if direction == 'LONG' else 'HIGH')} {lex_signal.reference.h1_ref_low if direction == 'LONG' else lex_signal.reference.h1_ref_high}",
+            f"Entry: {lex_signal.entry} | Stop: {lex_signal.stop}",
+            f"TP1-TP4: {lex_signal.tp1} / {lex_signal.tp2} / {lex_signal.tp3} / {lex_signal.tp4}",
+            f"RR TP1: {lex_signal.rr_tp1} | RR TP4: {lex_signal.rr_tp4}",
+            "",
+            "Confluenza Strategia 1.0 + Strategia 2.0",
+            "Gestione: alla presa del TP1 lo stop e' spostato a BE automaticamente (lato Strategy 2.0).",
+            "Disclaimer: Paper/demo signal only. No real-money execution.",
+        ]
+        return "\n".join(lines)
 
     @staticmethod
     def _format_liquidity_expansion_message(signal: LiquidityExpansionSignal, *, lot_size: float | None) -> str:
