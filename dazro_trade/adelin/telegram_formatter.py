@@ -19,7 +19,8 @@ def format_adelin_signal(signal: dict[str, Any], result: dict[str, Any] | None =
     mode = str(signal.get("setup_mode", "NO_TRADE"))
     score = int(signal.get("score", 0) or 0)
     lines = [
-        f"{symbol} - {mode}",
+        f"{symbol} - STRATEGY 1.0 (ADELIN ENGINE) - {mode}",
+        "Strategia: LIQ + VP + Number Theory + FVG/IFVG",
         "Paper/Demo - non reale.",
     ]
     if mode == "VWAP_STD_RESEARCH_1R":
@@ -61,7 +62,8 @@ def format_adelin_signal(signal: dict[str, Any], result: dict[str, Any] | None =
 
 def format_rejection_summary(result: dict[str, Any]) -> str:
     lines = [
-        "ADELIN - NO TRADE",
+        "STRATEGY 1.0 (ADELIN ENGINE) - NO TRADE",
+        "Strategia: LIQ + VP + Number Theory + FVG/IFVG",
         f"Setup mode: {result.get('setup_mode', 'NO_TRADE')}",
         "Motivi:",
     ]

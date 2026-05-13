@@ -130,6 +130,111 @@ def test_invalid_adelin_signal_treated_as_none():
     assert decision.combined_mode == "NO_TRADE"
 
 
+def test_independent_both_policy_send_first():
+    from dazro_trade.core.config import Settings
+    from dazro_trade.runtime.scanner import ScalpingScanner
+
+    class _Sender:
+        def __init__(self):
+            self.sent = []
+
+        def send_text(self, text):
+            self.sent.append(text)
+            return {"ok": True}
+
+    settings = Settings(telegram_token="x", telegram_chat_id="1", strategy_independent_both_policy="send_first", max_daily_signals=10)
+    scanner = ScalpingScanner(settings, telegram_bot=_Sender())
+    scanner.first_silent_scan_pending = False
+    scanner.last_price = 4700.0
+    scanner.last_spread = 1.0
+    adelin = _adelin_result("LONG", 4700.0)
+    lex = _lex_signal("LONG", 4720.0)
+    coord = combine_strategy_results(adelin, lex, zone_tolerance_pips=30.0, conflict_tolerance_pips=50.0)
+    assert coord.combined_mode == "INDEPENDENT_BOTH"
+    scanner._dispatch_coordinator(coord, adelin, lex, "London", datetime.now(timezone.utc))
+    sent = scanner.telegram_bot.sent
+    assert any("STRATEGY 1.0" in m for m in sent)
+    assert not any("LIQUIDITY EXPANSION MODEL (STRATEGY 2.0)" in m for m in sent)
+
+
+def test_independent_both_policy_send_best_picks_higher_rr():
+    from dazro_trade.core.config import Settings
+    from dazro_trade.runtime.scanner import ScalpingScanner
+
+    class _Sender:
+        def __init__(self):
+            self.sent = []
+
+        def send_text(self, text):
+            self.sent.append(text)
+            return {"ok": True}
+
+    settings = Settings(telegram_token="x", telegram_chat_id="1", strategy_independent_both_policy="send_best", max_daily_signals=10, min_rr=1.0)
+    scanner = ScalpingScanner(settings, telegram_bot=_Sender())
+    scanner.first_silent_scan_pending = False
+    scanner.last_price = 4720.0
+    scanner.last_spread = 1.0
+    adelin = _adelin_result("LONG", 4700.0)
+    adelin["signal"]["tp1"]["rr"] = 1.5
+    lex = _lex_signal("LONG", 4720.0)
+    coord = combine_strategy_results(adelin, lex, zone_tolerance_pips=30.0, conflict_tolerance_pips=50.0)
+    scanner._dispatch_coordinator(coord, adelin, lex, "London", datetime.now(timezone.utc))
+    sent = scanner.telegram_bot.sent
+    assert any("LIQUIDITY EXPANSION MODEL (STRATEGY 2.0)" in m for m in sent)
+    assert not any("STRATEGY 1.0" in m for m in sent)
+
+
+def test_a_plus_plus_creates_virtual_trade():
+    from dazro_trade.core.config import Settings
+    from dazro_trade.runtime.scanner import ScalpingScanner
+
+    class _Sender:
+        def __init__(self):
+            self.sent = []
+
+        def send_text(self, text):
+            self.sent.append(text)
+            return {"ok": True}
+
+    settings = Settings(telegram_token="x", telegram_chat_id="1", max_daily_signals=10, min_rr=1.0)
+    scanner = ScalpingScanner(settings, telegram_bot=_Sender())
+    scanner.first_silent_scan_pending = False
+    scanner.last_price = 4700.0
+    scanner.last_spread = 1.0
+    adelin = _adelin_result("LONG", 4700.0)
+    lex = _lex_signal("LONG", 4700.2)
+    coord = combine_strategy_results(adelin, lex, zone_tolerance_pips=30.0)
+    assert coord.combined_mode == "A_PLUS_PLUS"
+    scanner._dispatch_coordinator(coord, adelin, lex, "London", datetime.now(timezone.utc))
+    assert len(scanner.trades) == 1
+    trade = scanner.trades[0]
+    assert trade.strategy == "A_PLUS_PLUS"
+    assert trade.source == "coordinator"
+    assert trade.tp3 is not None
+    assert trade.tp4 is not None
+    assert trade.strategy_payload.get("combined_mode") == "A_PLUS_PLUS"
+    assert "strategy_1" in trade.strategy_payload
+    assert "strategy_2" in trade.strategy_payload
+
+
+def test_format_analysis_includes_coordinator_section():
+    from dazro_trade.core.config import Settings
+    from dazro_trade.runtime.scanner import ScalpingScanner
+
+    settings = Settings(telegram_token="x", telegram_chat_id="1")
+    scanner = ScalpingScanner(settings)
+    scanner.latest_adelin_result = _adelin_result("LONG", 4700.0)
+    scanner.latest_liquidity_expansion_signal = _lex_signal("LONG", 4700.2)
+    scanner.latest_coordinator_decision = combine_strategy_results(
+        scanner.latest_adelin_result, scanner.latest_liquidity_expansion_signal,
+    )
+    section = scanner._format_coordinator_section()
+    assert "COORDINATOR" in section
+    assert "Strategy 1.0 (Adelin)" in section
+    assert "Strategy 2.0 (Liquidity Expansion)" in section
+    assert "Coordinator mode:" in section
+
+
 def test_volume_profile_distributes_volume_across_bins():
     rows = [
         {"o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "vol": 100},

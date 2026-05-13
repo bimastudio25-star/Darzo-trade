@@ -126,6 +126,8 @@ class ScalpingScanner:
         self.last_market_data: dict[str, pd.DataFrame] = {}
         self.latest_analysis: ScalpingDecision | None = None
         self.latest_adelin_result: dict[str, Any] | None = None
+        self.latest_liquidity_expansion_signal: LiquidityExpansionSignal | None = None
+        self.latest_coordinator_decision: CoordinatorDecision | None = None
         self.latest_zones: list[SetupZone] = []
         self.trades: list[VirtualTrade] = []
         self.stats = ScannerStats()
@@ -243,6 +245,7 @@ class ScalpingScanner:
             lex_signal = None
             if self.settings.liquidity_expansion_enabled and not was_first_silent_scan:
                 lex_signal = self._compute_liquidity_expansion_signal(market_data, session, now)
+            self.latest_liquidity_expansion_signal = lex_signal
             if self.settings.strategy_coordinator_enabled and not was_first_silent_scan:
                 coord = combine_strategy_results(
                     adelin_result,
@@ -251,6 +254,7 @@ class ScalpingScanner:
                     conflict_tolerance_pips=self.settings.strategy_conflict_tolerance_pips,
                     symbol=self.last_symbol,
                 )
+                self.latest_coordinator_decision = coord
                 sent = self._dispatch_coordinator(coord, adelin_result, lex_signal, session, now)
             else:
                 if not was_first_silent_scan and self._maybe_send_adelin_signal(adelin_result, session, now):
@@ -623,10 +627,36 @@ class ScalpingScanner:
                 self._send_strategy_conflict_alert(coord, session, now)
             return False
         if mode == "INDEPENDENT_BOTH":
-            sent_a = self._maybe_send_adelin_signal(adelin_result, session, now)
-            sent_b = self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
-            return sent_a or sent_b
+            policy = self.settings.strategy_independent_both_policy
+            if policy == "send_both":
+                sent_a = self._maybe_send_adelin_signal(adelin_result, session, now)
+                sent_b = self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+                return sent_a or sent_b
+            if policy == "send_first":
+                if self._maybe_send_adelin_signal(adelin_result, session, now):
+                    return True
+                return self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+            if policy == "send_best":
+                rr_1 = self._adelin_rr_tp1(adelin_result)
+                rr_2 = lex_signal.rr_tp1 if lex_signal else 0.0
+                if rr_1 >= rr_2:
+                    return self._maybe_send_adelin_signal(adelin_result, session, now)
+                return self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+            return False
         return False
+
+    @staticmethod
+    def _adelin_rr_tp1(adelin_result: dict[str, Any] | None) -> float:
+        if not adelin_result:
+            return 0.0
+        signal = adelin_result.get("signal") or {}
+        tp1 = signal.get("tp1") or {}
+        if isinstance(tp1, dict):
+            try:
+                return float(tp1.get("rr", 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
 
     def _send_a_plus_plus(
         self,
@@ -665,6 +695,48 @@ class ScalpingScanner:
         self.stats.liquidity_expansion_sent += 1
         if self.settings.liquidity_expansion_require_risk_ok:
             self.risk.register_signal(dedup_key)
+        adelin_entry = float(s1.get("entry") or lex_signal.entry)
+        adelin_stop = float(s1.get("sl") or lex_signal.stop)
+        adelin_tp1 = (s1.get("tp1") or {}).get("price") if isinstance(s1.get("tp1"), dict) else s1.get("tp1")
+        adelin_tp2 = (s1.get("tp2") or {}).get("price") if isinstance(s1.get("tp2"), dict) else s1.get("tp2")
+        self.trades.append(VirtualTrade(
+            trade_id=f"vt-{len(self.trades) + 1}",
+            signal_key=dedup_key,
+            symbol=self.last_symbol,
+            direction=lex_signal.direction,
+            zone_id=f"a_plus_plus_{round(level, 2)}",
+            signal_time=lex_signal.timestamp_utc,
+            entry_area_low=adelin_entry,
+            entry_area_high=adelin_entry,
+            stop_loss=adelin_stop,
+            tp1=float(adelin_tp1) if adelin_tp1 is not None else lex_signal.tp1,
+            tp2=float(adelin_tp2) if adelin_tp2 is not None else lex_signal.tp2,
+            status="ENTERED",
+            entry_time=lex_signal.timestamp_utc,
+            entry_price=adelin_entry,
+            source="coordinator",
+            strategy="A_PLUS_PLUS",
+            tp3=lex_signal.tp3,
+            tp4=lex_signal.tp4,
+            original_stop_loss=adelin_stop,
+            strategy_payload={
+                "combined_mode": "A_PLUS_PLUS",
+                "distance_pips": coord.distance_pips,
+                "strategy_1": s1,
+                "strategy_2": {
+                    "entry": lex_signal.entry,
+                    "stop": lex_signal.stop,
+                    "tp1": lex_signal.tp1,
+                    "tp2": lex_signal.tp2,
+                    "tp3": lex_signal.tp3,
+                    "tp4": lex_signal.tp4,
+                    "rr_tp1": lex_signal.rr_tp1,
+                    "rr_tp4": lex_signal.rr_tp4,
+                    "trigger_kind": lex_signal.trigger_kind,
+                    "candle_model": lex_signal.candle_model,
+                },
+            },
+        ))
         log.info("a_plus_plus_sent key=%s distance_pips=%s", dedup_key, coord.distance_pips)
         return True
 
@@ -1329,7 +1401,40 @@ class ScalpingScanner:
             ]
         )
         adelin = "\n\nADELIN\n" + (format_adelin_signal(self.latest_adelin_result["signal"], self.latest_adelin_result) if self.latest_adelin_result and self.latest_adelin_result.get("signal") else format_rejection_summary(self.latest_adelin_result or {"rejected": ["not_run"], "setup_mode": "NO_TRADE"}))
-        return header + format_scalping_decision(self.latest_analysis) + adelin
+        coordinator_section = "\n\n" + self._format_coordinator_section()
+        return header + format_scalping_decision(self.latest_analysis) + adelin + coordinator_section
+
+    def _format_coordinator_section(self) -> str:
+        adelin = self.latest_adelin_result or {}
+        adelin_signal = adelin.get("signal")
+        adelin_status = "valid" if adelin_signal else "no_trade"
+        adelin_mode = (adelin_signal or {}).get("setup_mode") or adelin.get("setup_mode") or "NO_TRADE"
+        adelin_rejected = adelin.get("rejected") or []
+        lex = self.latest_liquidity_expansion_signal
+        lex_status = "valid" if lex else "no_trade"
+        coord = self.latest_coordinator_decision
+        lines = [
+            "COORDINATOR",
+            f"Strategy 1.0 (Adelin): {adelin_status} | setup_mode={adelin_mode}",
+            f"Strategy 2.0 (Liquidity Expansion): {lex_status}",
+        ]
+        if coord is not None:
+            lines.append(f"Coordinator mode: {coord.combined_mode}")
+            if coord.distance_pips is not None:
+                lines.append(f"Distance 1.0 vs 2.0: {coord.distance_pips} pips")
+            if coord.suppress_reason:
+                lines.append(f"Suppress reason: {coord.suppress_reason}")
+            if coord.warnings:
+                lines.append("Warnings:")
+                for w in coord.warnings[:6]:
+                    lines.append(f"- {w}")
+        else:
+            lines.append("Coordinator mode: not_run")
+        if adelin_rejected:
+            lines.append("Strategy 1.0 rejected reasons:")
+            for r in adelin_rejected[:5]:
+                lines.append(f"- {r}")
+        return "\n".join(lines)
 
     def format_watch(self) -> str:
         operative = [z for z in self.latest_zones if z.role != "HTF_CONTEXT" and float(z.metadata.get("distance_pips", 99999)) <= 150]

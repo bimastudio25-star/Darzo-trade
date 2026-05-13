@@ -165,7 +165,7 @@ class Settings:
     adelin_liq_match_tolerance_pips: float = 25.0
     adelin_nt_tolerance_pips: float = 15.0
     adelin_session_gate_enabled: bool = True
-    adelin_session_windows_utc: str = "08:00-10:30,13:00-17:00"
+    adelin_session_windows_utc: str = "00:00-07:00,08:00-12:00,13:00-21:00"
     adelin_news_gate_enabled: bool = True
     adelin_send_rejection_debug: bool = False
     adelin_send_vwap_research: bool = True
@@ -176,6 +176,7 @@ class Settings:
     strategy_a_plus_plus_tolerance_pips: float = 30.0
     strategy_conflict_tolerance_pips: float = 50.0
     send_strategy_conflict_alert: bool = True
+    strategy_independent_both_policy: str = "send_both"
 
     liquidity_expansion_enabled: bool = True
     liquidity_expansion_lookback_h1: int = 60
@@ -329,7 +330,7 @@ class Settings:
             adelin_liq_match_tolerance_pips=_float("ADELIN_LIQ_MATCH_TOLERANCE_PIPS", 25.0),
             adelin_nt_tolerance_pips=_float("ADELIN_NT_TOLERANCE_PIPS", 15.0),
             adelin_session_gate_enabled=_bool(os.getenv("ADELIN_SESSION_GATE_ENABLED"), True),
-            adelin_session_windows_utc=os.getenv("ADELIN_SESSION_WINDOWS_UTC", "08:00-10:30,13:00-17:00"),
+            adelin_session_windows_utc=os.getenv("ADELIN_SESSION_WINDOWS_UTC", "00:00-07:00,08:00-12:00,13:00-21:00"),
             adelin_news_gate_enabled=_bool(os.getenv("ADELIN_NEWS_GATE_ENABLED"), True),
             adelin_send_rejection_debug=_bool(os.getenv("ADELIN_SEND_REJECTION_DEBUG"), False),
             adelin_send_vwap_research=_bool(os.getenv("ADELIN_SEND_VWAP_RESEARCH"), True),
@@ -339,6 +340,7 @@ class Settings:
             strategy_a_plus_plus_tolerance_pips=_float("STRATEGY_A_PLUS_PLUS_TOLERANCE_PIPS", 30.0),
             strategy_conflict_tolerance_pips=_float("STRATEGY_CONFLICT_TOLERANCE_PIPS", 50.0),
             send_strategy_conflict_alert=_bool(os.getenv("SEND_STRATEGY_CONFLICT_ALERT"), True),
+            strategy_independent_both_policy=os.getenv("STRATEGY_INDEPENDENT_BOTH_POLICY", "send_both"),
             liquidity_expansion_enabled=_bool(os.getenv("LIQUIDITY_EXPANSION_ENABLED"), True),
             liquidity_expansion_lookback_h1=_int("LIQUIDITY_EXPANSION_LOOKBACK_H1", 60),
             liquidity_expansion_range_in_range_max_pips=_float("LIQUIDITY_EXPANSION_RANGE_IN_RANGE_MAX_PIPS", 30.0),
@@ -435,6 +437,8 @@ class Settings:
             errors.append("LIQUIDITY_EXPANSION_M15_REFERENCE_TIMEZONE must be 'broker' or 'Europe/Rome'.")
         if self.liquidity_expansion_min_rr_tp1 <= 0:
             errors.append("LIQUIDITY_EXPANSION_MIN_RR_TP1 must be positive.")
+        if self.strategy_independent_both_policy not in {"send_both", "send_best", "send_first"}:
+            errors.append("STRATEGY_INDEPENDENT_BOTH_POLICY must be 'send_both', 'send_best', or 'send_first'.")
 
         Path(self.ledger_db_path).parent.mkdir(parents=True, exist_ok=True)
         return ConfigValidation(errors=errors, warnings=warnings)
