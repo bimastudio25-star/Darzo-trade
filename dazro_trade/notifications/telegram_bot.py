@@ -48,97 +48,193 @@ def _fmt_price(value: Any) -> str:
 def format_scalping_decision(decision: ScalpingDecision) -> str:
     zone = decision.primary_zone
     direction_label = {"LONG": "LONG", "SHORT": "SHORT", "WAIT": "WAIT"}.get(decision.direction, "WAIT")
-    if decision.state == "TRIGGERED" and decision.direction in {"LONG", "SHORT"}:
-        heading = f"{decision.symbol} - SETUP {'BUY' if decision.direction == 'LONG' else 'SELL'} VALIDO"
+    operational = _is_operational_message(decision)
+    if operational:
+        lines = [f"{decision.symbol} — {direction_label} VALID", ""]
+        lines.append(f"Entry: {_fmt_price(decision.entry or _entry_midpoint(decision.entry_area))}")
+        if decision.entry_area:
+            lines.append(f"Entry area: {_fmt_price(decision.entry_area[0])} - {_fmt_price(decision.entry_area[1])}")
+        lines.append(f"SL: {_fmt_price(decision.stop)}")
+        lines.append("")
+        for target in decision.targets[:3]:
+            lines.append(_format_target_line(target, theoretical=False))
+        lines.extend(["", "Target validation:"])
+        lines.extend(f"- {reason}" for reason in _target_validation_reasons(decision))
+        lines.extend(_setup_footer(decision, include_missing=False))
+        return "\n".join(safe_text(line) for line in lines if line is not None)
+
+    if decision.state == "CONFIRMED_SWEEP":
+        heading = f"{decision.symbol} — SWEEP CONFERMATA, ASPETTO TRIGGER"
+    elif decision.state == "INVALIDATED":
+        heading = f"{decision.symbol} — SETUP INVALIDATO"
     else:
-        heading = f"{decision.symbol} - DECISIONE OPERATIVA"
-    lines: list[str] = [
+        heading = f"{decision.symbol} — SETUP NON OPERATIVO"
+
+    lines = [
         heading,
+        "NO ENTRY",
         "",
-        "Bias HTF:",
-        f"- H4: {decision.htf_context.get('h4_bias', 'neutral')}",
-        f"- H1: {decision.htf_context.get('h1_bias', 'neutral')}",
-        f"- Quarterly Block: {decision.htf_context.get('quarterly_block', 'not_configured')}",
-        f"- Premium/Discount: {decision.htf_context.get('premium_discount', 'unknown')}",
+        f"Stato: {decision.state}",
+        f"Direzione possibile: {_possible_direction(decision)}",
+        f"Motivo principale: {_main_reason(decision)}",
         "",
-        "Intraday:",
-        f"- M15: {decision.intraday_context.get('m15_bias', 'neutral')}",
-        f"- M5: {decision.intraday_context.get('m5_bias', 'neutral')}",
-        f"- M1: {decision.intraday_context.get('m1_bias', 'neutral')}",
-        "",
-        "Liquidity:",
-        f"- External: {decision.liquidity.get('external_low', '-')} / {decision.liquidity.get('external_high', '-')}",
-        f"- Internal: {decision.liquidity.get('price_vs_range', 'unknown')}",
-        f"- Sweep rilevato: {decision.liquidity.get('m15_sweep', 'none')}",
+        f"Prezzo live: {_fmt_price(_live_price(decision))}",
     ]
-    reaction_pools = decision.liquidity.get("reaction_pools", []) or []
-    sweeps = decision.liquidity.get("sweeps", []) or []
-    if reaction_pools:
-        lines.append("- Reaction levels 80+ pips:")
-        for pool in reaction_pools[:3]:
-            lines.append(f"  {pool.get('timeframe')} {pool.get('pool_type')} {pool.get('level')} ({pool.get('distance_pips')} pips, {pool.get('distance_band')})")
-    if sweeps:
-        lines.append("- Sweep status:")
-        for sweep in sweeps[:3]:
-            lines.append(f"  {sweep.get('status')} {sweep.get('level')} score={sweep.get('score')}")
-    if decision.liquidity.get("vwap"):
-        vw = decision.liquidity["vwap"]
-        lines.append(f"- VWAP: {vw.get('vwap')} | z-score {vw.get('z_score')} | 2sigma {vw.get('upper_2')}/{vw.get('lower_2')}")
-    if decision.liquidity.get("volume_profile"):
-        vp = decision.liquidity["volume_profile"]
-        cracks = vp.get("volume_cracks") or []
-        lines.append(f"- Volume profile: POC {vp.get('poc')} | cracks {cracks[:2]}")
-    lines.extend(
-        [
-            "",
-            "Setup:",
-        f"- Tipo: {decision.setup_type}",
-        f"- Direzione: {direction_label}",
-        f"- Stato: {decision.state}",
-        f"- Score: {decision.score}/100",
-        f"- Confidenza: {decision.confidence}",
-        ]
-    )
     if zone is not None:
         lines.extend(
             [
-                f"- Zona operativa: {zone.zone_type}",
-                f"- Timeframe zona: {zone.timeframe}",
-                f"- Range: {_fmt_price(zone.low)} - {_fmt_price(zone.high)}",
-                f"- Ruolo: {zone.role}",
-                f"- Distanza prezzo: {_fmt_price(zone.distance_from_price)}",
-                f"- Zona toccata: {'si' if zone.touched else 'no'}",
-                f"- Entry gia toccata: {'si' if zone.entry_area_touched else 'no'}",
+                f"Zona osservata: {zone.zone_type} {_fmt_price(zone.low)} - {_fmt_price(zone.high)}",
+                f"Livello sweep: {_fmt_price(zone.metadata.get('liquidity_level')) if zone.metadata.get('liquidity_level') is not None else '-'}",
+                f"Tipo: {zone.zone_type}",
             ]
         )
-    if decision.entry_area:
-        lines.append(f"- Entry area: {_fmt_price(decision.entry_area[0])} - {_fmt_price(decision.entry_area[1])}")
+    if decision.state == "INVALIDATED":
+        lines.extend(
+            [
+                "",
+                "Invalidazione:",
+                f"- Prezzo live: {_fmt_price(_live_price(decision))}",
+                f"- SL/invalidation: {_fmt_price(decision.invalidation or decision.stop)}",
+                f"- Motivo: {_main_reason(decision)}",
+            ]
+        )
+    if decision.state == "CONFIRMED_SWEEP":
+        lines.extend(["", "Cosa e' successo:"])
+        lines.extend(f"- {reason}" for reason in _sweep_happened_reasons(decision))
     lines.extend(
         [
-            f"- Stop: {_fmt_price(decision.stop)}",
-            f"- Invalidazione: {_fmt_price(decision.invalidation)}",
+            "",
+            "Piano teorico non operativo:",
+            f"Entry teorica solo dopo trigger: {_entry_area_text(decision.entry_area)}",
+            f"SL teorico / invalidation: {_fmt_price(decision.stop or decision.invalidation)}",
+            "TP teorici:",
         ]
     )
-    for target in decision.targets:
-        lines.append(f"- {target.get('label')}: {_fmt_price(target.get('price'))} ({target.get('basis')})")
+    theoretical_targets = decision.theoretical_targets or []
+    if theoretical_targets:
+        lines.extend(_format_target_line(target, theoretical=True) for target in theoretical_targets[:3])
+    else:
+        lines.append("- nessun TP teorico pulito disponibile")
+    lines.extend(["", "Manca:"])
+    lines.extend(f"- {item}" for item in _missing_items(decision))
+    lines.extend(_setup_footer(decision, include_missing=True))
+    lines.extend(["", "NO ENTRY ANCORA.", "Disclaimer: Paper/demo signal only. No real-money execution."])
+    return "\n".join(safe_text(line) for line in lines if line is not None)
 
-    present = decision.intraday_context.get("confirmations_present", [])
-    missing = decision.intraday_context.get("confirmations_missing", [])
-    if present:
-        lines.extend(["", "Conferme presenti:"])
-        lines.extend(f"- {safe_text(item)}" for item in present)
-    if missing:
-        lines.extend(["", "Conferme mancanti:"])
-        lines.extend(f"- {safe_text(item)}" for item in missing)
+
+def _is_operational_message(decision: ScalpingDecision) -> bool:
+    validation_ok = not decision.target_validation or bool(decision.target_validation.get("valid", True))
+    return decision.state in {"TRIGGERED", "REENTRY_VALID"} and decision.direction in {"LONG", "SHORT"} and validation_ok
+
+
+def _entry_midpoint(entry_area: tuple[float, float] | None) -> float | None:
+    if not entry_area:
+        return None
+    return round((entry_area[0] + entry_area[1]) / 2, 2)
+
+
+def _entry_area_text(entry_area: tuple[float, float] | None) -> str:
+    if not entry_area:
+        return "-"
+    return f"{_fmt_price(entry_area[0])} - {_fmt_price(entry_area[1])}"
+
+
+def _live_price(decision: ScalpingDecision) -> Any:
+    return decision.intraday_context.get("current_price") or decision.liquidity.get("price")
+
+
+def _main_reason(decision: ScalpingDecision) -> str:
     if decision.rejection_reasons:
+        return safe_text(decision.rejection_reasons[0])
+    if decision.reason_codes:
+        return safe_text(decision.reason_codes[0])
+    return "waiting_for_trigger_before_entry"
+
+
+def _possible_direction(decision: ScalpingDecision) -> str:
+    if decision.intraday_context.get("possible_direction"):
+        return safe_text(decision.intraday_context["possible_direction"])
+    if decision.primary_zone and decision.primary_zone.metadata.get("possible_direction"):
+        return safe_text(decision.primary_zone.metadata["possible_direction"])
+    if decision.direction in {"LONG", "SHORT"}:
+        return f"{decision.direction} candidate"
+    directions = set()
+    for sweep in decision.liquidity.get("sweeps", []) or []:
+        text = " ".join(str(sweep.get(key, "")) for key in ("direction", "pool_type", "reason_codes")).lower()
+        if "bearish_reversal" in text or "buy_side" in text or "high" in text or "possible_short_after_buy_side_sweep" in text:
+            directions.add("SHORT")
+        if "bullish_reversal" in text or "sell_side" in text or "low" in text or "possible_long_after_sell_side_sweep" in text:
+            directions.add("LONG")
+    if len(directions) > 1:
+        return "UNCLEAR / LIQUIDITY SEARCH"
+    if directions:
+        return f"{directions.pop()} candidate"
+    return "UNCLEAR / LIQUIDITY SEARCH"
+
+
+def _format_target_line(target: dict, *, theoretical: bool) -> str:
+    label = target.get("label", "TP")
+    if theoretical and "teorico" not in str(label).lower():
+        label = f"{label} teorico"
+    return f"- {label}: {_fmt_price(target.get('price'))} — {target.get('basis', '-')} — {target.get('distance_pips', '-')} pips — RR {target.get('rr', '-')}"
+
+
+def _target_validation_reasons(decision: ScalpingDecision) -> list[str]:
+    reasons = list((decision.target_validation or {}).get("reason_codes") or [])
+    reasons.extend(reason for reason in decision.reason_codes if reason.startswith(("official_", "target_", "vwap_", "normal_", "preferred_")))
+    return _dedupe(reasons)[:8] or ["official_tp_ladder_valid"]
+
+
+def _missing_items(decision: ScalpingDecision) -> list[str]:
+    missing = list(decision.intraday_context.get("confirmations_missing") or [])
+    missing.extend(decision.rejection_reasons)
+    if not any("CHOCH" in item.upper() or "choch" in item.lower() for item in missing):
+        missing.append("M1/M5 CHOCH")
+    if not any("FVG" in item.upper() or "IFVG" in item.upper() for item in missing):
+        missing.append("FVG/IFVG valido")
+    missing.append("retest entry area")
+    missing.append("target validation finale")
+    return _dedupe([safe_text(item) for item in missing])[:8]
+
+
+def _sweep_happened_reasons(decision: ScalpingDecision) -> list[str]:
+    reasons = list(decision.reason_codes)
+    reasons.extend((decision.primary_zone.reason_codes if decision.primary_zone else []) or [])
+    out = [reason for reason in reasons if reason in {"close_back_inside", "m5_displacement", "sell-side liquidity swept", "buy-side liquidity swept"} or "sweep" in reason]
+    if not out:
+        out = ["liquidity swept", "close back inside"]
+    return _dedupe(out)[:5]
+
+
+def _setup_footer(decision: ScalpingDecision, *, include_missing: bool) -> list[str]:
+    lines = [
+        "",
+        "Setup:",
+        f"- Tipo: {decision.setup_type}",
+        f"- Direzione: {decision.direction}",
+        f"- Stato: {decision.state}",
+        f"- Score: {decision.score}/100",
+        f"- Confidenza: {decision.confidence}",
+    ]
+    if include_missing and decision.rejection_reasons:
         lines.extend(["", "Note:"])
         lines.extend(f"- {safe_text(item)}" for item in decision.rejection_reasons[:6])
     if decision.events:
         lines.extend(["", "Eventi rilevati:"])
         for event in decision.events[:5]:
             lines.append(f"- {event.get('type')} {event.get('timeframe')} {event.get('zone_type')} ({event.get('state')})")
-    lines.extend(["", "Disclaimer: Paper/demo signal only. No real-money execution."])
-    return "\n".join(safe_text(line) for line in lines)
+    return lines
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 class TelegramBot:

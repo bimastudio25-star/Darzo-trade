@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -17,13 +17,22 @@ from dazro_trade.analysis.scalping import (
     evaluate_scalping_setup,
     zone_distance,
 )
+from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evaluate_statistical_scalp
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
-from dazro_trade.core.symbols import get_symbol_spec
+from dazro_trade.core.symbols import get_symbol_spec, pips_to_price
 from dazro_trade.notifications.telegram_bot import TelegramBot, format_scalping_decision
 from dazro_trade.runtime.sessions import ROME_TZ, current_session_name, format_session_summary, next_session
 
 log = logging.getLogger(__name__)
+
+
+def _scalping_config_from_settings(settings: Settings) -> ScalpingConfig:
+    values = {}
+    for item in dataclass_fields(ScalpingConfig):
+        if hasattr(settings, item.name):
+            values[item.name] = getattr(settings, item.name)
+    return ScalpingConfig(**values)
 
 
 @dataclass
@@ -32,6 +41,7 @@ class ScannerStats:
     signals_sent: int = 0
     setups_rejected: int = 0
     duplicate_skips: int = 0
+    stat_scalps_sent: int = 0
     first_silent_scan_completed: bool = False
     last_internal_event: str = "-"
     last_filter_reason: str = "-"
@@ -58,6 +68,7 @@ class VirtualTrade:
     stop_hit_price: float | None = None
     reentry_state: str = "-"
     reentry_reason_codes: list[str] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
 
 
 class ScalpingScanner:
@@ -72,7 +83,7 @@ class ScalpingScanner:
         self.settings = settings
         self.mt5_handler = mt5_handler
         self.telegram_bot = telegram_bot or TelegramBot(settings)
-        self.scalping_config = scalping_config or ScalpingConfig()
+        self.scalping_config = scalping_config or _scalping_config_from_settings(settings)
         self.deduplicator = SignalDeduplicator()
         self.paused = False
         self.shutdown_requested = False
@@ -94,6 +105,7 @@ class ScalpingScanner:
         self.last_bid: float | None = None
         self.last_ask: float | None = None
         self.last_tick_snapshot: dict[str, Any] = {}
+        self.last_tick_time: datetime | None = None
         self.last_symbol: str = settings.mt5_symbol
         self.last_market_data: dict[str, pd.DataFrame] = {}
         self.latest_analysis: ScalpingDecision | None = None
@@ -101,8 +113,13 @@ class ScalpingScanner:
         self.trades: list[VirtualTrade] = []
         self.stats = ScannerStats()
         self.reaction_alerts: dict[str, datetime] = {}
+        self.reaction_cluster_confirmed_counts: dict[str, int] = {}
         self.zone_alert_memory: dict[str, dict[str, Any]] = {}
         self.reaction_alert_session_counts: dict[str, int] = {}
+        self.reentry_alert_memory: dict[str, datetime] = {}
+        self.session_behaviour_alert_memory: dict[str, datetime] = {}
+        self.session_behaviour_session_counts: dict[str, int] = {}
+        self.stat_scalp_session_counts: dict[str, int] = {}
 
     async def initialize(self) -> None:
         if self.mt5_handler is not None:
@@ -168,6 +185,16 @@ class ScalpingScanner:
             last_scan_time=previous_scan,
             session_name=session,
             config=self.scalping_config,
+            timezone_name=self.settings.timezone,
+            broker_time_offset_hours=self.settings.broker_time_offset_hours,
+        )
+        self._apply_tick_freshness_gate(decision, now)
+        decision.intraday_context.update(
+            {
+                "bid": self.last_bid,
+                "ask": self.last_ask,
+                "last_tick_time": self._fmt_dt(self.last_tick_time),
+            }
         )
         self.latest_analysis = decision
         self.stats.scans += 1
@@ -177,8 +204,11 @@ class ScalpingScanner:
         self.last_scan = now
 
         sent = False
+        was_first_silent_scan = self.first_silent_scan_pending
         if not manual:
             sent = self._maybe_send_automatic_signal(decision, session)
+        if self.settings.statistical_scalp_enabled and not manual and not was_first_silent_scan:
+            self._maybe_send_statistical_scalp(market_data, session, now)
         if decision.state in {"WATCH", "ARMED", "ENTERED"} and decision.rejection_reasons:
             self.stats.setups_rejected += 1
         return {
@@ -215,18 +245,51 @@ class ScalpingScanner:
                     self.last_ask = snapshot.get("ask")
                     self.last_price = float(snapshot["mid"])
                     self.last_spread = float(snapshot["spread_pips"])
+                    self.last_tick_time = self._tick_time(snapshot.get("time"))
                 else:
-                    self.last_price = float(self.mt5_handler.get_price())
-                    self.last_spread, _ = self.mt5_handler.get_spread_pips(spec.pip_size)
+                    self.last_error = snapshot.get("reason", "tick_unavailable")
+                    self.last_price = self._infer_price(data)
+                    self.last_spread = 999.0
+                    self.last_tick_time = None
             else:
                 self.last_price = float(self.mt5_handler.get_price())
                 self.last_spread, _ = self.mt5_handler.get_spread_pips(spec.pip_size)
+                self.last_tick_time = datetime.now(timezone.utc)
             self.last_market_update = datetime.now(timezone.utc)
             log.info("MT5 DATA OK symbol=%s bid=%s ask=%s mid=%s spread_pips=%s", self.last_symbol, self.last_bid, self.last_ask, self.last_price, self.last_spread)
         except Exception as exc:
             self.last_error = str(exc)
             log.warning("mt5_snapshot_failed: %s", exc)
         return data
+
+    def _apply_tick_freshness_gate(self, decision: ScalpingDecision, now: datetime) -> None:
+        if self.mt5_handler is None:
+            return
+        if not self.last_tick_snapshot.get("ok"):
+            decision.state = "WATCH"
+            decision.score = 0
+            decision.confidence = 0.0
+            decision.rejection_reasons.insert(0, "tick_unavailable")
+            decision.reason_codes.append("tick_unavailable")
+            return
+        if self.last_tick_time is None or (now - self.last_tick_time).total_seconds() > 10:
+            decision.state = "WATCH"
+            decision.score = 0
+            decision.confidence = 0.0
+            decision.rejection_reasons.insert(0, "stale_price_data")
+            decision.reason_codes.append("stale_price_data")
+
+    @staticmethod
+    def _tick_time(value: Any) -> datetime | None:
+        if value is None:
+            return datetime.now(timezone.utc)
+        try:
+            if isinstance(value, (int, float)):
+                return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            ts = pd.Timestamp(value).to_pydatetime()
+            return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+        except Exception:
+            return None
 
     def pause(self) -> None:
         self.paused = True
@@ -243,6 +306,8 @@ class ScalpingScanner:
             return False
         if not self.auto_signals_enabled or not decision.telegram_allowed:
             if self._maybe_send_reaction_alert(decision, session):
+                return True
+            if self._maybe_send_session_behaviour_alert(decision, session):
                 return True
             if decision.state != "TRIGGERED":
                 log.info("no_trade_internal reason=%s", self.stats.last_filter_reason)
@@ -263,14 +328,129 @@ class ScalpingScanner:
         log.warning("signal_send_failed key=%s result=%s", key, result)
         return False
 
+    def _maybe_send_statistical_scalp(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> bool:
+        if self.first_silent_scan_pending or self.paused:
+            return False
+        m5 = market_data.get("M5")
+        if self.last_price is None or m5 is None or len(m5) == 0:
+            return False
+        signal = evaluate_statistical_scalp(
+            m5_df=m5,
+            current_price=float(self.last_price),
+            symbol=self.last_symbol,
+            tolerance_pips_to_band=self.settings.statistical_scalp_band_tolerance_pips,
+            min_abs_z=self.settings.statistical_scalp_min_abs_z,
+            nt_tolerance_pips=self.settings.number_theory_tolerance_pips,
+            now_utc=now,
+        )
+        if signal is None:
+            return False
+        count = self.stat_scalp_session_counts.get(session, 0)
+        if count >= self.settings.statistical_scalp_max_per_session:
+            return False
+        dedup_key = f"stat:{self.last_symbol}:{round(signal.entry, 1)}:{session}:{now.date().isoformat()}"
+        if dedup_key in self.deduplicator.sent_keys:
+            return False
+        self.deduplicator.sent_keys.add(dedup_key)
+        result = self.telegram_bot.send_text(self._format_statistical_scalp(signal))
+        if result.get("ok"):
+            self.stat_scalp_session_counts[session] = count + 1
+            self.stats.stat_scalps_sent += 1
+            log.info("stat_scalp_sent key=%s", dedup_key)
+            return True
+        return False
+
+    @staticmethod
+    def _format_statistical_scalp(signal: StatisticalScalpSignal) -> str:
+        tier = next((reason.split("=", 1)[1] for reason in signal.reason_codes if reason.startswith("nt_tier=")), "none")
+        lines = [
+            f"{signal.symbol} - VWAP_STD_RESEARCH_1R - PAPER ONLY",
+            f"Direzione: {signal.direction}",
+            f"Entry: {signal.entry:.2f}",
+            f"Stop: {signal.stop:.2f}",
+            f"TP (1R): {signal.tp:.2f}",
+            f"z-score: {signal.z_score}",
+            f"VWAP: {signal.vwap:.2f}",
+            "Confluence:",
+            "- statistical_mean_reversion",
+            "- vwap_2sigma_extension",
+            f"- number_theory_{tier}",
+            "Disclaimer: Paper/demo signal only. No real-money execution.",
+        ]
+        return "\n".join(lines)
+
+    def _maybe_send_session_behaviour_alert(self, decision: ScalpingDecision, session: str) -> bool:
+        if not self.settings.time_behaviour_alerts:
+            return False
+        event = decision.intraday_context.get("session_candle", {}) if decision.intraday_context else {}
+        time_ctx = decision.intraday_context.get("time_behaviour", {}) if decision.intraday_context else {}
+        classification = event.get("classification", "NO_CLEAR_SESSION_BEHAVIOUR")
+        time_window = time_ctx.get("time_window", "unknown")
+        if classification == "NO_CLEAR_SESSION_BEHAVIOUR" and time_window not in {"pre_london", "pre_ny"}:
+            return False
+        if classification == "NO_CLEAR_SESSION_BEHAVIOUR" and not self.settings.send_session_prep_alerts:
+            return False
+        if "MANIPULATION" in classification and not self.settings.send_session_manipulation_alerts:
+            return False
+        if "OPEN_DRIVE" in classification and not self.settings.send_open_drive_alerts:
+            return False
+        count = self.session_behaviour_session_counts.get(session, 0)
+        if count >= self.settings.max_session_behaviour_alerts_per_session:
+            return False
+        level = event.get("swept_level_name") or time_window
+        key = f"{session}:{time_window}:{classification}:{level}:{datetime.now(timezone.utc).date().isoformat()}"
+        last = self.session_behaviour_alert_memory.get(key)
+        if last and (datetime.now(timezone.utc) - last) < timedelta(minutes=self.settings.session_behaviour_alert_cooldown_minutes):
+            return False
+        text = self._format_session_behaviour_alert(decision, event, time_ctx, classification)
+        result = self.telegram_bot.send_text(text)
+        if result.get("ok"):
+            self.session_behaviour_alert_memory[key] = datetime.now(timezone.utc)
+            self.session_behaviour_session_counts[session] = count + 1
+            log.info("session_behaviour_alert_sent key=%s", key)
+            return True
+        return False
+
+    @staticmethod
+    def _format_session_behaviour_alert(decision: ScalpingDecision, event: dict, time_ctx: dict, classification: str) -> str:
+        if classification == "NO_CLEAR_SESSION_BEHAVIOUR":
+            title = f"{decision.symbol} - SESSION PREP"
+            body = [
+                f"Fase: {time_ctx.get('session_name', time_ctx.get('time_window', '-'))}",
+                "Zone da osservare: vedere /watch e /plan.",
+                "NO ENTRY.",
+            ]
+        elif "OPEN_DRIVE" in classification or "ACCEPTED_BREAKOUT" in classification:
+            title = f"{decision.symbol} - OPEN DRIVE CONTINUATION"
+            body = [
+                f"Comportamento: {classification}",
+                f"Livello: {event.get('swept_level_name')} {event.get('swept_level')}",
+                "No reversal contro breakout accettato.",
+                "Cerco solo pullback coerente o no trade.",
+            ]
+        else:
+            title = f"{decision.symbol} - SESSION OPEN BEHAVIOUR"
+            body = [
+                f"Comportamento: {classification}",
+                f"Livello preso: {event.get('swept_level_name')} {event.get('swept_level')}",
+                f"Candela: wick={event.get('wick_ratio')} body={event.get('body_ratio')} close={event.get('close_location')}",
+                "Serve: M1/M5 CHOCH, displacement, FVG/IFVG, target valido.",
+                "NO ENTRY ANCORA.",
+            ]
+        reasons = event.get("reason_codes", [])[:8]
+        return "\n".join([title, "", *body, "", "Reason codes:", *[f"- {reason}" for reason in reasons], "Disclaimer: Paper/demo signal only. No real-money execution."])
+
     def _maybe_send_reaction_alert(self, decision: ScalpingDecision, session: str) -> bool:
         if self.settings.send_triggered_only:
             return False
         sweeps = decision.liquidity.get("sweeps", []) if decision.liquidity else []
         if decision.state not in {"WATCH", "APPROACHING", "ARMED", "SWEEPING_INTRABAR", "CONFIRMED_SWEEP"} or not sweeps:
             return False
+        cluster = self._reaction_cluster(decision, sweeps)
+        if cluster is not None:
+            return self._send_reaction_cluster_alert(decision, cluster, session)
         sweep = sweeps[0]
-        if sweep.get("status") not in {"ARMED", "SWEEPING_INTRABAR", "CONFIRMED_SWEEP"}:
+        if sweep.get("status") not in {"WATCH", "APPROACHING", "ARMED", "SWEEPING_INTRABAR", "CONFIRMED_SWEEP"}:
             return False
         pool = self._pool_for_sweep(sweep.get("pool_id")) or self._pool_for_sweep_in_decision(decision, sweep.get("pool_id"))
         distance_pips = float(pool.get("distance_pips", 0) if pool else 0)
@@ -314,6 +494,8 @@ class ScalpingScanner:
     def _alert_milestone(self, distance_pips: float, sweep_status: str | None) -> str | None:
         if distance_pips >= 300:
             return None
+        if sweep_status == "CONFIRMED_SWEEP":
+            return "confirmed_sweep"
         if sweep_status == "SWEEPING_INTRABAR":
             return "sweep_intrabar" if self.settings.send_sweep_intrabar_alerts else None
         if distance_pips <= self.settings.imminent_reaction_distance_pips and self.settings.send_armed_reaction_alerts:
@@ -325,6 +507,54 @@ class ScalpingScanner:
         if distance_pips <= self.settings.far_prep_alert_distance_pips and self.settings.allow_far_prep_alerts:
             return "far_prep"
         return None
+
+    def _reaction_cluster(self, decision: ScalpingDecision, sweeps: list[dict]) -> dict | None:
+        items = []
+        for sweep in sweeps:
+            status = sweep.get("status")
+            if status not in {"WATCH", "APPROACHING", "ARMED", "SWEEPING_INTRABAR", "CONFIRMED_SWEEP"}:
+                continue
+            level = sweep.get("level")
+            if level is None:
+                continue
+            pool = self._pool_for_sweep(sweep.get("pool_id")) or self._pool_for_sweep_in_decision(decision, sweep.get("pool_id"))
+            direction = self._possible_reaction_direction(sweep, pool)
+            items.append({"sweep": sweep, "pool": pool, "level": float(level), "direction": direction})
+        if len(items) < 2:
+            return None
+        items = sorted(items, key=lambda item: item["level"])
+        low = min(item["level"] for item in items)
+        high = max(item["level"] for item in items)
+        directions = {item["direction"] for item in items if item["direction"] != "UNCLEAR"}
+        multiplier = 2 if len(directions) > 1 else 1
+        tolerance = pips_to_price(decision.symbol, self.settings.reaction_cluster_tolerance_pips * multiplier)
+        if high - low > tolerance:
+            return None
+        direction_label = "UNCLEAR / LIQUIDITY SEARCH" if len(directions) != 1 else f"{next(iter(directions))} candidate"
+        return {"low": low, "high": high, "items": items, "direction": direction_label, "statuses": [item["sweep"].get("status") for item in items]}
+
+    def _send_reaction_cluster_alert(self, decision: ScalpingDecision, cluster: dict, session: str) -> bool:
+        key = f"{decision.symbol}:reaction_cluster:{round(cluster['low'], 1)}:{round(cluster['high'], 1)}:{session}"
+        now = datetime.now(timezone.utc)
+        last = self.reaction_alerts.get(key)
+        if last and (now - last) < timedelta(minutes=self.settings.reaction_cluster_cooldown_minutes):
+            decision.reason_codes.append("duplicate_reaction_alert_suppressed")
+            return False
+        if "CONFIRMED_SWEEP" in cluster["statuses"]:
+            count = self.reaction_cluster_confirmed_counts.get(key, 0)
+            if count >= self.settings.max_confirmed_sweep_alerts_per_cluster:
+                decision.reason_codes.append("confirmed_sweep_cluster_waiting_trigger")
+                return False
+        text = self._format_reaction_cluster_alert(decision, cluster)
+        result = self.telegram_bot.send_text(text)
+        if result.get("ok"):
+            self.reaction_alerts[key] = now
+            if "CONFIRMED_SWEEP" in cluster["statuses"]:
+                self.reaction_cluster_confirmed_counts[key] = self.reaction_cluster_confirmed_counts.get(key, 0) + 1
+            decision.reason_codes.append("reaction_alert_clustered")
+            self.stats.signals_sent += 1
+            return True
+        return False
 
     def _pool_for_sweep(self, pool_id: str | None) -> dict | None:
         if self.latest_analysis is None or not pool_id:
@@ -344,6 +574,52 @@ class ScalpingScanner:
         return None
 
     @staticmethod
+    def _possible_reaction_direction(sweep: dict, pool: dict | None = None) -> str:
+        text = " ".join(
+            [
+                str(sweep.get("direction", "")),
+                str(sweep.get("reason_codes", "")),
+                str(pool.get("side", "") if pool else ""),
+                str(pool.get("pool_type", "") if pool else ""),
+            ]
+        ).lower()
+        if "bearish_reversal" in text or "buy_side" in text or "high" in text or "possible_short_after_buy_side_sweep" in text:
+            return "SHORT"
+        if "bullish_reversal" in text or "sell_side" in text or "low" in text or "possible_long_after_sell_side_sweep" in text:
+            return "LONG"
+        return "UNCLEAR"
+
+    @staticmethod
+    def _format_reaction_cluster_alert(decision: ScalpingDecision, cluster: dict) -> str:
+        low = cluster["low"]
+        high = cluster["high"]
+        reasons = ["reaction_alert_clustered"]
+        if cluster["direction"] == "UNCLEAR / LIQUIDITY SEARCH":
+            reasons.extend(["direction_unclear_two_sided_sweep", "liquidity_search_waiting_direction"])
+        lines = [
+            f"{decision.symbol} — LIQUIDITY REACTION CLUSTER",
+            "NO ENTRY",
+            "",
+            f"Area: {low:.2f} - {high:.2f}",
+            "Stato: sweep/reaction area",
+            f"Direzione: {cluster['direction']}",
+            "",
+            "Piano teorico:",
+            f"Scenario LONG sopra {low:.2f} solo dopo CHOCH/FVG bullish.",
+            f"Scenario SHORT sotto {high:.2f} solo dopo CHOCH/FVG bearish.",
+            "",
+            "Manca:",
+            "- direzione chiara",
+            "- CHOCH",
+            "- FVG/IFVG",
+            "",
+            "Reason codes:",
+            *[f"- {reason}" for reason in reasons],
+            "Disclaimer: Paper/demo signal only. No real-money execution.",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
     def _format_reaction_alert(decision: ScalpingDecision, sweep: dict, pool: dict | None, milestone: str = "armed") -> str:
         pool_type = pool.get("pool_type") if pool else "liquidity"
         distance = pool.get("distance_pips") if pool else "-"
@@ -357,9 +633,20 @@ class ScalpingScanner:
             "armed_80": "REACTION AREA VICINA",
             "imminent_50": "REACTION AREA IMMINENTE",
             "sweep_intrabar": "SWEEP IN CORSO",
+            "confirmed_sweep": "SWEEP CONFERMATA, ASPETTO TRIGGER",
         }.get(milestone, "POSSIBILE REAZIONE LIQUIDITY")
-        lines = [f"{decision.symbol} - {title}", f"Livello: {sweep.get('level')}", f"Tipo: {pool_type}", f"Distanza: {distance} pips", f"Stato: {sweep.get('status')}", "Confluence:"]
+        possible_direction = f"{ScalpingScanner._possible_reaction_direction(sweep, pool)} candidate"
+        if possible_direction.startswith("UNCLEAR"):
+            possible_direction = "UNCLEAR / LIQUIDITY SEARCH"
+        lines = [f"{decision.symbol} - {title}", "NO ENTRY", f"Direzione possibile: {possible_direction}", f"Livello: {sweep.get('level')}", f"Tipo: {pool_type}", f"Distanza: {distance} pips", f"Stato: {sweep.get('status')}", "Confluence:"]
         lines.extend(f"- {item}" for item in confluences[:8])
+        if decision.theoretical_targets or decision.entry_area or decision.stop:
+            lines.extend(["Piano teorico non operativo:", f"- Entry teorica: {decision.entry_area[0]:.2f} - {decision.entry_area[1]:.2f}" if decision.entry_area else "- Entry teorica: solo dopo trigger", f"- SL teorico: {decision.stop if decision.stop is not None else '-'}", "TP teorici:"])
+            if decision.theoretical_targets:
+                for target in decision.theoretical_targets[:3]:
+                    lines.append(f"- {target.get('label')} teorico: {target.get('price')} - {target.get('basis')} - {target.get('distance_pips')} pips")
+            else:
+                lines.append("- target validation finale ancora da confermare")
         lines.extend(
             [
                 "Serve conferma:",
@@ -392,37 +679,56 @@ class ScalpingScanner:
 
     def _track_virtual_entries(self, market_data: dict[str, pd.DataFrame], now: datetime, previous_scan: datetime | None) -> None:
         for trade in self.trades:
-            if trade.status in {"PENDING_ENTRY", "ENTERED"}:
+            if trade.status == "PENDING_ENTRY":
+                self._update_pending_trade(trade, market_data, now, previous_scan)
+            elif trade.status == "ENTERED":
+                previous_status = trade.status
                 self._update_trade_outcome(trade, market_data, now)
+                if trade.status != previous_status:
+                    self._maybe_send_reentry_alert(trade)
             if trade.status == "STOP_HIT" and self.settings.enable_reentry_analysis:
+                previous_reentry = trade.reentry_state
                 self._update_reentry(trade, market_data, now)
-            if trade.status != "PENDING_ENTRY":
-                continue
-            zone = SetupZone(
-                id=trade.zone_id,
-                symbol=trade.symbol,
-                timeframe="M1",
-                zone_type="entry_area",
-                role="ENTRY_TRIGGER",
-                state="WATCH",
-                direction="BUY" if trade.direction == "LONG" else "SELL",
-                low=trade.entry_area_low,
-                high=trade.entry_area_high,
-            )
-            interaction = detect_zone_interactions_since_last_scan(
-                zone,
-                market_data.get("M1"),
-                market_data.get("M5"),
-                last_scan_time=previous_scan,
-                now_utc=now,
-            )
-            if interaction.entry_area_touched:
+                if trade.reentry_state != previous_reentry:
+                    self._maybe_send_reentry_alert(trade)
+
+    def _update_pending_trade(self, trade: VirtualTrade, market_data: dict[str, pd.DataFrame], now: datetime, previous_scan: datetime | None) -> None:
+        frame = market_data.get("M1")
+        if frame is None or len(frame) == 0:
+            return
+        recent = frame.copy()
+        if "time" in recent.columns and previous_scan is not None:
+            recent = recent[(pd.to_datetime(recent["time"], utc=True) >= pd.Timestamp(previous_scan)) & (pd.to_datetime(recent["time"], utc=True) <= pd.Timestamp(now))]
+        if len(recent) == 0:
+            recent = frame.tail(5)
+        for _, candle in recent.iterrows():
+            high = float(candle["h"] if "h" in candle else candle.get("high"))
+            low = float(candle["l"] if "l" in candle else candle.get("low"))
+            when = candle["time"].to_pydatetime() if "time" in candle and hasattr(candle["time"], "to_pydatetime") else now
+            if trade.direction == "LONG":
+                entry_touched = low <= trade.entry_area_high and high >= trade.entry_area_low
+                stop_touched = trade.stop_loss is not None and low <= trade.stop_loss
+            else:
+                entry_touched = high >= trade.entry_area_low and low <= trade.entry_area_high
+                stop_touched = trade.stop_loss is not None and high >= trade.stop_loss
+            if stop_touched:
+                trade.status = "INVALIDATED_BEFORE_ENTRY"
+                trade.reason_codes.append("setup_invalidated_before_entry")
+                if entry_touched:
+                    trade.reason_codes.append("ambiguous_intrabar_path_assume_conservative_stop")
+                trade.stop_hit_price = trade.stop_loss
+                trade.stop_hit_time = when
+                return
+            if entry_touched:
                 trade.status = "ENTERED"
-                trade.entry_time = interaction.last_touch_time or now
-                trade.entry_price = interaction.touch_price
-                trade.source = interaction.source_timeframe
+                trade.entry_time = when
+                trade.entry_price = (trade.entry_area_low + trade.entry_area_high) / 2
+                trade.source = "M1"
+                return
 
     def _update_trade_outcome(self, trade: VirtualTrade, market_data: dict[str, pd.DataFrame], now: datetime) -> None:
+        if trade.status != "ENTERED":
+            return
         frame = market_data.get("M1")
         if frame is None or len(frame) == 0 or trade.stop_loss is None:
             return
@@ -437,6 +743,7 @@ class ScalpingScanner:
                     trade.stop_hit_price = trade.stop_loss
                     trade.stop_hit_time = when
                     trade.reentry_state = "REENTRY_WATCH"
+                    trade.reason_codes.append("stop_hit_after_entry")
                     trade.reentry_reason_codes = ["ambiguous_intrabar_path_assume_conservative_stop"] if trade.tp1 and high >= trade.tp1 else []
                     return
                 if trade.tp1 and high >= trade.tp1:
@@ -448,6 +755,7 @@ class ScalpingScanner:
                     trade.stop_hit_price = trade.stop_loss
                     trade.stop_hit_time = when
                     trade.reentry_state = "REENTRY_WATCH"
+                    trade.reason_codes.append("stop_hit_after_entry")
                     trade.reentry_reason_codes = ["ambiguous_intrabar_path_assume_conservative_stop"] if trade.tp1 and low <= trade.tp1 else []
                     return
                 if trade.tp1 and low <= trade.tp1:
@@ -480,6 +788,65 @@ class ScalpingScanner:
         trade.reentry_state = context.state
         trade.reentry_reason_codes = context.reason_codes
 
+    def _maybe_send_reentry_alert(self, trade: VirtualTrade) -> bool:
+        alert_state = trade.reentry_state if trade.status == "STOP_HIT" and trade.reentry_state in {"REENTRY_CANDIDATE", "REENTRY_VALID", "NO_REENTRY"} else trade.status
+        if alert_state not in {"STOP_HIT", "REENTRY_CANDIDATE", "REENTRY_VALID", "NO_REENTRY"}:
+            return False
+        key = f"{trade.trade_id}:{alert_state}"
+        if key in self.reentry_alert_memory:
+            return False
+        result = self.telegram_bot.send_text(self._format_reentry_alert(trade, alert_state))
+        if result.get("ok"):
+            self.reentry_alert_memory[key] = datetime.now(timezone.utc)
+            log.info("reentry_alert_sent key=%s", key)
+            return True
+        return False
+
+    @staticmethod
+    def _format_reentry_alert(trade: VirtualTrade, alert_state: str) -> str:
+        reasons = trade.reentry_reason_codes or trade.reason_codes
+        if alert_state == "STOP_HIT":
+            lines = [
+                f"{trade.symbol} - STOP HIT",
+                f"Vecchio setup: {trade.direction}",
+                f"Stop: {trade.stop_loss}",
+                f"Prezzo stop: {trade.stop_hit_price}",
+                "Stato: REENTRY_WATCH",
+                "Valuto se era stop sweep o invalidazione reale.",
+                "NO REENTRY ANCORA.",
+            ]
+        elif alert_state == "REENTRY_CANDIDATE":
+            lines = [
+                f"{trade.symbol} - REENTRY CANDIDATE",
+                "Lo stop e' stato preso, ma il prezzo sta rientrando nella direzione originale.",
+                "Stato: REENTRY_CANDIDATE",
+                "Serve ancora:",
+                "- CHOCH M1/M5",
+                "- FVG/IFVG",
+                "- nuovo retest",
+                "- target valido",
+                "- volatilita ok",
+                "NO ENTRY ANCORA.",
+            ]
+        elif alert_state == "REENTRY_VALID":
+            lines = [
+                f"{trade.symbol} - REENTRY VALID",
+                f"Direzione: {trade.direction}",
+                "Motivi:",
+                *[f"- {reason}" for reason in reasons[:8]],
+                "Stato: REENTRY_VALID",
+            ]
+        else:
+            lines = [
+                f"{trade.symbol} - NO REENTRY",
+                "Stop preso, ma non conviene rientrare.",
+                "Motivi:",
+                *[f"- {reason}" for reason in reasons[:8]],
+                "Non rientrare.",
+            ]
+        lines.append("Disclaimer: Paper/demo signal only. No real-money execution.")
+        return "\n".join(lines)
+
     def _infer_price(self, market_data: dict[str, pd.DataFrame]) -> float:
         for timeframe in ("M1", "M5", "M15", "H1", "H4"):
             df = market_data.get(timeframe)
@@ -505,7 +872,7 @@ class ScalpingScanner:
                 f"Scanner loop vivo: {'no' if self.shutdown_requested else 'si'}",
                 f"Scanner automatico: {'no' if self.paused else 'si'}",
                 "Report automatici analisi: disattivi",
-                "Auto watch alerts: disattivi",
+                f"Alert automatici: approaching={'on' if self.settings.send_approaching_alerts else 'off'} | armed={'on' if self.settings.send_armed_reaction_alerts else 'off'} | sweep={'on' if self.settings.send_sweep_intrabar_alerts else 'off'} | triggered_only={'on' if self.settings.send_triggered_only else 'off'} | cooldown={self.settings.reaction_alert_cooldown_minutes}m",
                 f"Scan ogni: {self.scan_interval_seconds} secondi",
                 f"Ultimo scan: {self._fmt_dt(self.last_scan)}",
                 f"Prossimo scan stimato: {self._fmt_dt(self.next_scan_at)}",
@@ -539,9 +906,10 @@ class ScalpingScanner:
 
     def format_watch(self) -> str:
         operative = [z for z in self.latest_zones if z.role != "HTF_CONTEXT" and float(z.metadata.get("distance_pips", 99999)) <= 150]
+        session_behaviour = (self.latest_analysis.intraday_context.get("session_candle", {}) if self.latest_analysis else {}).get("classification", "-")
         if not operative:
-            return "Watch zone operative: 0\nZone HTF lontane disponibili solo come contesto in /plan."
-        lines = ["WATCH ZONE OPERATIVE"]
+            return f"Watch zone operative: 0\nSession behaviour: {session_behaviour}\nZone HTF lontane disponibili solo come contesto in /plan.\nNO ENTRY se non TRIGGERED."
+        lines = ["WATCH ZONE OPERATIVE", f"Session behaviour: {session_behaviour}", "NO ENTRY se non TRIGGERED."]
         for idx, zone in enumerate(operative[:5], start=1):
             lines.extend(
                 [
@@ -599,6 +967,7 @@ class ScalpingScanner:
                     f"Stop hit: {trade.stop_hit_price or '-'} at {self._fmt_dt(trade.stop_hit_time)}",
                     f"Reentry: {trade.reentry_state}",
                     f"Motivo reentry: {', '.join(trade.reentry_reason_codes[:5]) if trade.reentry_reason_codes else '-'}",
+                    f"Motivi trade: {', '.join(trade.reason_codes[:5]) if trade.reason_codes else '-'}",
                     f"SL: {trade.stop_loss} | TP1: {trade.tp1} | TP2: {trade.tp2}",
                 ]
             )

@@ -6,8 +6,11 @@ from typing import Any, Iterable, Literal
 
 import pandas as pd
 
-from dazro_trade.analysis.targets import TargetPolicy, build_intelligent_targets, validate_target_space
-from dazro_trade.analysis.volume_profile import build_volume_profile
+from dazro_trade.analysis.indicators import multi_tf_ema_context, multi_tf_rsi_context
+from dazro_trade.analysis.session_candles import classify_session_candle
+from dazro_trade.analysis.targets import TargetPolicy, build_official_tp_ladder, build_target_candidates
+from dazro_trade.analysis.time_behaviour import classify_time_behaviour
+from dazro_trade.analysis.volume_profile import build_daily_anchored_profile, build_volume_profile, daily_range_from
 from dazro_trade.analysis.vwap import vwap_snapshot
 from dazro_trade.core.models import ScalpingDecision, SetupState, SetupZone, ZoneRole
 from dazro_trade.core.symbols import price_to_pips, pips_to_price
@@ -27,21 +30,35 @@ class ScalpingConfig:
     max_m5_distance_points: float = 5.0
     max_m15_distance_points: float = 8.0
     max_htf_context_distance_points: float = 50.0
-    max_m1_distance_pips: float = 250.0
-    max_m5_distance_pips: float = 500.0
-    max_m15_distance_pips: float = 800.0
-    min_reaction_distance_pips: float = 80.0
+    max_m1_distance_pips: float = 25.0
+    max_m5_distance_pips: float = 50.0
+    max_m15_distance_pips: float = 80.0
+    min_reaction_distance_pips: float = 8.0
     min_signal_score: int = 85
     min_rr: float = 2.0
     entry_buffer_points: float = 0.30
     invalidation_buffer_points: float = 0.80
     strict_closed_candle: bool = True
-    min_normal_reaction_target_pips: float = 50.0
-    preferred_reaction_target_pips: float = 100.0
+    min_normal_reaction_target_pips: float = 5.0
+    preferred_reaction_target_pips: float = 10.0
     allow_vwap_1r_target: bool = True
-    min_vwap_target_pips: float = 30.0
+    min_vwap_target_pips: float = 3.0
     min_rr_normal: float = 1.5
     min_rr_vwap_scalp: float = 1.0
+    max_official_targets: int = 3
+    allow_runner_target: bool = True
+    min_gap_between_official_targets_pips: float = 5.0
+    min_gap_between_scalp_targets_pips: float = 3.0
+    target_cluster_tolerance_pips: float = 2.5
+    min_tp1_distance_pips: float = 5.0
+    min_tp1_distance_pips_vwap_scalp: float = 3.0
+    hide_micro_targets: bool = True
+    max_candidate_targets_debug: int = 20
+    show_theoretical_plan_on_watch: bool = True
+    max_theoretical_targets_on_watch: int = 3
+    theoretical_sl_buffer_pips: float = 1.0
+    min_stop_distance_pips: float = 2.0
+    max_stop_distance_pips: float = 15.0
 
 
 @dataclass
@@ -55,6 +72,69 @@ class InteractionResult:
     missed_touch_detected: bool = False
     reaction_after_touch: str | None = None
     reaction_points: float = 0.0
+
+
+@dataclass(frozen=True)
+class PrimaryConfluenceResult:
+    passed: bool
+    reasons_present: list[str]
+    reasons_missing: list[str]
+    score_bonus: int
+
+
+def evaluate_primary_confluence(
+    sweep: SweepEvent | None,
+    primary_zone: SetupZone | None,
+    htf_allows: bool,
+    m5_displacement_ok: bool,
+    m1_trigger_ok: bool,
+    *,
+    max_zone_distance_pips: float = 8.0,
+) -> PrimaryConfluenceResult:
+    present: list[str] = []
+    missing: list[str] = []
+    if sweep is None or sweep.status not in {"CONFIRMED_SWEEP", "TRIGGERED"}:
+        missing.append("sweep_not_in_confirmed_or_triggered")
+    else:
+        present.append("sweep_confirmed_or_triggered")
+    if sweep is None or not sweep.number_theory_confluence:
+        missing.append("number_theory_missing")
+    else:
+        present.append("number_theory_confluence")
+    if sweep is None or not (sweep.fvg_after_sweep or sweep.ifvg_after_sweep):
+        missing.append("fvg_or_ifvg_missing")
+    else:
+        present.append("fvg_or_ifvg_after_sweep")
+    if primary_zone is None or primary_zone.distance_from_price is None:
+        missing.append("primary_zone_missing")
+    else:
+        distance_pips = price_to_pips(primary_zone.symbol, primary_zone.distance_from_price)
+        if distance_pips > max_zone_distance_pips:
+            missing.append("primary_zone_too_far")
+        else:
+            present.append("primary_zone_near_sweep")
+    if htf_allows:
+        present.append("htf_allows_direction")
+    else:
+        missing.append("htf_blocks_direction")
+    if m5_displacement_ok:
+        present.append("m5_displacement")
+    else:
+        missing.append("m5_displacement_missing")
+    if m1_trigger_ok:
+        present.append("m1_trigger")
+    else:
+        missing.append("m1_trigger_missing")
+    passed = not missing
+    score_bonus = 0
+    if passed and sweep is not None:
+        score_bonus = 10
+        if sweep.vwap_deviation_confluence:
+            score_bonus += 5
+        if sweep.volume_crack_confluence:
+            score_bonus += 5
+        score_bonus = min(20, score_bonus)
+    return PrimaryConfluenceResult(passed=passed, reasons_present=present, reasons_missing=missing, score_bonus=score_bonus)
 
 
 @dataclass
@@ -94,24 +174,37 @@ def evaluate_scalping_setup(
     symbol: str = "XAUUSD",
     current_price: float | None = None,
     spread: float = 0.0,
-    max_spread: float = 30.0,
+    max_spread: float = 3.0,
     now_utc: datetime | None = None,
     last_scan_time: datetime | None = None,
     session_name: str = "unknown",
     config: ScalpingConfig | None = None,
+    timezone_name: str = "Europe/Rome",
+    broker_time_offset_hours: int = 0,
 ) -> ScalpingDecision:
     cfg = config or ScalpingConfig()
     now = now_utc or datetime.now(timezone.utc)
     frames = {tf: normalize_frame(df) for tf, df in market_data.items() if df is not None}
     price = float(current_price if current_price is not None else _infer_price(frames))
+    ema_contexts = multi_tf_ema_context(frames, price, symbol=symbol)
+    rsi_contexts = multi_tf_rsi_context(frames)
+    time_context = classify_time_behaviour(now, frames, timezone=timezone_name, broker_time_offset_hours=broker_time_offset_hours)
 
     missing = [tf for tf in ("M1", "M5", "M15") if _frame_empty(frames.get(tf))]
-    htf_context = build_htf_context(frames, price)
-    volume_profile = build_volume_profile(frames.get("M15", pd.DataFrame()))
+    htf_context = build_htf_context(frames, price, ema_contexts=ema_contexts, rsi_contexts=rsi_contexts)
+    htf_context["time_behaviour"] = time_context.to_dict()
+    intraday_for_vp = frames.get("M5") if not _frame_empty(frames.get("M5")) else frames.get("M15", pd.DataFrame())
+    _dr = daily_range_from(frames.get("D1"), now_utc=now)
+    if _dr is not None and not _frame_empty(intraday_for_vp):
+        volume_profile = build_daily_anchored_profile(_dr[0], _dr[1], intraday_for_vp)
+        volume_profile_source = f"daily_anchored:{_dr[2]}"
+    else:
+        volume_profile = build_volume_profile(intraday_for_vp)
+        volume_profile_source = "intraday_fallback"
     vwap = vwap_snapshot(frames.get("M15", pd.DataFrame()), price)
     liquidity_pools = build_liquidity_map(frames, symbol=symbol, current_price=price)
     live_sweep_events = detect_sweeps_for_pools(
-        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=500),
+        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=50),
         frames.get("M1", frames.get("M5", pd.DataFrame())),
         m5_df=frames.get("M5"),
         m1_df=frames.get("M1"),
@@ -120,7 +213,7 @@ def evaluate_scalping_setup(
         current_candle_closed=False,
     )
     closed_sweep_events = detect_sweeps_for_pools(
-        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=500),
+        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=50),
         _closed_frame(frames.get("M1", frames.get("M5", pd.DataFrame()))),
         m5_df=_closed_frame(frames.get("M5")),
         m1_df=_closed_frame(frames.get("M1")),
@@ -130,8 +223,19 @@ def evaluate_scalping_setup(
     )
     sweep_events = _merge_sweep_events(live_sweep_events, closed_sweep_events)
     zones = build_zones(frames, symbol=symbol, current_price=price, config=cfg)
-    liquidity = build_liquidity_context(frames, price, pools=liquidity_pools, sweeps=sweep_events, vwap=vwap, volume_profile=volume_profile)
-    intraday_context = build_intraday_context(frames, price)
+    liquidity = build_liquidity_context(frames, price, pools=liquidity_pools, sweeps=sweep_events, vwap=vwap, volume_profile=volume_profile, volume_profile_source=volume_profile_source)
+    session_event = build_session_candle_context(
+        symbol=symbol,
+        frames=frames,
+        session_name=session_name,
+        time_context=time_context,
+        ema_contexts=ema_contexts,
+        vwap_data=vwap.__dict__ if vwap is not None else None,
+        liquidity_pools=[event.__dict__ for event in sweep_events],
+    )
+    intraday_context = build_intraday_context(frames, price, ema_contexts=ema_contexts, rsi_contexts=rsi_contexts)
+    intraday_context["time_behaviour"] = time_context.to_dict()
+    intraday_context["session_candle"] = session_event
     if missing:
         return ScalpingDecision(
             symbol=symbol,
@@ -193,7 +297,7 @@ def evaluate_scalping_setup(
                 liquidity=liquidity,
                 now=now,
                 config=cfg,
-                forced_state="ARMED",
+                forced_state=top_sweep.status,
                 rejection_reasons=[reason, *top_sweep.reason_codes],
             )
     if primary is None:
@@ -239,6 +343,10 @@ def evaluate_scalping_setup(
         liquidity_pools=[pool.__dict__ for pool in liquidity_pools],
         volume_profile=volume_profile.__dict__,
     )
+    target_ok = target_validation_passes(rr_payload["target_validation"], cfg)
+    target_type = rr_payload["target_validation"].get("setup_target_type")
+    ema_filter = ema_trade_filter(ema_contexts, primary.direction, sweep == primary.direction, m5_structure, fvg_after_sweep)
+    rsi_filter = rsi_trade_filter(rsi_contexts, primary.direction)
 
     confirmations_present: list[str] = []
     confirmations_missing: list[str] = []
@@ -266,10 +374,17 @@ def evaluate_scalping_setup(
         confirmations_present.append("spread ok")
     else:
         confirmations_missing.append("spread alto")
-    if rr_payload["rr"] >= cfg.min_rr:
-        confirmations_present.append("RR valido")
+    if target_ok:
+        confirmations_present.append("target/RR valido")
     else:
-        confirmations_missing.append("RR insufficiente")
+        confirmations_missing.append("target/RR insufficiente")
+    confirmations_present.extend(ema_filter["present"])
+    confirmations_present.extend(rsi_filter["present"])
+    confirmations_missing.extend(ema_filter["missing"])
+    confirmations_missing.extend(rsi_filter["missing"])
+    time_filter = time_behaviour_filter(time_context.to_dict(), session_event, m5_displacement, m5_structure)
+    confirmations_present.extend(time_filter["present"])
+    confirmations_missing.extend(time_filter["missing"])
 
     score = score_setup(
         htf_alignment=htf_alignment,
@@ -279,10 +394,15 @@ def evaluate_scalping_setup(
         m1_trigger=m1_trigger,
         fvg_after_sweep=fvg_after_sweep,
         spread_ok=spread <= max_spread,
-        rr_ok=rr_payload["rr"] >= cfg.min_rr,
+        rr_ok=target_ok,
         entry_already_touched=interactions.entry_area_touched,
         distance=price_to_pips(symbol, primary.distance_from_price or 0.0),
     )
+    if time_filter["score_penalty"]:
+        score = max(0, score - time_filter["score_penalty"])
+    top_sweep = sweep_events[0] if sweep_events else None
+    confluence = evaluate_primary_confluence(top_sweep, primary, htf_alignment, m5_displacement, m1_trigger)
+    score = min(100, score + confluence.score_bonus)
 
     state = classify_setup_state(
         score=score,
@@ -294,11 +414,15 @@ def evaluate_scalping_setup(
                 m5_structure,
                 m1_trigger,
                 spread <= max_spread,
-                rr_payload["rr"] >= cfg.min_rr,
+                target_ok,
+                ema_filter["passes"],
+                time_filter["passes"],
             ]
         ),
         entry_area_touched=interactions.entry_area_touched,
     )
+    if confluence.passed:
+        confirmations_present.append("primary_confluence_chain")
     primary.state = state
     primary.score = score
     primary.metadata.update(
@@ -309,6 +433,11 @@ def evaluate_scalping_setup(
             "session": session_name,
             "touch": interactions.__dict__,
             "sweep_events": [event.__dict__ for event in sweep_events[:3]],
+            "primary_confluence": {
+                "passed": confluence.passed,
+                "present": confluence.reasons_present,
+                "missing": confluence.reasons_missing,
+            },
         }
     )
 
@@ -319,12 +448,19 @@ def evaluate_scalping_setup(
         rejection_reasons.insert(0, "Zona HTF usata come contesto, non entry scalping")
     if primary.zone_type in {"bullish_fvg", "bearish_fvg"} and not sweep_events:
         rejection_reasons.append("fvg_without_liquidity_penalty")
-    if not rr_payload["target_validation"]["valid"]:
+    if not target_ok:
         rejection_reasons.extend(rr_payload["target_validation"]["reason_codes"])
     if score < cfg.min_signal_score:
         rejection_reasons.append(f"score {score}/{cfg.min_signal_score}")
+    if state == "TRIGGERED" and not confluence.passed:
+        state = "ARMED"
+        primary.state = state
+        rejection_reasons.append("primary_confluence_incomplete")
+        rejection_reasons.extend(confluence.reasons_missing)
 
     setup_type = classify_setup_type(htf_context, primary.direction, sweep == primary.direction)
+    if state == "TRIGGERED":
+        setup_type = _triggered_strategy_mode(top_sweep)
     decision = ScalpingDecision(
         symbol=symbol,
         setup_type=setup_type if state == "TRIGGERED" else ("WATCH" if state == "WATCH" else "ARMED"),
@@ -343,8 +479,13 @@ def evaluate_scalping_setup(
         liquidity={**liquidity, "m15_sweep": sweep},
         primary_zone=primary,
         entry_area=rr_payload["entry_area"],
+        entry=rr_payload["entry"],
         stop=rr_payload["stop"],
-        targets=rr_payload["targets"],
+        targets=rr_payload["targets"] if state in {"TRIGGERED", "REENTRY_VALID"} else [],
+        theoretical_targets=rr_payload["theoretical_targets"],
+        target_candidates=rr_payload["target_candidates"],
+        target_clusters=rr_payload["target_clusters"],
+        target_validation=rr_payload["target_validation"],
         invalidation=rr_payload["stop"],
         reason_codes=confirmations_present,
         rejection_reasons=rejection_reasons,
@@ -352,6 +493,7 @@ def evaluate_scalping_setup(
         timestamp_utc=now,
     )
     _apply_execution_gates(decision, price)
+    _sync_non_operational_targets(decision)
     if decision.is_operational_signal:
         decision.signal_id = SignalDeduplicator().signal_key(decision, session_name=session_name, trade_date=now.date())
     return decision
@@ -502,30 +644,82 @@ def _apply_execution_gates(decision: ScalpingDecision, current_price: float) -> 
             decision.state = "INVALIDATED"
             decision.rejection_reasons.insert(0, "current_price_above_short_stop")
             decision.reason_codes.append("setup_invalidated_before_signal")
+            decision.score = 0
+            decision.confidence = 0.0
             if decision.primary_zone:
                 decision.primary_zone.state = "INVALIDATED"
             return
+        if (
+            decision.primary_zone
+            and decision.primary_zone.high < current_price
+            and decision.primary_zone.zone_type in {"bearish_ob", "bearish_fvg", "bearish_ifvg"}
+        ):
+            decision.state = "INVALIDATED"
+            decision.rejection_reasons.insert(0, "short_zone_below_current_price_invalid")
+            decision.reason_codes.append("setup_invalidated_before_signal")
+            decision.score = 0
+            decision.confidence = 0.0
+            decision.primary_zone.state = "INVALIDATED"
+            return
         if decision.entry_area and current_price < decision.entry_area[0] and not (decision.primary_zone and decision.primary_zone.entry_area_touched):
-            decision.state = "ENTERED"
-            decision.rejection_reasons.insert(0, "entry_missed_do_not_chase")
-            decision.reason_codes.append("setup_already_played")
-            if decision.primary_zone:
-                decision.primary_zone.state = "ENTERED"
+            _mark_entry_missed(decision)
             return
     if decision.direction == "LONG":
         if decision.stop is not None and current_price <= decision.stop:
             decision.state = "INVALIDATED"
             decision.rejection_reasons.insert(0, "current_price_below_long_stop")
             decision.reason_codes.append("setup_invalidated_before_signal")
+            decision.score = 0
+            decision.confidence = 0.0
             if decision.primary_zone:
                 decision.primary_zone.state = "INVALIDATED"
             return
+        if (
+            decision.primary_zone
+            and decision.primary_zone.low > current_price
+            and decision.primary_zone.zone_type in {"bullish_ob", "bullish_fvg", "bullish_ifvg"}
+        ):
+            decision.state = "INVALIDATED"
+            decision.rejection_reasons.insert(0, "long_zone_above_current_price_invalid")
+            decision.reason_codes.append("setup_invalidated_before_signal")
+            decision.score = 0
+            decision.confidence = 0.0
+            decision.primary_zone.state = "INVALIDATED"
+            return
         if decision.entry_area and current_price > decision.entry_area[1] and not (decision.primary_zone and decision.primary_zone.entry_area_touched):
-            decision.state = "ENTERED"
-            decision.rejection_reasons.insert(0, "entry_missed_do_not_chase")
-            decision.reason_codes.append("setup_already_played")
-            if decision.primary_zone:
-                decision.primary_zone.state = "ENTERED"
+            _mark_entry_missed(decision)
+            return
+    if decision.state == "ENTERED" and decision.primary_zone and not decision.primary_zone.entry_area_touched and not decision.primary_zone.touched:
+        decision.state = "EXPIRED"
+        decision.primary_zone.state = "EXPIRED"
+        decision.rejection_reasons.insert(0, "entered_state_requires_entry_touch")
+        decision.reason_codes.extend(["entered_state_requires_entry_touch", "state_corrected_from_entered_to_not_actionable"])
+        decision.score = min(decision.score, 70)
+        decision.confidence = round(decision.score / 100, 2)
+
+
+def _mark_entry_missed(decision: ScalpingDecision) -> None:
+    decision.state = "EXPIRED"
+    decision.rejection_reasons.insert(0, "entry_missed_do_not_chase")
+    decision.reason_codes.extend(["entry_missed_do_not_chase", "state_corrected_from_entered_to_not_actionable"])
+    decision.score = min(decision.score, 70)
+    decision.confidence = round(decision.score / 100, 2)
+    if decision.primary_zone:
+        decision.primary_zone.state = "EXPIRED"
+
+
+def _sync_non_operational_targets(decision: ScalpingDecision) -> None:
+    if decision.state not in {"TRIGGERED", "REENTRY_VALID"}:
+        decision.targets = []
+        if "theoretical_plan_only" not in decision.reason_codes:
+            decision.reason_codes.extend(
+                [
+                    "theoretical_plan_only",
+                    "theoretical_sl_not_operational",
+                    "theoretical_targets_not_operational",
+                    "waiting_for_trigger_before_entry",
+                ]
+            )
 
 
 def apply_execution_gates(decision: ScalpingDecision, current_price: float) -> ScalpingDecision:
@@ -571,9 +765,12 @@ def build_risk_targets(
         risk = 0.0
     if stop is None:
         targets = []
+        theoretical_targets = []
+        target_candidates = []
+        target_clusters = []
         validation = {"valid": False, "setup_target_type": "NO_CLEAN_TARGET", "target_pips": 0, "rr": 0, "target_price": None, "reason_codes": ["invalid_risk"]}
     else:
-        targets = build_intelligent_targets(
+        candidates = build_target_candidates(
             symbol=symbol,
             direction=direction,
             entry=entry,
@@ -582,8 +779,36 @@ def build_risk_targets(
             liquidity_pools=liquidity_pools or [],
             volume_profile=volume_profile,
         )
-        validation = validate_target_space(symbol, direction, entry, stop, targets, vwap_data, liquidity_pools or [], _target_policy(cfg))
-    return {"entry_area": (entry_low, entry_high), "entry": entry, "stop": stop, "targets": targets, "rr": validation.get("rr", 0), "target_validation": validation}
+        setup_target_type = _setup_target_type_for_ladder(direction, vwap_data, entry)
+        ladder = build_official_tp_ladder(
+            symbol=symbol,
+            direction=direction,
+            entry=entry,
+            stop=stop,
+            candidates=candidates,
+            policy=_target_policy(cfg),
+            setup_target_type=setup_target_type,
+        )
+        targets = ladder["official_targets"]
+        theoretical_targets = ladder["theoretical_targets"]
+        target_candidates = ladder["candidate_targets"]
+        target_clusters = ladder["target_clusters"]
+        validation = ladder["validation"]
+        validation["reason_codes"] = _dedupe_reason_codes([*validation.get("reason_codes", []), *_stop_validation_reasons(symbol, entry, stop, zone, cfg)])
+        if any(reason in validation["reason_codes"] for reason in {"theoretical_sl_too_tight", "theoretical_sl_too_wide"}):
+            validation["valid"] = False
+            validation["setup_target_type"] = "NO_CLEAN_TARGET"
+    return {
+        "entry_area": (entry_low, entry_high),
+        "entry": entry,
+        "stop": stop,
+        "targets": targets,
+        "theoretical_targets": theoretical_targets,
+        "target_candidates": target_candidates,
+        "target_clusters": target_clusters,
+        "target_validation": validation,
+        "rr": validation.get("rr", 0),
+    }
 
 
 def _dynamic_r_targets(entry: float, risk: float, direction: TradeDirection) -> list[dict[str, Any]]:
@@ -612,10 +837,135 @@ def _target_policy(config: ScalpingConfig) -> TargetPolicy:
         min_vwap_target_pips=config.min_vwap_target_pips,
         min_rr_normal=config.min_rr_normal,
         min_rr_vwap_scalp=config.min_rr_vwap_scalp,
+        max_official_targets=config.max_official_targets,
+        allow_runner_target=config.allow_runner_target,
+        min_gap_between_official_targets_pips=config.min_gap_between_official_targets_pips,
+        min_gap_between_scalp_targets_pips=config.min_gap_between_scalp_targets_pips,
+        target_cluster_tolerance_pips=config.target_cluster_tolerance_pips,
+        min_tp1_distance_pips=config.min_tp1_distance_pips,
+        min_tp1_distance_pips_vwap_scalp=config.min_tp1_distance_pips_vwap_scalp,
+        hide_micro_targets=config.hide_micro_targets,
+        max_candidate_targets_debug=config.max_candidate_targets_debug,
+        show_theoretical_plan_on_watch=config.show_theoretical_plan_on_watch,
+        max_theoretical_targets_on_watch=config.max_theoretical_targets_on_watch,
     )
 
 
-def build_htf_context(frames: dict[str, pd.DataFrame], price: float) -> dict[str, Any]:
+def _setup_target_type_for_ladder(direction: TradeDirection, vwap_data: dict | None, entry: float) -> str:
+    if not vwap_data:
+        return "NORMAL_REACTION"
+    vwap = vwap_data.get("vwap")
+    if vwap is None:
+        return "NORMAL_REACTION"
+    if direction == "LONG" and float(vwap) > entry:
+        return "VWAP_1R_SCALP_LONG"
+    if direction == "SHORT" and float(vwap) < entry:
+        return "VWAP_1R_SCALP_SHORT"
+    return "NORMAL_REACTION"
+
+
+def _stop_validation_reasons(symbol: str, entry: float, stop: float, zone: SetupZone, config: ScalpingConfig) -> list[str]:
+    reasons: list[str] = []
+    zone_type = zone.zone_type.lower()
+    if "sweep" in zone_type or "liquidity" in zone_type:
+        reasons.append("theoretical_sl_from_sweep_level")
+    elif "fvg" in zone_type or "ifvg" in zone_type:
+        reasons.append("theoretical_sl_from_fvg_boundary")
+    else:
+        reasons.append("theoretical_sl_from_swing")
+    distance_pips = price_to_pips(symbol, abs(entry - stop))
+    if distance_pips < config.min_stop_distance_pips:
+        reasons.append("theoretical_sl_too_tight")
+    elif distance_pips > config.max_stop_distance_pips:
+        reasons.append("theoretical_sl_too_wide")
+    else:
+        reasons.append("theoretical_sl_distance_valid")
+    return reasons
+
+
+def _dedupe_reason_codes(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def target_validation_passes(validation: dict[str, Any], config: ScalpingConfig | None = None) -> bool:
+    cfg = config or ScalpingConfig()
+    if not validation.get("valid"):
+        return False
+    target_type = validation.get("setup_target_type")
+    rr = float(validation.get("rr", 0) or 0)
+    target_pips = float(validation.get("target_pips", 0) or 0)
+    if target_type == "VWAP_1R_SCALP":
+        return rr >= cfg.min_rr_vwap_scalp and target_pips >= cfg.min_vwap_target_pips
+    if target_type == "NORMAL_REACTION":
+        return rr >= cfg.min_rr_normal and target_pips >= cfg.min_normal_reaction_target_pips
+    return False
+
+
+def _triggered_strategy_mode(sweep: SweepEvent | None) -> str:
+    if sweep is not None and sweep.volume_crack_confluence and sweep.number_theory_confluence:
+        return "LIQ_VP_NT_FVG_A_PLUS"
+    return "LIQ_VP_NT_FVG_SCALP"
+
+
+def ema_trade_filter(
+    ema_contexts: dict[str, dict[str, Any]],
+    direction: DirectionWord | None,
+    sweep_ok: bool,
+    m5_structure: bool,
+    fvg_after_sweep: bool,
+) -> dict[str, Any]:
+    if direction is None:
+        return {"passes": False, "present": [], "missing": []}
+    desired = "bullish" if direction == "BUY" else "bearish"
+    opposite = "bearish" if desired == "bullish" else "bullish"
+    present: list[str] = []
+    missing: list[str] = []
+    dominant = [ema_contexts.get(tf, {}).get("ema_alignment") for tf in ("M15", "H1", "H4")]
+    if desired in dominant:
+        present.append("ema_bullish_alignment" if desired == "bullish" else "ema_bearish_alignment")
+        return {"passes": True, "present": present, "missing": missing}
+    if dominant.count(opposite) >= 2:
+        missing.append("countertrend_vs_ema_requires_extra_confirmation")
+        if sweep_ok and m5_structure and fvg_after_sweep:
+            present.append("countertrend_extra_confirmation_present")
+            return {"passes": True, "present": present, "missing": missing}
+        return {"passes": False, "present": present, "missing": missing}
+    present.append("ema_mixed_range")
+    return {"passes": True, "present": present, "missing": missing}
+
+
+def rsi_trade_filter(rsi_contexts: dict[str, dict[str, Any]], direction: DirectionWord | None) -> dict[str, list[str]]:
+    if direction is None:
+        return {"present": [], "missing": []}
+    present: list[str] = []
+    missing: list[str] = []
+    for timeframe in ("M15", "M5"):
+        ctx = rsi_contexts.get(timeframe, {})
+        warning = ctx.get("rsi_warning")
+        if warning in {"rsi_bullish_momentum", "rsi_bearish_momentum", "rsi_overbought_exhaustion_possible", "rsi_oversold_exhaustion_possible"}:
+            if direction == "BUY" and warning == "rsi_bearish_momentum":
+                missing.append("rsi_bearish_momentum_against_long")
+            elif direction == "SELL" and warning == "rsi_bullish_momentum":
+                missing.append("rsi_bullish_momentum_against_short")
+            else:
+                present.append(warning)
+    return {"present": present, "missing": missing}
+
+
+def build_htf_context(
+    frames: dict[str, pd.DataFrame],
+    price: float,
+    *,
+    ema_contexts: dict[str, dict[str, Any]] | None = None,
+    rsi_contexts: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     h1 = _closed_frame(frames.get("H1"))
     h4 = _closed_frame(frames.get("H4"))
     return {
@@ -623,11 +973,19 @@ def build_htf_context(frames: dict[str, pd.DataFrame], price: float) -> dict[str
         "h4_bias": infer_bias(h4),
         "premium_discount": infer_premium_discount(h1 if not _frame_empty(h1) else h4, price),
         "quarterly_block": "not_configured",
+        "ema": {tf: (ema_contexts or {}).get(tf) for tf in ("H1", "H4", "D1") if (ema_contexts or {}).get(tf)},
+        "rsi": {tf: (rsi_contexts or {}).get(tf) for tf in ("H1", "H4", "D1") if (rsi_contexts or {}).get(tf)},
         "role": "H4/H1 context only; M15/M5/M1 required for scalping signal",
     }
 
 
-def build_intraday_context(frames: dict[str, pd.DataFrame], price: float) -> dict[str, Any]:
+def build_intraday_context(
+    frames: dict[str, pd.DataFrame],
+    price: float,
+    *,
+    ema_contexts: dict[str, dict[str, Any]] | None = None,
+    rsi_contexts: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     m15 = _closed_frame(frames.get("M15"))
     m5 = _closed_frame(frames.get("M5"))
     m1 = _closed_frame(frames.get("M1"))
@@ -640,6 +998,8 @@ def build_intraday_context(frames: dict[str, pd.DataFrame], price: float) -> dic
         "m5_sell_displacement": detect_displacement(m5, "SELL"),
         "m1_buy_trigger": detect_micro_trigger(m1, "BUY"),
         "m1_sell_trigger": detect_micro_trigger(m1, "SELL"),
+        "ema": {tf: (ema_contexts or {}).get(tf) for tf in ("M1", "M5", "M15") if (ema_contexts or {}).get(tf)},
+        "rsi": {tf: (rsi_contexts or {}).get(tf) for tf in ("M1", "M5", "M15") if (rsi_contexts or {}).get(tf)},
         "current_price": price,
     }
 
@@ -652,10 +1012,12 @@ def build_liquidity_context(
     sweeps: list[SweepEvent] | None = None,
     vwap: Any | None = None,
     volume_profile: Any | None = None,
+    volume_profile_source: str = "intraday_fallback",
 ) -> dict[str, Any]:
     m15 = _closed_frame(frames.get("M15"))
     liquidity_pools = pools or []
     sweep_events = sweeps or []
+    profile_context = _anchored_volume_profile_context(frames, volume_profile, volume_profile_source)
     if _frame_empty(m15):
         return {
             "external": "unknown",
@@ -663,6 +1025,8 @@ def build_liquidity_context(
             "price": price,
             "pools": [pool.__dict__ | {"distance_band": pool.distance_band} for pool in liquidity_pools[:20]],
             "sweeps": [event.__dict__ for event in sweep_events[:10]],
+            "volume_profile_source": volume_profile_source,
+            "volume_profiles": profile_context,
         }
     high = float(m15["h"].tail(50).max())
     low = float(m15["l"].tail(50).min())
@@ -676,7 +1040,119 @@ def build_liquidity_context(
         "sweeps": [event.__dict__ for event in sweep_events[:10]],
         "vwap": vwap.__dict__ if vwap is not None else None,
         "volume_profile": volume_profile.__dict__ if volume_profile is not None else None,
+        "volume_profile_source": volume_profile_source,
+        "volume_profiles": profile_context,
     }
+
+
+def _anchored_volume_profile_context(frames: dict[str, pd.DataFrame], primary_profile: Any | None, primary_source: str) -> dict[str, Any]:
+    intraday = frames.get("M5") if not _frame_empty(frames.get("M5")) else frames.get("M15", pd.DataFrame())
+    out: dict[str, Any] = {
+        "daily": primary_profile.__dict__ if primary_profile is not None else None,
+        "daily_source": primary_source,
+    }
+    d1 = _closed_frame(frames.get("D1"))
+    if not _frame_empty(d1) and len(d1) >= 2:
+        previous = d1.iloc[-2]
+        out["previous_day"] = _profile_for_range(float(previous["l"]), float(previous["h"]), intraday)
+    for timeframe in ("H1", "H4"):
+        frame = _closed_frame(frames.get(timeframe))
+        if not _frame_empty(frame):
+            lookback = frame.tail(min(len(frame), 80))
+            out[f"{timeframe.lower()}_swing"] = _profile_for_range(float(lookback["l"].min()), float(lookback["h"].max()), intraday)
+    m15 = _closed_frame(frames.get("M15"))
+    if not _frame_empty(m15):
+        recent = m15.tail(min(len(m15), 120))
+        out["external_internal_liquidity_range"] = _profile_for_range(float(recent["l"].min()), float(recent["h"].max()), intraday)
+    return out
+
+
+def _profile_for_range(low: float, high: float, intraday: pd.DataFrame) -> dict[str, Any] | None:
+    if _frame_empty(intraday) or high <= low:
+        return None
+    profile = build_daily_anchored_profile(low, high, intraday)
+    return profile.__dict__
+
+
+def build_session_candle_context(
+    *,
+    symbol: str,
+    frames: dict[str, pd.DataFrame],
+    session_name: str,
+    time_context: Any,
+    ema_contexts: dict[str, dict[str, Any]],
+    vwap_data: dict | None,
+    liquidity_pools: list[dict],
+) -> dict[str, Any]:
+    m5 = _closed_frame(frames.get("M5"))
+    if _frame_empty(m5):
+        return {"classification": "NO_CLEAR_SESSION_BEHAVIOUR", "reason_codes": ["m5_unavailable"]}
+    references = build_reference_ranges(frames)
+    event = classify_session_candle(
+        symbol=symbol,
+        timeframe="M5",
+        candle=m5.iloc[-1],
+        lower_tf=frames.get("M1"),
+        session_name=session_name,
+        time_context=time_context,
+        reference_ranges=references,
+        ema_context=ema_contexts.get("M5"),
+        vwap_context=vwap_data,
+        liquidity_pools=liquidity_pools,
+    )
+    return event.to_dict()
+
+
+def build_reference_ranges(frames: dict[str, pd.DataFrame]) -> dict[str, float | None]:
+    m15 = normalize_frame(frames.get("M15", pd.DataFrame()))
+    d1 = normalize_frame(frames.get("D1", pd.DataFrame()))
+    refs: dict[str, float | None] = {}
+    if not _frame_empty(m15) and "time" in m15.columns:
+        times = pd.to_datetime(m15["time"], utc=True)
+        asia = m15[(times.dt.hour >= 0) & (times.dt.hour < 7)]
+        london = m15[(times.dt.hour >= 7) & (times.dt.hour < 13)]
+        if len(asia):
+            refs["asia_high"] = float(asia["h"].max())
+            refs["asia_low"] = float(asia["l"].min())
+        if len(london):
+            refs["london_high"] = float(london["h"].max())
+            refs["london_low"] = float(london["l"].min())
+    if not _frame_empty(d1) and len(d1) >= 2:
+        refs["previous_day_high"] = float(d1["h"].iloc[-2])
+        refs["previous_day_low"] = float(d1["l"].iloc[-2])
+    return refs
+
+
+def time_behaviour_filter(
+    time_context: dict[str, Any],
+    session_event: dict[str, Any],
+    displacement: bool,
+    structure: bool,
+) -> dict[str, Any]:
+    present: list[str] = []
+    missing: list[str] = []
+    penalty = 0
+    classification = session_event.get("classification")
+    time_window = time_context.get("time_window")
+    reasons = set(time_context.get("reason_codes", []))
+    if classification in {"OPEN_MANIPULATION_BUY_SIDE_SWEEP", "OPEN_MANIPULATION_SELL_SIDE_SWEEP", "NY_MANIPULATION_REVERSAL_SHORT", "NY_MANIPULATION_REVERSAL_LONG"}:
+        present.append("london_open_manipulation_candidate" if "london_open_window" in reasons else "ny_open_manipulation_candidate")
+        missing.append("session_open_no_entry_yet")
+        return {"passes": False, "present": present, "missing": missing, "score_penalty": 20}
+    if classification in {"OPEN_DRIVE_CONTINUATION_LONG", "OPEN_DRIVE_CONTINUATION_SHORT", "ACCEPTED_BREAKOUT_LONG", "ACCEPTED_BREAKOUT_SHORT"}:
+        present.append("open_drive_continuation_detected")
+        return {"passes": True, "present": present, "missing": missing, "score_penalty": 0}
+    if classification == "LIQUIDITY_SEARCH_NO_TRADE":
+        missing.append("liquidity_search_no_trade")
+        return {"passes": displacement and structure, "present": present, "missing": missing, "score_penalty": 25}
+    if time_window == "midday":
+        missing.append("midday_chop_risk")
+        penalty = 10
+    if time_context.get("no_trade_risk") == "high" and not (displacement and structure):
+        missing.append("time_window_requires_extra_confirmation")
+        return {"passes": False, "present": present, "missing": missing, "score_penalty": max(penalty, 15)}
+    present.append("time_behaviour_supports_trade")
+    return {"passes": True, "present": present, "missing": missing, "score_penalty": penalty}
 
 
 def infer_bias(df: pd.DataFrame | None) -> str:
@@ -950,7 +1426,7 @@ def _zone_events(zones: Iterable[SetupZone], price: float) -> list[dict[str, Any
 
 def _merge_sweep_events(live: list[SweepEvent], closed: list[SweepEvent]) -> list[SweepEvent]:
     by_pool: dict[str, SweepEvent] = {}
-    rank = {"TRIGGERED": 6, "CONFIRMED_SWEEP": 5, "SWEEPING_INTRABAR": 4, "ARMED": 3, "accepted_breakout": 2, "WATCH": 1}
+    rank = {"TRIGGERED": 7, "CONFIRMED_SWEEP": 6, "SWEEPING_INTRABAR": 5, "ARMED": 4, "APPROACHING": 3, "accepted_breakout": 2, "WATCH": 1}
     for event in [*live, *closed]:
         old = by_pool.get(event.pool_id)
         if old is None or rank.get(event.status, 0) > rank.get(old.status, 0) or event.score > old.score:
@@ -973,6 +1449,7 @@ def _decision_from_sweep(
 ) -> ScalpingDecision:
     direction: DirectionWord = "SELL" if sweep.direction == "bearish_reversal_candidate" else "BUY"
     trade_direction: TradeDirection = "SHORT" if direction == "SELL" else "LONG"
+    direction_reason = "possible_short_after_buy_side_sweep" if trade_direction == "SHORT" else "possible_long_after_sell_side_sweep"
     zone_low = sweep.level - pips_to_price(symbol, 25)
     zone_high = sweep.level + pips_to_price(symbol, 25)
     zone = SetupZone(
@@ -992,12 +1469,26 @@ def _decision_from_sweep(
             "sweep_status": sweep.status,
             "penetration_pips": sweep.penetration_pips,
             "liquidity_level": sweep.level,
+            "possible_direction": f"{trade_direction} candidate",
+            "direction_reason": direction_reason,
         },
     )
     rr_payload = build_risk_targets(zone, trade_direction, config, symbol=symbol, vwap_data=liquidity.get("vwap"), liquidity_pools=liquidity.get("pools", []), volume_profile=liquidity.get("volume_profile"))
+    confluence = evaluate_primary_confluence(sweep, zone, htf_allows_direction(htf_context, direction), sweep.displacement_after_sweep, sweep.choch_after_sweep)
+    zone.metadata["primary_confluence"] = {
+        "passed": confluence.passed,
+        "present": confluence.reasons_present,
+        "missing": confluence.reasons_missing,
+    }
+    if forced_state == "TRIGGERED" and not confluence.passed:
+        forced_state = "ARMED"
+        zone.state = "ARMED"
+        rejection_reasons.extend([*confluence.reasons_missing, "primary_confluence_incomplete"])
     setup_type = "REVERSAL_SHORT" if trade_direction == "SHORT" else "REVERSAL_LONG"
     if sweep.accepted_breakout:
         setup_type = "TREND_FOLLOWING_SHORT" if trade_direction == "SHORT" else "TREND_FOLLOWING_LONG"
+    if forced_state == "TRIGGERED":
+        setup_type = _triggered_strategy_mode(sweep)
     decision = ScalpingDecision(
         symbol=symbol,
         setup_type=setup_type if forced_state == "TRIGGERED" else "LIQUIDITY_REACTION",
@@ -1008,16 +1499,22 @@ def _decision_from_sweep(
         htf_context=htf_context,
         intraday_context={
             **intraday_context,
-            "confirmations_present": list(sweep.reason_codes) if forced_state == "TRIGGERED" else [],
+            "confirmations_present": _dedupe_reason_codes([*sweep.reason_codes, "primary_confluence_chain"]) if forced_state == "TRIGGERED" and confluence.passed else [],
             "confirmations_missing": rejection_reasons if forced_state != "TRIGGERED" else [],
+            "possible_direction": f"{trade_direction} candidate",
         },
         liquidity=liquidity,
         primary_zone=zone,
         entry_area=rr_payload["entry_area"],
+        entry=rr_payload["entry"],
         stop=rr_payload["stop"],
-        targets=rr_payload["targets"],
+        targets=rr_payload["targets"] if forced_state in {"TRIGGERED", "REENTRY_VALID"} else [],
+        theoretical_targets=rr_payload["theoretical_targets"],
+        target_candidates=rr_payload["target_candidates"],
+        target_clusters=rr_payload["target_clusters"],
+        target_validation=rr_payload["target_validation"],
         invalidation=rr_payload["stop"],
-        reason_codes=list(sweep.reason_codes),
+        reason_codes=_dedupe_reason_codes([direction_reason, *sweep.reason_codes, *(["primary_confluence_chain"] if confluence.passed else [])]),
         rejection_reasons=rejection_reasons,
         events=[
             {
@@ -1031,21 +1528,24 @@ def _decision_from_sweep(
         ],
         timestamp_utc=now,
     )
-    if not rr_payload["target_validation"]["valid"] and forced_state == "TRIGGERED":
+    if not target_validation_passes(rr_payload["target_validation"], config) and forced_state == "TRIGGERED":
         decision.state = "ARMED"
         decision.rejection_reasons.extend(rr_payload["target_validation"]["reason_codes"])
     _apply_execution_gates(decision, price)
+    _sync_non_operational_targets(decision)
     return decision
 
 
 __all__ = [
     "InteractionResult",
+    "PrimaryConfluenceResult",
     "ScalpingConfig",
     "SignalDeduplicator",
     "apply_interactions",
     "build_zones",
     "choose_primary_zone",
     "detect_zone_interactions_since_last_scan",
+    "evaluate_primary_confluence",
     "evaluate_scalping_setup",
     "apply_execution_gates",
     "score_setup",

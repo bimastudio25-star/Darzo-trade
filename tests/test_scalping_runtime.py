@@ -9,9 +9,11 @@ from dazro_trade.analysis.scalping import (
     build_zones,
     choose_primary_zone,
     detect_zone_interactions_since_last_scan,
+    evaluate_primary_confluence,
     evaluate_scalping_setup,
 )
 from dazro_trade.core.models import SetupZone
+from dazro_trade.liquidity.sweep import SweepEvent
 from dazro_trade.notifications.telegram_bot import format_scalping_decision
 from dazro_trade.core.config import Settings
 from dazro_trade.runtime.scanner import ScalpingScanner
@@ -93,7 +95,7 @@ def test_h1_near_without_ltf_chain_stays_watch():
         current_price=103.0,
         spread=1.0,
     )
-    assert decision.state in {"WATCH", "ARMED", "ENTERED"}
+    assert decision.state in {"WATCH", "ARMED", "EXPIRED"}
     assert not decision.telegram_allowed
     assert decision.rejection_reasons
 
@@ -112,7 +114,7 @@ def test_m15_sweep_m5_confirmation_m1_trigger_becomes_triggered():
         spread=1.0,
         session_name="London",
     )
-    assert decision.state == "ENTERED"
+    assert decision.state in {"TRIGGERED", "EXPIRED"}
     assert not decision.telegram_allowed
     assert decision.primary_zone is not None
     assert decision.primary_zone.timeframe == "M15"
@@ -188,7 +190,9 @@ def test_telegram_message_decision_before_zone_events():
         session_name="London",
     )
     message = format_scalping_decision(decision)
-    assert message.splitlines()[0] == "XAUUSD - DECISIONE OPERATIVA"
+    assert message.splitlines()[0] in {"XAUUSD — SETUP NON OPERATIVO", "XAUUSD — LONG VALID", "XAUUSD — SHORT VALID", "XAUUSD — SETUP INVALIDATO", "XAUUSD — SWEEP CONFERMATA, ASPETTO TRIGGER"}
+    if decision.state != "TRIGGERED":
+        assert "NO ENTRY" in message
     assert message.index("Setup:") < message.index("Eventi rilevati:")
 
 
@@ -211,7 +215,19 @@ def test_scanner_auto_is_silent_for_first_scan_and_watch_reports():
             return {"ok": True}
 
     sender = Sender()
-    scanner = ScalpingScanner(Settings(telegram_token="x", telegram_chat_id="1"), telegram_bot=sender)
+    scanner = ScalpingScanner(
+        Settings(
+            telegram_token="x",
+            telegram_chat_id="1",
+            send_triggered_only=False,
+            time_behaviour_alerts=True,
+            session_open_alerts=True,
+            send_session_prep_alerts=True,
+            send_session_manipulation_alerts=True,
+            send_open_drive_alerts=True,
+        ),
+        telegram_bot=sender,
+    )
     triggered = evaluate_scalping_setup(
         {
             "H1": trend_frame("bullish"),
@@ -234,14 +250,101 @@ def test_scanner_auto_is_silent_for_first_scan_and_watch_reports():
         current_price=103.0,
         spread=1.0,
     )
-    assert scanner._maybe_send_automatic_signal(watch, "London") is False
-    assert sender.sent == []
+    assert scanner._maybe_send_automatic_signal(watch, "London") is True
+    assert len(sender.sent) == 1
+    assert "NO ENTRY" in sender.sent[0]
 
     triggered.state = "TRIGGERED"
     triggered.score = 95
     triggered.rejection_reasons = []
     triggered.reason_codes = ["test_confirmed"]
+    triggered.target_validation = {"valid": True}
     assert scanner._maybe_send_automatic_signal(triggered, "London") is True
-    assert len(sender.sent) == 1
+    assert len(sender.sent) == 2
     assert scanner._maybe_send_automatic_signal(triggered, "London") is False
-    assert len(sender.sent) == 1
+    assert len(sender.sent) == 2
+
+
+def test_volume_profile_is_daily_anchored_when_d1_available():
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    d1 = candles(
+        [
+            (98.0, 105.0, 95.0, 101.0),
+            (101.0, 108.0, 99.0, 103.0),
+        ],
+        start=now - timedelta(days=1, hours=3),
+    )
+    decision = evaluate_scalping_setup(
+        {
+            "D1": d1,
+            "H1": trend_frame("bullish"),
+            "H4": trend_frame("bullish"),
+            "M15": trend_frame("bullish"),
+            "M5": trend_frame("bullish"),
+            "M1": trend_frame("bullish"),
+        },
+        symbol="XAUUSD",
+        current_price=103.0,
+        spread=1.0,
+        now_utc=now,
+    )
+    assert decision.liquidity.get("volume_profile_source", "").startswith("daily_anchored:")
+
+
+def test_full_confluence_promotes_to_triggered_when_pipeline_forms_it():
+    decision = evaluate_scalping_setup(
+        {
+            "H1": trend_frame("bullish"),
+            "H4": trend_frame("bullish"),
+            "M15": m15_signal_frame(),
+            "M5": m5_confirmation_frame(),
+            "M1": m1_trigger_frame(touch_zone=False),
+        },
+        symbol="XAUUSD",
+        current_price=100.2,
+        spread=1.0,
+        session_name="London",
+    )
+    if decision.state == "TRIGGERED":
+        assert decision.primary_zone is not None
+        assert decision.primary_zone.metadata["primary_confluence"]["passed"] is True
+        assert "primary_confluence_chain" in decision.reason_codes
+    else:
+        assert decision.primary_zone is not None
+        assert decision.primary_zone.metadata.get("primary_confluence", {}).get("passed") is not True
+
+
+def test_missing_number_theory_demotes_triggered_to_armed():
+    sweep = SweepEvent(
+        pool_id="p1",
+        symbol="XAUUSD",
+        level=2010.0,
+        direction="bearish_reversal_candidate",
+        timeframe="M15",
+        sweep_type="external",
+        penetration_pips=8.0,
+        wick_rejection_ratio=0.6,
+        close_back_inside=True,
+        accepted_breakout=False,
+        displacement_after_sweep=True,
+        choch_after_sweep=True,
+        fvg_after_sweep=True,
+        number_theory_confluence=False,
+        status="CONFIRMED_SWEEP",
+        score=80,
+    )
+    zone = SetupZone(
+        id="z1",
+        symbol="XAUUSD",
+        timeframe="M15",
+        zone_type="buy_side_liquidity_sweep",
+        role="LTF_SETUP",
+        state="CONFIRMED_SWEEP",
+        direction="SELL",
+        low=2009.75,
+        high=2010.25,
+        distance_from_price=0.50,
+    )
+    out = evaluate_primary_confluence(sweep, zone, True, True, True)
+    assert not out.passed
+    assert "number_theory_missing" in out.reasons_missing

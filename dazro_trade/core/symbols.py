@@ -22,7 +22,7 @@ class SymbolSpec:
 
 
 DEFAULT_SYMBOL_SPECS = {
-    "XAUUSD": SymbolSpec("XAUUSD", pip_size=0.01, point_size=0.01, digits=2, min_tick=0.01),
+    "XAUUSD": SymbolSpec("XAUUSD", pip_size=0.10, point_size=0.01, digits=2, min_tick=0.01),
 }
 
 

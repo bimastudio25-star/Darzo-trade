@@ -9,7 +9,7 @@ from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision
 from dazro_trade.core.symbols import pips_to_price, price_to_pips
 from dazro_trade.liquidity.map import LiquidityPool, build_liquidity_map
-from dazro_trade.liquidity.sweep import detect_sweep_event
+from dazro_trade.liquidity.sweep import detect_ifvg_after_sweep, detect_sweep_event
 from dazro_trade.runtime.scanner import ScalpingScanner
 
 
@@ -40,8 +40,8 @@ def pool(level=4722.33):
 
 
 def test_xauusd_pip_conversion():
-    assert pips_to_price("XAUUSD", 80) == 0.80
-    assert price_to_pips("XAUUSD", 0.80) == 80
+    assert pips_to_price("XAUUSD", 80) == 8.00
+    assert price_to_pips("XAUUSD", 0.80) == 8
 
 
 def test_4722_external_high_stays_in_liquidity_map_reaction_band():
@@ -49,8 +49,8 @@ def test_4722_external_high_stays_in_liquidity_map_reaction_band():
     pools = build_liquidity_map({"M15": frame}, symbol="XAUUSD", current_price=4718.96)
     target = [item for item in pools if item.level == 4722.33 and item.side == "buy_side"]
     assert target
-    assert target[0].distance_pips == 337.0
-    assert target[0].distance_band == "remote_300_plus_pips"
+    assert target[0].distance_pips == 33.7
+    assert target[0].distance_band == "remote_30_plus_pips"
 
 
 def test_intrabar_sweep_is_not_triggered_until_close():
@@ -58,10 +58,22 @@ def test_intrabar_sweep_is_not_triggered_until_close():
         pool(),
         df([(4721.8, 4722.6, 4721.5, 4722.4)]),
         current_candle_closed=False,
-        min_penetration_pips=5,
+        min_penetration_pips=0.5,
     )
     assert event is not None
     assert event.status == "SWEEPING_INTRABAR"
+
+
+def test_remote_liquidity_is_watch_not_armed():
+    event = detect_sweep_event(
+        pool(),
+        df([(4718.8, 4719.2, 4718.3, 4718.9)]),
+        current_candle_closed=False,
+        min_penetration_pips=0.5,
+    )
+    assert event is not None
+    assert event.status == "WATCH"
+    assert "remote_plan_only" in event.reason_codes
 
 
 def test_closed_sweep_back_inside_is_confirmed_sweep():
@@ -69,7 +81,7 @@ def test_closed_sweep_back_inside_is_confirmed_sweep():
         pool(),
         df([(4721.8, 4722.6, 4721.5, 4721.9)]),
         current_candle_closed=True,
-        min_penetration_pips=5,
+        min_penetration_pips=0.5,
     )
     assert event is not None
     assert event.status == "CONFIRMED_SWEEP"
@@ -101,7 +113,7 @@ def test_sweep_with_m5_displacement_m1_choch_and_bearish_fvg_triggers_short():
         m5_df=m5,
         m1_df=m1,
         current_candle_closed=True,
-        min_penetration_pips=5,
+        min_penetration_pips=0.5,
     )
     assert event is not None
     assert event.status == "TRIGGERED"
@@ -113,11 +125,25 @@ def test_close_above_and_retest_is_accepted_breakout_not_reversal():
         pool(),
         df([(4722.0, 4722.7, 4722.2, 4722.5), (4722.5, 4722.8, 4722.25, 4722.6)]),
         current_candle_closed=True,
-        min_penetration_pips=5,
+        min_penetration_pips=0.5,
     )
     assert event is not None
     assert event.status == "accepted_breakout"
     assert "accepted_breakout_not_reversal" in event.reason_codes
+
+
+def test_bearish_ifvg_after_buy_side_sweep_is_detected():
+    frame = df(
+        [
+            (99.5, 100.0, 99.0, 99.8),
+            (99.8, 100.1, 99.4, 99.9),
+            (101.2, 102.0, 101.1, 101.8),
+            (101.4, 101.8, 100.4, 100.6),
+            (100.7, 101.0, 99.5, 99.8),
+            (99.9, 100.2, 99.2, 99.4),
+        ]
+    )
+    assert detect_ifvg_after_sweep(frame, "SELL")
 
 
 def test_fvg_without_liquidity_taken_is_penalized_not_strong_signal():
@@ -142,9 +168,17 @@ def test_reaction_alert_is_deduplicated_same_level_same_session():
             return {"ok": True}
 
     sender = Sender()
-    scanner = ScalpingScanner(Settings(telegram_token="x", telegram_chat_id="1"), telegram_bot=sender)
+    scanner = ScalpingScanner(
+        Settings(
+            telegram_token="x",
+            telegram_chat_id="1",
+            send_triggered_only=False,
+            send_sweep_intrabar_alerts=True,
+        ),
+        telegram_bot=sender,
+    )
     near_pool = pool(level=4720.40)
-    near_pool.distance_pips = 144.0
+    near_pool.distance_pips = 14.4
     near_pool.distance_points = 1.44
     near_pool.metadata["distance_band"] = "reaction_80_150_pips"
     decision = ScalpingDecision(

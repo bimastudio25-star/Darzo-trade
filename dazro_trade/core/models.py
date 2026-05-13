@@ -111,8 +111,13 @@ class ScalpingDecision:
     liquidity: dict[str, Any]
     primary_zone: SetupZone | None = None
     entry_area: tuple[float, float] | None = None
+    entry: float | None = None
     stop: float | None = None
     targets: list[dict[str, Any]] = field(default_factory=list)
+    theoretical_targets: list[dict[str, Any]] = field(default_factory=list)
+    target_candidates: list[dict[str, Any]] = field(default_factory=list)
+    target_clusters: list[dict[str, Any]] = field(default_factory=list)
+    target_validation: dict[str, Any] = field(default_factory=dict)
     invalidation: float | None = None
     reason_codes: list[str] = field(default_factory=list)
     rejection_reasons: list[str] = field(default_factory=list)
@@ -122,7 +127,8 @@ class ScalpingDecision:
 
     @property
     def is_operational_signal(self) -> bool:
-        return self.state == "TRIGGERED" and self.score >= 85 and self.direction in {"LONG", "SHORT"} and self.primary_zone is not None
+        validation_ok = not self.target_validation or bool(self.target_validation.get("valid", True))
+        return self.state in {"TRIGGERED", "REENTRY_VALID"} and self.score >= 85 and self.direction in {"LONG", "SHORT"} and self.primary_zone is not None and validation_ok
 
     @property
     def telegram_allowed(self) -> bool:
@@ -141,8 +147,13 @@ class ScalpingDecision:
             "liquidity": self.liquidity,
             "primary_zone": self.primary_zone.to_dict() if self.primary_zone else None,
             "entry_area": self.entry_area,
+            "entry": self.entry,
             "stop": self.stop,
             "targets": list(self.targets),
+            "theoretical_targets": list(self.theoretical_targets),
+            "target_candidates": list(self.target_candidates),
+            "target_clusters": list(self.target_clusters),
+            "target_validation": dict(self.target_validation),
             "invalidation": self.invalidation,
             "reason_codes": list(self.reason_codes),
             "rejection_reasons": list(self.rejection_reasons),

@@ -74,8 +74,10 @@ Liquidity reaction alerts are not trade signals. A reaction alert can say that X
 
 XAUUSD pip conversion uses the project symbol spec:
 
-- `pip_size = 0.01`
-- `80 pips = 0.80` price distance
+- `pip_size = 0.10`
+- `1 pip = $0.10`
+- `100 pips = $10`
+- `1000 pips = $100`
 
 Distance filters use pips through `dazro_trade/core/symbols.py`, so broker quote precision can be changed in one place.
 

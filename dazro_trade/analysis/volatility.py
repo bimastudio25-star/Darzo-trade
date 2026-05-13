@@ -11,7 +11,7 @@ def volatility_snapshot(
     m1: pd.DataFrame | None,
     m5: pd.DataFrame | None,
     spread_pips: float = 0.0,
-    max_spread_pips: float = 30.0,
+    max_spread_pips: float = 3.0,
 ) -> dict:
     m1_frame = _normalize(m1)
     m5_frame = _normalize(m5)

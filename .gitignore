@@ -11,3 +11,4 @@ data/*.db
 logs/
 signals.log
 _codex_backup_current/
+.claude/
