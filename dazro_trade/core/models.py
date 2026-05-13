@@ -9,11 +9,16 @@ from dazro_trade.core.context import SignalContext
 Direction = Literal["BUY", "SELL"]
 SetupState = Literal[
     "WATCH",
+    "REACTION_PREP",
     "APPROACHING",
     "ARMED",
     "SWEEPING_INTRABAR",
     "CONFIRMED_SWEEP",
     "TRIGGERED",
+    "ENTRY_TOUCHED_NO_CHASE",
+    "MISSED",
+    "PLAYED_OUT",
+    "EXECUTED",
     "ENTERED",
     "STOP_HIT",
     "REENTRY_WATCH",
@@ -22,6 +27,7 @@ SetupState = Literal[
     "NO_REENTRY",
     "INVALIDATED",
     "EXPIRED",
+    "VWAP_RESEARCH",
 ]
 ZoneRole = Literal["HTF_CONTEXT", "LTF_SETUP", "ENTRY_TRIGGER", "TARGET"]
 

@@ -65,20 +65,22 @@ def build_liquidity_map(
 
 
 def classify_distance_pips(distance_pips: float) -> str:
-    if distance_pips < 5:
-        return "under_5_pips"
-    if distance_pips < 8:
-        return "reaction_5_8_pips"
-    if distance_pips < 15:
-        return "reaction_8_15_pips"
-    if distance_pips < 25:
-        return "approaching_15_25_pips"
-    if distance_pips < 30:
-        return "far_prep_25_30_pips"
-    return "remote_30_plus_pips"
+    if distance_pips < 50:
+        return "under_50_pips"
+    if distance_pips < 100:
+        return "scalp_50_99_pips"
+    if distance_pips < 150:
+        return "reaction_100_150_pips"
+    if distance_pips < 250:
+        return "approaching_150_250_pips"
+    if distance_pips < 300:
+        return "far_prep_250_300_pips"
+    if distance_pips <= 500:
+        return "far_prep_extended_300_500_pips"
+    return "plan_only_500_plus_pips"
 
 
-def important_reaction_pools(pools: list[LiquidityPool], min_pips: float = 8.0, max_pips: float = 50.0) -> list[LiquidityPool]:
+def important_reaction_pools(pools: list[LiquidityPool], min_pips: float = 50.0, max_pips: float = 500.0) -> list[LiquidityPool]:
     return [pool for pool in pools if min_pips <= pool.distance_pips <= max_pips]
 
 

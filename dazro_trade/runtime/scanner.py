@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from dazro_trade.adelin import format_adelin_signal, format_rejection_summary, format_vp_summary, run_adelin_scan
 from dazro_trade.analysis.reentry import evaluate_reentry
 from dazro_trade.analysis.scalping import (
     ScalpingConfig,
@@ -109,6 +110,7 @@ class ScalpingScanner:
         self.last_symbol: str = settings.mt5_symbol
         self.last_market_data: dict[str, pd.DataFrame] = {}
         self.latest_analysis: ScalpingDecision | None = None
+        self.latest_adelin_result: dict[str, Any] | None = None
         self.latest_zones: list[SetupZone] = []
         self.trades: list[VirtualTrade] = []
         self.stats = ScannerStats()
@@ -120,6 +122,8 @@ class ScalpingScanner:
         self.session_behaviour_alert_memory: dict[str, datetime] = {}
         self.session_behaviour_session_counts: dict[str, int] = {}
         self.stat_scalp_session_counts: dict[str, int] = {}
+        self.adelin_sent_keys: set[str] = set()
+        self.adelin_session_counts: dict[str, int] = {}
 
     async def initialize(self) -> None:
         if self.mt5_handler is not None:
@@ -197,6 +201,20 @@ class ScalpingScanner:
             }
         )
         self.latest_analysis = decision
+        adelin_result = None
+        if self.settings.adelin_enabled:
+            adelin_result = run_adelin_scan(
+                mt5=self.mt5_handler,
+                market_data=market_data,
+                news_events=[],
+                pip=get_symbol_spec(self.last_symbol).pip_size,
+                settings=self.settings,
+                current_price=self.last_price,
+                spread_pips=float(self.last_spread or 0.0),
+                now_utc=now,
+                session_name=session,
+            )
+            self.latest_adelin_result = adelin_result
         self.stats.scans += 1
         self.stats.last_internal_event = decision.state
         self.stats.last_filter_reason = decision.rejection_reasons[0] if decision.rejection_reasons else "-"
@@ -206,7 +224,10 @@ class ScalpingScanner:
         sent = False
         was_first_silent_scan = self.first_silent_scan_pending
         if not manual:
-            sent = self._maybe_send_automatic_signal(decision, session)
+            if not was_first_silent_scan and self._maybe_send_adelin_signal(adelin_result, session, now):
+                sent = True
+            else:
+                sent = self._maybe_send_automatic_signal(decision, session)
         if self.settings.statistical_scalp_enabled and not manual and not was_first_silent_scan:
             self._maybe_send_statistical_scalp(market_data, session, now)
         if decision.state in {"WATCH", "ARMED", "ENTERED"} and decision.rejection_reasons:
@@ -216,6 +237,7 @@ class ScalpingScanner:
             "signal_sent": sent,
             "manual": manual,
             "decision": decision.to_dict(),
+            "adelin": adelin_result,
             "summary": self.format_scan_report(decision),
         }
 
@@ -327,6 +349,69 @@ class ScalpingScanner:
             return True
         log.warning("signal_send_failed key=%s result=%s", key, result)
         return False
+
+    def _maybe_send_adelin_signal(self, result: dict[str, Any] | None, session: str, now: datetime) -> bool:
+        if not result or self.paused or not self.auto_signals_enabled:
+            return False
+        signal = result.get("signal")
+        if not signal:
+            if self.settings.adelin_send_rejection_debug:
+                self.stats.last_filter_reason = ", ".join(result.get("rejected", [])[:3]) or "adelin_no_trade"
+            return False
+        if signal.get("setup_mode") == "VWAP_STD_RESEARCH_1R" and not self.settings.adelin_send_vwap_research:
+            return False
+        count = self.adelin_session_counts.get(session, 0)
+        if count >= self.settings.max_daily_signals:
+            return False
+        key = self._adelin_signal_key(signal, session, now)
+        if key in self.adelin_sent_keys:
+            self.stats.duplicate_skips += 1
+            return False
+        text = format_adelin_signal(signal, result)
+        send_result = self.telegram_bot.send_text(text)
+        if send_result.get("ok"):
+            self.adelin_sent_keys.add(key)
+            self.adelin_session_counts[session] = count + 1
+            self.stats.signals_sent += 1
+            if signal.get("setup_mode") != "VWAP_STD_RESEARCH_1R":
+                self._create_virtual_trade_from_adelin(signal, key, now)
+            log.info("adelin_signal_sent key=%s", key)
+            return True
+        return False
+
+    @staticmethod
+    def _adelin_signal_key(signal: dict[str, Any], session: str, now: datetime) -> str:
+        return ":".join(
+            [
+                str(signal.get("symbol", "XAUUSD")),
+                str(signal.get("setup_mode", "-")),
+                str(signal.get("direction", "-")),
+                str(round(float(signal.get("entry", 0) or 0), 1)),
+                str(round(float(signal.get("sl", 0) or 0), 1)),
+                session,
+                now.date().isoformat(),
+            ]
+        )
+
+    def _create_virtual_trade_from_adelin(self, signal: dict[str, Any], signal_key: str, now: datetime) -> None:
+        zone = signal.get("entry_zone") or (signal.get("entry"), signal.get("entry"))
+        if not isinstance(zone, (tuple, list)) or len(zone) != 2:
+            return
+        trade = VirtualTrade(
+            trade_id=f"vt-{len(self.trades) + 1}",
+            signal_key=signal_key,
+            symbol=str(signal.get("symbol", self.last_symbol)),
+            direction=str(signal.get("direction", "WAIT")),
+            zone_id=str(signal.get("setup_mode", "ADELIN")),
+            signal_time=now,
+            entry_area_low=float(zone[0]),
+            entry_area_high=float(zone[1]),
+            stop_loss=float(signal["sl"]) if signal.get("sl") is not None else None,
+            tp1=float(signal["tp1"]["price"]) if isinstance(signal.get("tp1"), dict) else None,
+            tp2=float(signal["tp2"]["price"]) if isinstance(signal.get("tp2"), dict) else None,
+            source="ADELIN",
+        )
+        self.trades.append(trade)
 
     def _maybe_send_statistical_scalp(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> bool:
         if self.first_silent_scan_pending or self.paused:
@@ -492,7 +577,7 @@ class ScalpingScanner:
         return False
 
     def _alert_milestone(self, distance_pips: float, sweep_status: str | None) -> str | None:
-        if distance_pips >= 300:
+        if distance_pips > 500:
             return None
         if sweep_status == "CONFIRMED_SWEEP":
             return "confirmed_sweep"
@@ -871,6 +956,7 @@ class ScalpingScanner:
                 f"Prossima sessione: {next_info['name']} | {next_info['start_local']:%Y-%m-%d %H:%M} {next_info['timezone']} | {next_info['start_utc']:%H:%M} UTC",
                 f"Scanner loop vivo: {'no' if self.shutdown_requested else 'si'}",
                 f"Scanner automatico: {'no' if self.paused else 'si'}",
+                f"Adelin: {'on' if self.settings.adelin_enabled else 'off'} | ultimo mode: {(self.latest_adelin_result or {}).get('setup_mode', '-')}",
                 "Report automatici analisi: disattivi",
                 f"Alert automatici: approaching={'on' if self.settings.send_approaching_alerts else 'off'} | armed={'on' if self.settings.send_armed_reaction_alerts else 'off'} | sweep={'on' if self.settings.send_sweep_intrabar_alerts else 'off'} | triggered_only={'on' if self.settings.send_triggered_only else 'off'} | cooldown={self.settings.reaction_alert_cooldown_minutes}m",
                 f"Scan ogni: {self.scan_interval_seconds} secondi",
@@ -902,7 +988,8 @@ class ScalpingScanner:
                 "",
             ]
         )
-        return header + format_scalping_decision(self.latest_analysis)
+        adelin = "\n\nADELIN\n" + (format_adelin_signal(self.latest_adelin_result["signal"], self.latest_adelin_result) if self.latest_adelin_result and self.latest_adelin_result.get("signal") else format_rejection_summary(self.latest_adelin_result or {"rejected": ["not_run"], "setup_mode": "NO_TRADE"}))
+        return header + format_scalping_decision(self.latest_analysis) + adelin
 
     def format_watch(self) -> str:
         operative = [z for z in self.latest_zones if z.role != "HTF_CONTEXT" and float(z.metadata.get("distance_pips", 99999)) <= 150]
@@ -931,18 +1018,33 @@ class ScalpingScanner:
         if self.latest_analysis:
             reaction = self.latest_analysis.liquidity.get("reaction_pools", [])[:5]
             if reaction:
-                lines.append("\nLiquidity 80+ pips in reaction map:")
+                lines.append("\nLiquidity 100-500 pips in reaction map:")
                 for pool in reaction:
                     lines.append(f"- {pool.get('timeframe')} {pool.get('pool_type')} {pool.get('level')} distanza={pool.get('distance_pips')} pips ({pool.get('distance_band')})")
+        if self.latest_adelin_result:
+            debug = self.latest_adelin_result.get("debug", {})
+            levels = debug.get("liquidity_map", [])[:6]
+            if levels:
+                lines.append("\nAdelin liquidity / VP watch:")
+                for level in levels:
+                    lines.append(f"- {level.get('timeframe')} {level.get('name')} {level.get('level')} {level.get('side')}")
+            lines.extend(["", "Adelin VP:", format_vp_summary(self.latest_adelin_result)])
         return "\n".join(lines)
 
     def format_scan_report(self, decision: ScalpingDecision | None = None) -> str:
-        return "SCAN MANUALE\n\n" + format_scalping_decision(decision or self.latest_analysis) if (decision or self.latest_analysis) else "Nessuna analisi disponibile."
+        if not (decision or self.latest_analysis):
+            return "Nessuna analisi disponibile."
+        lines = ["SCAN MANUALE", "", format_scalping_decision(decision or self.latest_analysis)]
+        if self.latest_adelin_result:
+            lines.extend(["", "ADELIN", format_adelin_signal(self.latest_adelin_result["signal"], self.latest_adelin_result) if self.latest_adelin_result.get("signal") else format_rejection_summary(self.latest_adelin_result)])
+        return "\n".join(lines)
 
     def format_plan(self) -> str:
         lines = ["PIANO OPERATIVO", "", format_session_summary()]
         if self.latest_analysis:
             lines.extend(["", format_scalping_decision(self.latest_analysis)])
+        if self.latest_adelin_result:
+            lines.extend(["", "ADELIN VP SUMMARY", format_vp_summary(self.latest_adelin_result)])
         remote = [z for z in self.latest_zones if z.role == "HTF_CONTEXT"]
         if remote:
             lines.extend(["", "Contesto HTF lontano/non operativo:"])

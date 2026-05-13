@@ -50,7 +50,7 @@ def test_4722_external_high_stays_in_liquidity_map_reaction_band():
     target = [item for item in pools if item.level == 4722.33 and item.side == "buy_side"]
     assert target
     assert target[0].distance_pips == 33.7
-    assert target[0].distance_band == "remote_30_plus_pips"
+    assert target[0].distance_band == "under_50_pips"
 
 
 def test_intrabar_sweep_is_not_triggered_until_close():

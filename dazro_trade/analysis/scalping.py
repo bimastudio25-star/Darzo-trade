@@ -204,7 +204,7 @@ def evaluate_scalping_setup(
     vwap = vwap_snapshot(frames.get("M15", pd.DataFrame()), price)
     liquidity_pools = build_liquidity_map(frames, symbol=symbol, current_price=price)
     live_sweep_events = detect_sweeps_for_pools(
-        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=50),
+        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=500),
         frames.get("M1", frames.get("M5", pd.DataFrame())),
         m5_df=frames.get("M5"),
         m1_df=frames.get("M1"),
@@ -213,7 +213,7 @@ def evaluate_scalping_setup(
         current_candle_closed=False,
     )
     closed_sweep_events = detect_sweeps_for_pools(
-        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=50),
+        important_reaction_pools(liquidity_pools, min_pips=0, max_pips=500),
         _closed_frame(frames.get("M1", frames.get("M5", pd.DataFrame()))),
         m5_df=_closed_frame(frames.get("M5")),
         m1_df=_closed_frame(frames.get("M1")),
