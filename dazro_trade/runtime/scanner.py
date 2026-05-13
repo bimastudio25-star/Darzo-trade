@@ -19,6 +19,8 @@ from dazro_trade.analysis.scalping import (
     zone_distance,
 )
 from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evaluate_statistical_scalp
+from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, evaluate_liquidity_expansion
+from dazro_trade.risk.manager import RiskManager
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
 from dazro_trade.core.symbols import get_symbol_spec, pips_to_price, price_to_pips
@@ -43,6 +45,7 @@ class ScannerStats:
     setups_rejected: int = 0
     duplicate_skips: int = 0
     stat_scalps_sent: int = 0
+    liquidity_expansion_sent: int = 0
     first_silent_scan_completed: bool = False
     last_internal_event: str = "-"
     last_filter_reason: str = "-"
@@ -70,6 +73,16 @@ class VirtualTrade:
     reentry_state: str = "-"
     reentry_reason_codes: list[str] = field(default_factory=list)
     reason_codes: list[str] = field(default_factory=list)
+    strategy: str = "v1"
+    tp3: float | None = None
+    tp4: float | None = None
+    tp1_hit: bool = False
+    tp2_hit: bool = False
+    tp3_hit: bool = False
+    tp4_hit: bool = False
+    be_activated: bool = False
+    original_stop_loss: float | None = None
+    strategy_payload: dict = field(default_factory=dict)
 
 
 class ScalpingScanner:
@@ -86,6 +99,7 @@ class ScalpingScanner:
         self.telegram_bot = telegram_bot or TelegramBot(settings)
         self.scalping_config = scalping_config or _scalping_config_from_settings(settings)
         self.deduplicator = SignalDeduplicator()
+        self.risk = RiskManager(settings)
         self.paused = False
         self.shutdown_requested = False
         self.scan_interval_seconds = 120
@@ -124,6 +138,7 @@ class ScalpingScanner:
         self.stat_scalp_session_counts: dict[str, int] = {}
         self.adelin_sent_keys: set[str] = set()
         self.adelin_session_counts: dict[str, int] = {}
+        self.liquidity_expansion_session_counts: dict[str, int] = {}
 
     async def initialize(self) -> None:
         if self.mt5_handler is not None:
@@ -230,6 +245,8 @@ class ScalpingScanner:
                 sent = self._maybe_send_automatic_signal(decision, session)
         if self.settings.statistical_scalp_enabled and not manual and not was_first_silent_scan:
             self._maybe_send_statistical_scalp(market_data, session, now)
+        if self.settings.liquidity_expansion_enabled and not manual and not was_first_silent_scan:
+            self._maybe_send_liquidity_expansion(market_data, session, now)
         if decision.state in {"WATCH", "ARMED", "ENTERED"} and decision.rejection_reasons:
             self.stats.setups_rejected += 1
         return {
@@ -462,6 +479,133 @@ class ScalpingScanner:
             f"- number_theory_{tier}",
             "Disclaimer: Paper/demo signal only. No real-money execution.",
         ]
+        return "\n".join(lines)
+
+    def _maybe_send_liquidity_expansion(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> bool:
+        if self.first_silent_scan_pending or self.paused:
+            return False
+        if self.last_price is None:
+            return False
+        if self.last_spread is not None and self.last_spread > self.settings.liquidity_expansion_max_spread_pips:
+            log.info("liquidity_expansion_skipped reason=spread_too_high spread=%s", self.last_spread)
+            return False
+        required = ("M1", "M5", "M15", "H1")
+        for tf in required:
+            frame = market_data.get(tf)
+            if frame is None or len(frame) == 0:
+                return False
+        signal = evaluate_liquidity_expansion(
+            market_data["M1"],
+            market_data["M5"],
+            market_data["M15"],
+            market_data["H1"],
+            current_price=self.last_price,
+            symbol=self.last_symbol,
+            lookback_h1=self.settings.liquidity_expansion_lookback_h1,
+            range_in_range_max_pips=self.settings.liquidity_expansion_range_in_range_max_pips,
+            m15_reference_timezone=self.settings.liquidity_expansion_m15_reference_timezone,
+            now_utc=now,
+        )
+        if signal is None:
+            return False
+        if signal.rr_tp1 < self.settings.liquidity_expansion_min_rr_tp1:
+            log.info("liquidity_expansion_skipped reason=rr_tp1_below_floor rr=%s floor=%s", signal.rr_tp1, self.settings.liquidity_expansion_min_rr_tp1)
+            return False
+        count = self.liquidity_expansion_session_counts.get(session, 0)
+        if count >= self.settings.liquidity_expansion_max_per_session:
+            log.info("liquidity_expansion_skipped reason=session_cap session=%s count=%s", session, count)
+            return False
+        level = signal.reference.h1_ref_low if signal.direction == "LONG" else signal.reference.h1_ref_high
+        dedup_key = f"liqexp:{self.last_symbol}:{signal.direction}:{round(level, 1)}:{session}:{now.date().isoformat()}"
+        if dedup_key in self.deduplicator.sent_keys:
+            return False
+        lot_size: float | None = None
+        if self.settings.liquidity_expansion_require_risk_ok:
+            risk_payload = {
+                "signal_id": dedup_key,
+                "entry": signal.entry,
+                "sl": signal.stop,
+                "tp": signal.tp1,
+                "tp1": signal.tp1,
+                "direction": "BUY" if signal.direction == "LONG" else "SELL",
+            }
+            risk = self.risk.validate(risk_payload, spread=self.last_spread or 0.0, session=session)
+            if not risk.get("accepted", False):
+                log.info("liquidity_expansion_rejected_by_risk reasons=%s", risk.get("rejection_reasons"))
+                return False
+            lot_size = risk.get("lot_size")
+        text = self._format_liquidity_expansion_message(signal, lot_size=lot_size)
+        result = self.telegram_bot.send_text(text)
+        if not result.get("ok"):
+            log.warning("liquidity_expansion_send_failed key=%s result=%s", dedup_key, result)
+            return False
+        self.deduplicator.sent_keys.add(dedup_key)
+        self.liquidity_expansion_session_counts[session] = count + 1
+        self.stats.liquidity_expansion_sent += 1
+        if self.settings.liquidity_expansion_require_risk_ok:
+            self.risk.register_signal(dedup_key)
+        self.trades.append(VirtualTrade(
+            trade_id=f"vt-{len(self.trades) + 1}",
+            signal_key=dedup_key,
+            symbol=self.last_symbol,
+            direction=signal.direction,
+            zone_id=f"h1_level_{round(level, 2)}",
+            signal_time=signal.timestamp_utc,
+            entry_area_low=signal.entry,
+            entry_area_high=signal.entry,
+            stop_loss=signal.stop,
+            tp1=signal.tp1,
+            tp2=signal.tp2,
+            status="ENTERED",
+            entry_time=signal.timestamp_utc,
+            entry_price=signal.entry,
+            source="liquidity_expansion",
+            strategy="liquidity_expansion",
+            tp3=signal.tp3,
+            tp4=signal.tp4,
+            original_stop_loss=signal.stop,
+            strategy_payload={
+                "candle_model": signal.candle_model,
+                "trigger": signal.trigger_kind,
+                "rr_tp1": signal.rr_tp1,
+                "rr_tp4": signal.rr_tp4,
+                "h1_source": signal.reference.h1_source,
+                "m15_source": signal.reference.m15_source,
+                "stats_samples": signal.stats.samples,
+            },
+        ))
+        log.info("liquidity_expansion_sent key=%s rr_tp1=%s", dedup_key, signal.rr_tp1)
+        return True
+
+    @staticmethod
+    def _format_liquidity_expansion_message(signal: LiquidityExpansionSignal, *, lot_size: float | None) -> str:
+        ref = signal.reference
+        level_name = "LOW" if signal.direction == "LONG" else "HIGH"
+        level_value = ref.h1_ref_low if signal.direction == "LONG" else ref.h1_ref_high
+        lines = [
+            f"{signal.symbol} - LIQUIDITY EXPANSION MODEL (STRATEGY 2.0)",
+            f"Direzione: {signal.direction}",
+            f"Modello candela: {signal.candle_model}",
+            f"Livello H1: {level_name} {level_value} (fonte: {ref.h1_source})",
+            f"Filtro M15 :45: source={ref.m15_source} high={ref.m15_ref_high} low={ref.m15_ref_low} -> sequenza valida",
+            f"Entry: {signal.entry} (trigger: {signal.trigger_kind})",
+            f"Stop: {signal.stop} (Max Excursion x 1.25)",
+            f"TP1: {signal.tp1} ({signal.tp1_basis})",
+            f"TP2: {signal.tp2} (quartile_50)",
+            f"TP3: {signal.tp3} (quartile_75)",
+            f"TP4: {signal.tp4} (quartile_100)",
+            f"Stats H1: mae_avg={signal.stats.mae_avg_pips} pips | max_exc={signal.stats.max_excursion_pips} pips | avg_exp={signal.stats.avg_expansion_pips} pips | max_exp={signal.stats.max_expansion_pips} pips | samples={signal.stats.samples}",
+            f"RR TP1: {signal.rr_tp1} | RR TP4: {signal.rr_tp4}",
+        ]
+        if lot_size is not None:
+            lines.append(f"Lot size suggerito: {lot_size}")
+        lines.extend([
+            "Gestione: alla presa del TP1 lo stop e' spostato a BE automaticamente.",
+            "Reason codes:",
+        ])
+        for code in signal.reason_codes:
+            lines.append(f"- {code}")
+        lines.append("Disclaimer: Paper/demo signal only. No real-money execution.")
         return "\n".join(lines)
 
     def _maybe_send_session_behaviour_alert(self, decision: ScalpingDecision, session: str) -> bool:
@@ -843,6 +987,11 @@ class ScalpingScanner:
             high = float(candle["h"])
             low = float(candle["l"])
             when = candle["time"].to_pydatetime() if "time" in candle and hasattr(candle["time"], "to_pydatetime") else now
+            if trade.strategy == "liquidity_expansion":
+                self._update_liquidity_expansion_outcome(trade, candle_high=high, candle_low=low, when=when)
+                if trade.status in {"TP4_HIT", "STOP_HIT", "BE_HIT"}:
+                    return
+                continue
             if trade.direction == "LONG":
                 if low <= trade.stop_loss:
                     trade.status = "STOP_HIT"
@@ -867,6 +1016,35 @@ class ScalpingScanner:
                 if trade.tp1 and low <= trade.tp1:
                     trade.status = "TP1_HIT"
                     return
+
+    def _update_liquidity_expansion_outcome(self, trade: VirtualTrade, *, candle_high: float, candle_low: float, when: datetime) -> None:
+        if trade.stop_loss is None or trade.entry_price is None:
+            return
+        direction = trade.direction
+        if direction == "LONG" and candle_low <= trade.stop_loss:
+            trade.status = "BE_HIT" if trade.be_activated else "STOP_HIT"
+            trade.stop_hit_price = trade.stop_loss
+            trade.stop_hit_time = when
+            return
+        if direction == "SHORT" and candle_high >= trade.stop_loss:
+            trade.status = "BE_HIT" if trade.be_activated else "STOP_HIT"
+            trade.stop_hit_price = trade.stop_loss
+            trade.stop_hit_time = when
+            return
+        tps = [trade.tp1, trade.tp2, trade.tp3, trade.tp4]
+        hits = [trade.tp1_hit, trade.tp2_hit, trade.tp3_hit, trade.tp4_hit]
+        labels = ["TP1_HIT", "TP2_HIT", "TP3_HIT", "TP4_HIT"]
+        attr_names = ["tp1_hit", "tp2_hit", "tp3_hit", "tp4_hit"]
+        for idx, (tp, hit, label, attr) in enumerate(zip(tps, hits, labels, attr_names)):
+            if tp is None or hit:
+                continue
+            reached = (direction == "LONG" and candle_high >= tp) or (direction == "SHORT" and candle_low <= tp)
+            if reached:
+                setattr(trade, attr, True)
+                trade.status = label
+                if idx == 0:
+                    trade.stop_loss = trade.entry_price
+                    trade.be_activated = True
 
     def _update_reentry(self, trade: VirtualTrade, market_data: dict[str, pd.DataFrame], now: datetime) -> None:
         if trade.stop_hit_time is None or trade.stop_loss is None:

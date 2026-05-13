@@ -170,6 +170,15 @@ class Settings:
     adelin_send_rejection_debug: bool = False
     adelin_send_vwap_research: bool = True
 
+    liquidity_expansion_enabled: bool = True
+    liquidity_expansion_lookback_h1: int = 60
+    liquidity_expansion_range_in_range_max_pips: float = 30.0
+    liquidity_expansion_max_per_session: int = 4
+    liquidity_expansion_min_rr_tp1: float = 1.0
+    liquidity_expansion_max_spread_pips: float = 3.0
+    liquidity_expansion_m15_reference_timezone: str = "broker"
+    liquidity_expansion_require_risk_ok: bool = True
+
     enable_reentry_analysis: bool = True
     reentry_max_wait_minutes: int = 30
     reentry_require_new_entry: bool = True
@@ -317,6 +326,14 @@ class Settings:
             adelin_news_gate_enabled=_bool(os.getenv("ADELIN_NEWS_GATE_ENABLED"), True),
             adelin_send_rejection_debug=_bool(os.getenv("ADELIN_SEND_REJECTION_DEBUG"), False),
             adelin_send_vwap_research=_bool(os.getenv("ADELIN_SEND_VWAP_RESEARCH"), True),
+            liquidity_expansion_enabled=_bool(os.getenv("LIQUIDITY_EXPANSION_ENABLED"), True),
+            liquidity_expansion_lookback_h1=_int("LIQUIDITY_EXPANSION_LOOKBACK_H1", 60),
+            liquidity_expansion_range_in_range_max_pips=_float("LIQUIDITY_EXPANSION_RANGE_IN_RANGE_MAX_PIPS", 30.0),
+            liquidity_expansion_max_per_session=_int("LIQUIDITY_EXPANSION_MAX_PER_SESSION", 4),
+            liquidity_expansion_min_rr_tp1=_float("LIQUIDITY_EXPANSION_MIN_RR_TP1", 1.0),
+            liquidity_expansion_max_spread_pips=_float("LIQUIDITY_EXPANSION_MAX_SPREAD_PIPS", 3.0),
+            liquidity_expansion_m15_reference_timezone=os.getenv("LIQUIDITY_EXPANSION_M15_REFERENCE_TIMEZONE", "broker"),
+            liquidity_expansion_require_risk_ok=_bool(os.getenv("LIQUIDITY_EXPANSION_REQUIRE_RISK_OK"), True),
             enable_reentry_analysis=_bool(os.getenv("ENABLE_REENTRY_ANALYSIS"), True),
             reentry_max_wait_minutes=_int("REENTRY_MAX_WAIT_MINUTES", 30),
             reentry_require_new_entry=_bool(os.getenv("REENTRY_REQUIRE_NEW_ENTRY"), True),
@@ -401,6 +418,10 @@ class Settings:
             errors.append("MIN_RR must be positive.")
         if self.max_spread_pips <= 0:
             errors.append("MAX_SPREAD_PIPS must be positive.")
+        if self.liquidity_expansion_m15_reference_timezone not in {"broker", "Europe/Rome"}:
+            errors.append("LIQUIDITY_EXPANSION_M15_REFERENCE_TIMEZONE must be 'broker' or 'Europe/Rome'.")
+        if self.liquidity_expansion_min_rr_tp1 <= 0:
+            errors.append("LIQUIDITY_EXPANSION_MIN_RR_TP1 must be positive.")
 
         Path(self.ledger_db_path).parent.mkdir(parents=True, exist_ok=True)
         return ConfigValidation(errors=errors, warnings=warnings)
