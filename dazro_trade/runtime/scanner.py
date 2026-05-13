@@ -21,7 +21,7 @@ from dazro_trade.analysis.scalping import (
 from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evaluate_statistical_scalp
 from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, evaluate_liquidity_expansion
 from dazro_trade.runtime.coordinator import CoordinatorDecision, combine_strategy_results
-from dazro_trade.runtime.session_bias import SessionRelationship, apply_session_bias_to_strategy, classify_session_relationship
+from dazro_trade.runtime.session_bias import SessionRelationship, classify_session_relationship
 from dazro_trade.risk.manager import RiskManager
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
@@ -30,6 +30,7 @@ from dazro_trade.notifications.telegram_bot import TelegramBot, format_scalping_
 from dazro_trade.runtime.sessions import ROME_TZ, current_session_name, format_session_summary, next_session
 
 log = logging.getLogger(__name__)
+PAPER_DISCLAIMER = "Paper/demo signal only. No real-money execution."
 
 
 def _scalping_config_from_settings(settings: Settings) -> ScalpingConfig:
@@ -258,12 +259,18 @@ class ScalpingScanner:
                 lex_signal = self._compute_liquidity_expansion_signal(market_data, session, now)
             self.latest_liquidity_expansion_signal = lex_signal
             if self.settings.strategy_coordinator_enabled and not was_first_silent_scan:
+                bias_for_coord = (
+                    self.latest_session_bias
+                    if (self.settings.session_bias_enabled and self.settings.session_bias_modifier_enabled)
+                    else None
+                )
                 coord = combine_strategy_results(
                     adelin_result,
                     lex_signal,
                     zone_tolerance_pips=self.settings.strategy_a_plus_plus_tolerance_pips,
                     conflict_tolerance_pips=self.settings.strategy_conflict_tolerance_pips,
                     symbol=self.last_symbol,
+                    session_relationship=bias_for_coord,
                 )
                 self.latest_coordinator_decision = coord
                 sent = self._dispatch_coordinator(coord, adelin_result, lex_signal, session, now)
@@ -396,7 +403,7 @@ class ScalpingScanner:
         log.warning("signal_send_failed key=%s result=%s", key, result)
         return False
 
-    def _maybe_send_adelin_signal(self, result: dict[str, Any] | None, session: str, now: datetime) -> bool:
+    def _maybe_send_adelin_signal(self, result: dict[str, Any] | None, session: str, now: datetime, *, coord: CoordinatorDecision | None = None) -> bool:
         if not result or self.paused or not self.auto_signals_enabled:
             return False
         signal = result.get("signal")
@@ -413,7 +420,7 @@ class ScalpingScanner:
         if key in self.adelin_sent_keys:
             self.stats.duplicate_skips += 1
             return False
-        text = format_adelin_signal(signal, result)
+        text = self._maybe_inject_session_bias_warning(self._ensure_standard_disclaimer(format_adelin_signal(signal, result)), coord=coord)
         send_result = self.telegram_bot.send_text(text)
         if send_result.get("ok"):
             self.adelin_sent_keys.add(key)
@@ -506,7 +513,7 @@ class ScalpingScanner:
             "- statistical_mean_reversion",
             "- vwap_2sigma_extension",
             f"- number_theory_{tier}",
-            "Disclaimer: Paper/demo signal only. No real-money execution.",
+            PAPER_DISCLAIMER,
         ]
         return "\n".join(lines)
 
@@ -546,7 +553,7 @@ class ScalpingScanner:
             return None
         return signal
 
-    def _send_liquidity_expansion(self, signal: LiquidityExpansionSignal, session: str, now: datetime) -> bool:
+    def _send_liquidity_expansion(self, signal: LiquidityExpansionSignal, session: str, now: datetime, *, coord: CoordinatorDecision | None = None) -> bool:
         level = signal.reference.h1_ref_low if signal.direction == "LONG" else signal.reference.h1_ref_high
         dedup_key = f"liqexp:{self.last_symbol}:{signal.direction}:{round(level, 1)}:{session}:{now.date().isoformat()}"
         if dedup_key in self.deduplicator.sent_keys:
@@ -566,7 +573,7 @@ class ScalpingScanner:
                 log.info("liquidity_expansion_rejected_by_risk reasons=%s", risk.get("rejection_reasons"))
                 return False
             lot_size = risk.get("lot_size")
-        text = self._format_liquidity_expansion_message(signal, lot_size=lot_size)
+        text = self._maybe_inject_session_bias_warning(self._format_liquidity_expansion_message(signal, lot_size=lot_size), coord=coord)
         result = self.telegram_bot.send_text(text)
         if not result.get("ok"):
             log.warning("liquidity_expansion_send_failed key=%s result=%s", dedup_key, result)
@@ -628,9 +635,9 @@ class ScalpingScanner:
         if mode == "NO_TRADE":
             return False
         if mode == "STRATEGY_1_ONLY":
-            return self._maybe_send_adelin_signal(adelin_result, session, now)
+            return self._maybe_send_adelin_signal(adelin_result, session, now, coord=coord)
         if mode == "STRATEGY_2_ONLY":
-            return self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+            return self._send_liquidity_expansion(lex_signal, session, now, coord=coord) if lex_signal else False
         if mode == "A_PLUS_PLUS":
             return self._send_a_plus_plus(coord, adelin_result, lex_signal, session, now)
         if mode == "CONFLICT":
@@ -640,19 +647,19 @@ class ScalpingScanner:
         if mode == "INDEPENDENT_BOTH":
             policy = self.settings.strategy_independent_both_policy
             if policy == "send_both":
-                sent_a = self._maybe_send_adelin_signal(adelin_result, session, now)
-                sent_b = self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+                sent_a = self._maybe_send_adelin_signal(adelin_result, session, now, coord=coord)
+                sent_b = self._send_liquidity_expansion(lex_signal, session, now, coord=coord) if lex_signal else False
                 return sent_a or sent_b
             if policy == "send_first":
-                if self._maybe_send_adelin_signal(adelin_result, session, now):
+                if self._maybe_send_adelin_signal(adelin_result, session, now, coord=coord):
                     return True
-                return self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+                return self._send_liquidity_expansion(lex_signal, session, now, coord=coord) if lex_signal else False
             if policy == "send_best":
                 rr_1 = self._adelin_rr_tp1(adelin_result)
                 rr_2 = lex_signal.rr_tp1 if lex_signal else 0.0
                 if rr_1 >= rr_2:
-                    return self._maybe_send_adelin_signal(adelin_result, session, now)
-                return self._send_liquidity_expansion(lex_signal, session, now) if lex_signal else False
+                    return self._maybe_send_adelin_signal(adelin_result, session, now, coord=coord)
+                return self._send_liquidity_expansion(lex_signal, session, now, coord=coord) if lex_signal else False
             return False
         return False
 
@@ -764,14 +771,75 @@ class ScalpingScanner:
             f"Distance: {coord.distance_pips} pips",
             "",
             "Auto-signals soppressi su questa zona. Decisione manuale richiesta.",
-            "Disclaimer: Paper/demo signal only. No real-money execution.",
         ]
+        if coord.bias_favored is not None:
+            lines.extend([
+                f"Session bias suggerisce: {coord.bias_favored} piu' allineata.",
+                "Resta CONFLICT - decisione manuale.",
+            ])
+        lines.append(PAPER_DISCLAIMER)
         result = self.telegram_bot.send_text("\n".join(lines))
         if result.get("ok"):
             self.deduplicator.sent_keys.add(dedup_key)
             log.info("strategy_conflict_alert_sent key=%s", dedup_key)
             return True
         return False
+
+    @staticmethod
+    def _inject_before_disclaimer(text: str, block: str) -> str:
+        if not block:
+            return text
+        text = ScalpingScanner._ensure_standard_disclaimer(text)
+        marker = PAPER_DISCLAIMER
+        if marker not in text:
+            return text + "\n" + block
+        return text.replace(marker, block + "\n" + marker)
+
+    @staticmethod
+    def _ensure_standard_disclaimer(text: str) -> str:
+        lines = text.rstrip().splitlines()
+        if not lines:
+            return PAPER_DISCLAIMER
+        if lines[-1] == PAPER_DISCLAIMER:
+            return "\n".join(lines)
+        if "No real-money execution." in lines[-1] or "No live-money execution." in lines[-1]:
+            lines[-1] = PAPER_DISCLAIMER
+            return "\n".join(lines)
+        lines.append(PAPER_DISCLAIMER)
+        return "\n".join(lines)
+
+    def _maybe_inject_session_bias_warning(self, text: str, *, coord: CoordinatorDecision | None = None) -> str:
+        coord = coord or self.latest_coordinator_decision
+        if coord is None or not coord.bias_demoted:
+            return text
+        if not self.settings.session_bias_demote_adds_warning:
+            return text
+        block = self._format_session_bias_warning_block(coord)
+        return self._inject_before_disclaimer(text, block)
+
+    @staticmethod
+    def _format_session_bias_warning_block(coord: CoordinatorDecision) -> str:
+        lines = ["WARNING SESSION BIAS:", f"- Session label: {coord.session_label or '-'}"]
+        if coord.bias_effect_s1 and coord.bias_effect_s1.get("effect") == "demote":
+            reasons = ", ".join(coord.bias_effect_s1.get("reason_codes", []))
+            lines.append("- Strategy 1.0 effect: demote")
+            lines.append(f"- Motivi Strategy 1.0: {reasons or '-'}")
+        if coord.bias_effect_s2 and coord.bias_effect_s2.get("effect") == "demote":
+            reasons = ", ".join(coord.bias_effect_s2.get("reason_codes", []))
+            lines.append("- Strategy 2.0 effect: demote")
+            lines.append(f"- Motivi Strategy 2.0: {reasons or '-'}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_session_bias_info_block(coord: CoordinatorDecision) -> str:
+        e1 = (coord.bias_effect_s1 or {}).get("effect", "-")
+        e2 = (coord.bias_effect_s2 or {}).get("effect", "-")
+        return "\n".join([
+            "Session bias (info, A++ non degradato):",
+            f"- Label: {coord.session_label or '-'}",
+            f"- Effect Strategy 1.0: {e1}",
+            f"- Effect Strategy 2.0: {e2}",
+        ])
 
     @staticmethod
     def _format_a_plus_plus_message(adelin_signal: dict[str, Any], lex_signal: LiquidityExpansionSignal, coord: CoordinatorDecision) -> str:
@@ -797,8 +865,10 @@ class ScalpingScanner:
             "",
             "Confluenza Strategia 1.0 + Strategia 2.0",
             "Gestione: alla presa del TP1 lo stop e' spostato a BE automaticamente (lato Strategy 2.0).",
-            "Disclaimer: Paper/demo signal only. No real-money execution.",
         ]
+        if coord.session_label is not None:
+            lines.extend(["", ScalpingScanner._format_session_bias_info_block(coord)])
+        lines.append(PAPER_DISCLAIMER)
         return "\n".join(lines)
 
     @staticmethod
@@ -829,7 +899,7 @@ class ScalpingScanner:
         ])
         for code in signal.reason_codes:
             lines.append(f"- {code}")
-        lines.append("Disclaimer: Paper/demo signal only. No real-money execution.")
+        lines.append(PAPER_DISCLAIMER)
         return "\n".join(lines)
 
     def _maybe_send_session_behaviour_alert(self, decision: ScalpingDecision, session: str) -> bool:
@@ -891,7 +961,7 @@ class ScalpingScanner:
                 "NO ENTRY ANCORA.",
             ]
         reasons = event.get("reason_codes", [])[:8]
-        return "\n".join([title, "", *body, "", "Reason codes:", *[f"- {reason}" for reason in reasons], "Disclaimer: Paper/demo signal only. No real-money execution."])
+        return "\n".join([title, "", *body, "", "Reason codes:", *[f"- {reason}" for reason in reasons], PAPER_DISCLAIMER])
 
     def _maybe_send_reaction_alert(self, decision: ScalpingDecision, session: str) -> bool:
         if self.settings.send_triggered_only:
@@ -1068,7 +1138,7 @@ class ScalpingScanner:
             "",
             "Reason codes:",
             *[f"- {reason}" for reason in reasons],
-            "Disclaimer: Paper/demo signal only. No real-money execution.",
+            PAPER_DISCLAIMER,
         ]
         return "\n".join(lines)
 
@@ -1113,7 +1183,7 @@ class ScalpingScanner:
                 "- M1/M5 CHoCH",
                 "- FVG/IFVG dopo sweep",
                 "NO ENTRY ANCORA.",
-                "Disclaimer: Paper/demo signal only. No real-money execution.",
+                PAPER_DISCLAIMER,
             ]
         )
         return "\n".join(lines)
@@ -1352,7 +1422,7 @@ class ScalpingScanner:
                 *[f"- {reason}" for reason in reasons[:8]],
                 "Non rientrare.",
             ]
-        lines.append("Disclaimer: Paper/demo signal only. No real-money execution.")
+        lines.append(PAPER_DISCLAIMER)
         return "\n".join(lines)
 
     def _infer_price(self, market_data: dict[str, pd.DataFrame]) -> float:
@@ -1460,6 +1530,16 @@ class ScalpingScanner:
                 lines.append("Reasons:")
                 for r in bias.reason_codes[:4]:
                     lines.append(f"- {r}")
+        if coord is not None and (coord.bias_effect_s1 is not None or coord.bias_effect_s2 is not None):
+            lines.extend(["", "Bias modifier:"])
+            if coord.bias_effect_s1 is not None:
+                reasons = ",".join(coord.bias_effect_s1.get("reason_codes", []))
+                lines.append(f"- Strategy 1.0 effect: {coord.bias_effect_s1.get('effect', '-')} reasons={reasons}")
+            if coord.bias_effect_s2 is not None:
+                reasons = ",".join(coord.bias_effect_s2.get("reason_codes", []))
+                lines.append(f"- Strategy 2.0 effect: {coord.bias_effect_s2.get('effect', '-')} reasons={reasons}")
+            lines.append(f"- Demoted: {'yes' if coord.bias_demoted else 'no'}")
+            lines.append(f"- Favored in conflict: {coord.bias_favored or '-'}")
         return "\n".join(lines)
 
     def format_watch(self) -> str:

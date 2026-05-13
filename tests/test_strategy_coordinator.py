@@ -12,6 +12,7 @@ from dazro_trade.analysis.liquidity_expansion import (
 )
 from dazro_trade.core.symbols import pips_to_price
 from dazro_trade.runtime.coordinator import combine_strategy_results
+from dazro_trade.runtime.session_bias import SessionRelationship
 
 
 def _adelin_result(direction: str, entry: float, valid: bool = True) -> dict | None:
@@ -61,6 +62,22 @@ def _lex_signal(direction: str, entry: float) -> LiquidityExpansionSignal:
         trigger_kind="reclaim",
         reason_codes=["liquidity_expansion_model_2_0"],
         timestamp_utc=datetime.now(timezone.utc),
+    )
+
+
+def _session_relationship(label: str, bias: str) -> SessionRelationship:
+    return SessionRelationship(
+        label=label,  # type: ignore[arg-type]
+        active_session="ny",
+        previous_session="london",
+        directional_bias=bias,  # type: ignore[arg-type]
+        confidence=0.8,
+        asia_range={"range_pips": 20.0},
+        london_range={"range_pips": 60.0},
+        ny_range={"range_pips": 45.0},
+        swept_level="london_high",
+        reason_codes=[f"test_{label.lower()}"],
+        notes=[],
     )
 
 
@@ -203,9 +220,12 @@ def test_a_plus_plus_creates_virtual_trade():
     scanner.last_spread = 1.0
     adelin = _adelin_result("LONG", 4700.0)
     lex = _lex_signal("LONG", 4700.2)
-    coord = combine_strategy_results(adelin, lex, zone_tolerance_pips=30.0)
+    coord = combine_strategy_results(adelin, lex, zone_tolerance_pips=30.0, session_relationship=_session_relationship("NY_MANIPULATION_REVERSAL", "bearish"))
     assert coord.combined_mode == "A_PLUS_PLUS"
     scanner._dispatch_coordinator(coord, adelin, lex, "London", datetime.now(timezone.utc))
+    assert "Session bias (info, A++ non degradato)" in scanner.telegram_bot.sent[-1]
+    assert "WARNING SESSION BIAS" not in scanner.telegram_bot.sent[-1]
+    assert scanner.telegram_bot.sent[-1].splitlines()[-1] == "Paper/demo signal only. No real-money execution."
     assert len(scanner.trades) == 1
     trade = scanner.trades[0]
     assert trade.strategy == "A_PLUS_PLUS"
@@ -225,14 +245,78 @@ def test_format_analysis_includes_coordinator_section():
     scanner = ScalpingScanner(settings)
     scanner.latest_adelin_result = _adelin_result("LONG", 4700.0)
     scanner.latest_liquidity_expansion_signal = _lex_signal("LONG", 4700.2)
+    scanner.latest_session_bias = _session_relationship("NY_CONTINUATION", "bullish")
     scanner.latest_coordinator_decision = combine_strategy_results(
-        scanner.latest_adelin_result, scanner.latest_liquidity_expansion_signal,
+        scanner.latest_adelin_result,
+        scanner.latest_liquidity_expansion_signal,
+        session_relationship=scanner.latest_session_bias,
     )
     section = scanner._format_coordinator_section()
     assert "COORDINATOR" in section
     assert "Strategy 1.0 (Adelin)" in section
     assert "Strategy 2.0 (Liquidity Expansion)" in section
     assert "Coordinator mode:" in section
+    assert "Bias modifier:" in section
+    assert "Strategy 1.0 effect: boost" in section
+
+
+def test_bias_modifier_boost_on_strategy_1_only():
+    rel = _session_relationship("NY_CONTINUATION", "bullish")
+    decision = combine_strategy_results(_adelin_result("LONG", 4700.0), None, session_relationship=rel)
+    assert decision.combined_mode == "STRATEGY_1_ONLY"
+    assert decision.bias_effect_s1["effect"] == "boost"
+    assert decision.bias_effect_s2 is None
+    assert decision.bias_demoted is False
+    assert decision.should_send is True
+    assert decision.session_label == "NY_CONTINUATION"
+
+
+def test_bias_modifier_demote_on_strategy_2_only():
+    rel = _session_relationship("NY_MANIPULATION_REVERSAL", "bearish")
+    decision = combine_strategy_results(None, _lex_signal("LONG", 4700.0), session_relationship=rel)
+    assert decision.combined_mode == "STRATEGY_2_ONLY"
+    assert decision.bias_effect_s2["effect"] == "demote"
+    assert decision.bias_effect_s1 is None
+    assert decision.bias_demoted is True
+    assert decision.should_send is True
+    assert decision.session_label == "NY_MANIPULATION_REVERSAL"
+
+
+def test_a_plus_plus_not_degraded_by_bias():
+    rel = _session_relationship("NY_MANIPULATION_REVERSAL", "bearish")
+    decision = combine_strategy_results(_adelin_result("LONG", 4700.0), _lex_signal("LONG", 4700.2), zone_tolerance_pips=30.0, session_relationship=rel)
+    assert decision.combined_mode == "A_PLUS_PLUS"
+    assert decision.bias_effect_s1["effect"] == "demote"
+    assert decision.bias_effect_s2["effect"] == "demote"
+    assert decision.bias_demoted is False
+    assert decision.should_send is True
+
+
+def test_independent_both_applies_bias_per_strategy():
+    rel = _session_relationship("NY_CONTINUATION", "bullish")
+    decision = combine_strategy_results(_adelin_result("LONG", 4700.0), _lex_signal("LONG", 4720.0), zone_tolerance_pips=30.0, session_relationship=rel)
+    assert decision.combined_mode == "INDEPENDENT_BOTH"
+    assert decision.bias_effect_s1["effect"] == "boost"
+    assert decision.bias_effect_s2["effect"] == "boost"
+    assert decision.bias_demoted is False
+
+
+def test_conflict_bias_favored_set():
+    rel = _session_relationship("NY_CONTINUATION", "bullish")
+    decision = combine_strategy_results(_adelin_result("LONG", 4700.0), _lex_signal("SHORT", 4700.4), conflict_tolerance_pips=50.0, session_relationship=rel)
+    assert decision.combined_mode == "CONFLICT"
+    assert decision.bias_effect_s1["effect"] == "boost"
+    assert decision.bias_effect_s2["effect"] in {"demote", "warning"}
+    assert decision.bias_favored == "strategy_1"
+    assert decision.should_send is False
+
+
+def test_no_bias_when_relationship_none():
+    decision = combine_strategy_results(_adelin_result("LONG", 4700.0), None, session_relationship=None)
+    assert decision.bias_effect_s1 is None
+    assert decision.bias_effect_s2 is None
+    assert decision.bias_demoted is False
+    assert decision.session_label is None
 
 
 def test_volume_profile_distributes_volume_across_bins():
