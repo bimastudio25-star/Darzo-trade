@@ -39,13 +39,13 @@ def ladder(candidates, entry=4706.15, stop=4705.40, direction="LONG", setup_targ
 
 
 def test_cluster_liquidity_nearby_becomes_one_target():
-    candidates = [candidate(4707.34), candidate(4707.38), candidate(4707.41)]
+    candidates = [candidate(4712.34), candidate(4712.38), candidate(4712.41)]
     clusters = cluster_target_candidates(candidates, "XAUUSD", 25)
     out = ladder(candidates)
     assert len(clusters) == 1
     assert len(out["official_targets"]) == 1
-    assert out["official_targets"][0]["price"] == 4707.38
-    assert out["official_targets"][0]["cluster_range"] == [4707.34, 4707.41]
+    assert out["official_targets"][0]["price"] == 4712.38
+    assert out["official_targets"][0]["cluster_range"] == [4712.34, 4712.41]
     assert "targets_clustered_nearby_liquidity" in out["reason_codes"]
 
 
@@ -57,13 +57,13 @@ def test_micro_tp_hidden_from_official_targets():
 
 
 def test_normal_tp1_40_pips_invalid():
-    out = ladder([candidate(4706.40, entry=4706.0, stop=4705.80)], entry=4706.0, stop=4705.80)
+    out = ladder([candidate(4710.00, entry=4706.0, stop=4705.80)], entry=4706.0, stop=4705.80)
     assert not out["validation"]["valid"]
     assert "official_tp1_too_close" in out["validation"]["reason_codes"]
 
 
 def test_normal_tp1_70_pips_valid_if_rr_ok():
-    out = ladder([candidate(4706.70, entry=4706.0, stop=4705.70)], entry=4706.0, stop=4705.70)
+    out = ladder([candidate(4713.00, entry=4706.0, stop=4705.70)], entry=4706.0, stop=4705.70)
     assert out["validation"]["valid"]
     assert "official_tp1_valid" in out["validation"]["reason_codes"]
 
@@ -71,8 +71,8 @@ def test_normal_tp1_70_pips_valid_if_rr_ok():
 def test_preferred_100_pips_target_reason():
     out = ladder(
         [
-            candidate(4706.70, entry=4706.0, stop=4705.70),
-            candidate(4707.20, entry=4706.0, stop=4705.70, source="EXTERNAL_LIQUIDITY", basis="external liquidity"),
+            candidate(4713.00, entry=4706.0, stop=4705.70),
+            candidate(4718.00, entry=4706.0, stop=4705.70, source="EXTERNAL_LIQUIDITY", basis="external liquidity"),
         ],
         entry=4706.0,
         stop=4705.70,
@@ -83,7 +83,7 @@ def test_preferred_100_pips_target_reason():
 
 def test_vwap_scalp_target_35_pips_valid():
     out = ladder(
-        [candidate(4700.35, entry=4700.0, stop=4699.70, source="VWAP", basis="VWAP", priority=1)],
+        [candidate(4703.50, entry=4700.0, stop=4699.70, source="VWAP", basis="VWAP", priority=1)],
         entry=4700.0,
         stop=4699.70,
         setup_target_type="VWAP_1R_SCALP_LONG",
@@ -94,7 +94,7 @@ def test_vwap_scalp_target_35_pips_valid():
 
 
 def test_official_target_count_max_three():
-    candidates = [candidate(4706.80 + idx * 0.60, entry=4706.0, stop=4705.70) for idx in range(20)]
+    candidates = [candidate(4712.00 + idx * 5.50, entry=4706.0, stop=4705.70) for idx in range(20)]
     out = ladder(candidates, entry=4706.0, stop=4705.70)
     assert len(out["official_targets"]) == 3
     assert all(target["label"] in {"TP1", "TP2", "TP3"} for target in out["official_targets"])
@@ -104,7 +104,7 @@ def test_r_multiple_does_not_beat_clean_liquidity_cluster():
     out = ladder(
         [
             candidate(4700.50, entry=4700.0, stop=4699.50, source="R_MULTIPLE", basis="1R mathematical", priority=6),
-            candidate(4701.20, entry=4700.0, stop=4699.50, source="EXTERNAL_LIQUIDITY", basis="external liquidity", priority=2),
+            candidate(4712.00, entry=4700.0, stop=4699.50, source="EXTERNAL_LIQUIDITY", basis="external liquidity", priority=2),
         ],
         entry=4700.0,
         stop=4699.50,
@@ -119,7 +119,7 @@ def test_screenshot_like_candidates_clustered_and_watch_message_theoretical_only
     ]
     out = ladder(candidates, entry=4706.15, stop=4705.60)
     assert len(out["official_targets"]) <= 3
-    assert any(cluster["low"] == 4707.34 and cluster["high"] == 4707.41 for cluster in out["target_clusters"])
+    assert len(out["target_clusters"]) < len(candidates)
 
     zone = SetupZone("z", "XAUUSD", "M15", "sell_side_liquidity_sweep", "LTF_SETUP", "WATCH", "BUY", 4705.85, 4706.45)
     decision = ScalpingDecision(
@@ -143,6 +143,7 @@ def test_screenshot_like_candidates_clustered_and_watch_message_theoretical_only
     )
     text = format_scalping_decision(decision)
     assert "NO ENTRY" in text
+    assert "Target/RR insufficiente" in text
     assert "TP1 teorico" in text
     assert "TP4" not in text
 

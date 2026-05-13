@@ -7,7 +7,7 @@ import pandas as pd
 
 from dazro_trade.analysis.reentry import evaluate_reentry
 from dazro_trade.analysis.scalping import ScalpingConfig, apply_execution_gates, target_validation_passes
-from dazro_trade.analysis.targets import TargetPolicy, build_intelligent_targets, validate_target_space
+from dazro_trade.analysis.targets import TargetPolicy, validate_target_space
 from dazro_trade.analysis.volatility import volatility_snapshot
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
@@ -45,10 +45,22 @@ def decision(direction="SHORT", entry_area=(4719.0, 4720.0), stop=4723.16):
 
 
 def test_symbol_conversion_specific_values():
+    assert pips_to_price("XAUUSD", 10) == 1.00
     assert pips_to_price("XAUUSD", 50) == 5.00
     assert pips_to_price("XAUUSD", 80) == 8.00
     assert pips_to_price("XAUUSD", 100) == 10.00
     assert pips_to_price("XAUUSD", 300) == 30.00
+    assert pips_to_price("XAUUSD", 500) == 50.00
+    assert round(price_to_pips("XAUUSD", 0.33), 1) == 3.3
+    assert round(price_to_pips("XAUUSD", 0.82), 1) == 8.2
+    assert round(price_to_pips("XAUUSD", 1.41), 1) == 14.1
+
+
+def test_screenshot_target_distances_use_retail_xauusd_pips():
+    entry = 4688.18
+    assert round(price_to_pips("XAUUSD", abs(4687.85 - entry)), 1) == 3.3
+    assert round(price_to_pips("XAUUSD", abs(4687.36 - entry)), 1) == 8.2
+    assert round(price_to_pips("XAUUSD", abs(4686.77 - entry)), 1) == 14.1
 
 
 def test_mt5_tick_snapshot_spread_uses_symbol_spec(monkeypatch):
@@ -138,15 +150,8 @@ def test_entry_missed_do_not_chase_short():
 
 
 def test_vwap_1r_scalp_target_valid():
-    targets = build_intelligent_targets(
-        symbol="XAUUSD",
-        direction="SHORT",
-        entry=4720.0,
-        stop=4720.30,
-        vwap_snapshot={"vwap": 4719.50},
-        liquidity_pools=[],
-    )
-    out = validate_target_space("XAUUSD", "SHORT", 4720.0, 4720.30, targets, {"vwap": 4719.50}, [], TargetPolicy())
+    targets = [{"price": 4716.50, "source": "VWAP", "basis": "VWAP"}]
+    out = validate_target_space("XAUUSD", "SHORT", 4720.0, 4720.30, targets, {"vwap": 4716.50}, [], TargetPolicy())
     assert out["valid"]
     assert out["setup_target_type"] == "VWAP_1R_SCALP"
     assert "vwap_1r_target_valid" in out["reason_codes"]
@@ -171,13 +176,42 @@ def test_normal_target_below_50_pips_rejected_and_100_valid():
         "SHORT",
         4720.0,
         4720.5,
-        [{"price": 4719.00, "distance_pips": 100, "basis": "liquidity"}],
+        [{"price": 4710.00, "distance_pips": 100, "basis": "liquidity"}],
         None,
         [],
         TargetPolicy(),
     )
     assert valid["valid"]
     assert "preferred_reaction_target_100_pips_available" in valid["reason_codes"]
+
+
+def test_scalping_formatter_recalculates_theoretical_target_pips_from_symbol_spec():
+    d = ScalpingDecision(
+        symbol="XAUUSD",
+        setup_type="LIQUIDITY_REACTION",
+        direction="SHORT",
+        state="WATCH",
+        score=60,
+        confidence=0.6,
+        htf_context={},
+        intraday_context={"current_price": 4688.18},
+        liquidity={},
+        entry_area=(4688.18, 4688.18),
+        entry=4688.18,
+        stop=4689.20,
+        theoretical_targets=[
+            {"label": "TP1", "price": 4687.85, "basis": "liquidity", "distance_pips": 33, "rr": 0.3},
+            {"label": "TP2", "price": 4687.36, "basis": "liquidity", "distance_pips": 82, "rr": 0.8},
+            {"label": "TP3", "price": 4686.77, "basis": "liquidity", "distance_pips": 141, "rr": 1.4},
+        ],
+    )
+    text = format_scalping_decision(d)
+    assert "3.3 pips" in text
+    assert "8.2 pips" in text
+    assert "14.1 pips" in text
+    assert "33 pips" not in text
+    assert "82 pips" not in text
+    assert "141 pips" not in text
 
 
 def test_virtual_trade_stop_hit_and_conservative_ambiguous_path():

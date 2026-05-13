@@ -21,7 +21,7 @@ from dazro_trade.analysis.scalping import (
 from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evaluate_statistical_scalp
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
-from dazro_trade.core.symbols import get_symbol_spec, pips_to_price
+from dazro_trade.core.symbols import get_symbol_spec, pips_to_price, price_to_pips
 from dazro_trade.notifications.telegram_bot import TelegramBot, format_scalping_decision
 from dazro_trade.runtime.sessions import ROME_TZ, current_session_name, format_session_summary, next_session
 
@@ -708,6 +708,12 @@ class ScalpingScanner:
     def _format_reaction_alert(decision: ScalpingDecision, sweep: dict, pool: dict | None, milestone: str = "armed") -> str:
         pool_type = pool.get("pool_type") if pool else "liquidity"
         distance = pool.get("distance_pips") if pool else "-"
+        current_price = decision.intraday_context.get("current_price") or decision.liquidity.get("price")
+        if pool and pool.get("level") is not None and current_price is not None:
+            try:
+                distance = round(price_to_pips(decision.symbol, abs(float(pool["level"]) - float(current_price))), 1)
+            except (TypeError, ValueError):
+                pass
         confluences = []
         if pool:
             confluences.extend(pool.get("confluences", []))
@@ -729,7 +735,7 @@ class ScalpingScanner:
             lines.extend(["Piano teorico non operativo:", f"- Entry teorica: {decision.entry_area[0]:.2f} - {decision.entry_area[1]:.2f}" if decision.entry_area else "- Entry teorica: solo dopo trigger", f"- SL teorico: {decision.stop if decision.stop is not None else '-'}", "TP teorici:"])
             if decision.theoretical_targets:
                 for target in decision.theoretical_targets[:3]:
-                    lines.append(f"- {target.get('label')} teorico: {target.get('price')} - {target.get('basis')} - {target.get('distance_pips')} pips")
+                    lines.append(f"- {target.get('label')} teorico: {target.get('price')} - {target.get('basis')} - {ScalpingScanner._target_distance_text(decision, target)}")
             else:
                 lines.append("- target validation finale ancora da confermare")
         lines.extend(
@@ -743,6 +749,21 @@ class ScalpingScanner:
             ]
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _target_distance_text(decision: ScalpingDecision, target: dict) -> str:
+        entry = decision.entry
+        if entry is None and decision.entry_area:
+            entry = round((decision.entry_area[0] + decision.entry_area[1]) / 2, 2)
+        price = target.get("price")
+        if entry is not None and price is not None:
+            try:
+                distance = abs(float(price) - float(entry))
+                pips = price_to_pips(decision.symbol, distance)
+                return f"{pips:.1f}".rstrip("0").rstrip(".") + f" pips / {distance:.2f}$"
+            except (TypeError, ValueError):
+                pass
+        return f"{target.get('distance_pips', '-')} pips"
 
     def _create_virtual_trade(self, decision: ScalpingDecision, signal_key: str) -> None:
         if decision.primary_zone is None or not decision.entry_area:

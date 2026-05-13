@@ -8,11 +8,11 @@ from dazro_trade.core.symbols import normalize_price, pips_to_price, price_to_pi
 
 @dataclass(frozen=True)
 class TargetPolicy:
-    min_normal_reaction_target_pips: float = 5.0
-    preferred_reaction_target_pips: float = 10.0
+    min_normal_reaction_target_pips: float = 50.0
+    preferred_reaction_target_pips: float = 100.0
 
     allow_vwap_1r_target: bool = True
-    min_vwap_target_pips: float = 3.0
+    min_vwap_target_pips: float = 30.0
 
     min_rr_normal: float = 1.5
     min_rr_vwap_scalp: float = 1.0
@@ -20,12 +20,12 @@ class TargetPolicy:
     max_official_targets: int = 3
     allow_runner_target: bool = True
 
-    min_gap_between_official_targets_pips: float = 5.0
-    min_gap_between_scalp_targets_pips: float = 3.0
-    target_cluster_tolerance_pips: float = 2.5
+    min_gap_between_official_targets_pips: float = 50.0
+    min_gap_between_scalp_targets_pips: float = 30.0
+    target_cluster_tolerance_pips: float = 25.0
 
-    min_tp1_distance_pips: float = 5.0
-    min_tp1_distance_pips_vwap_scalp: float = 3.0
+    min_tp1_distance_pips: float = 50.0
+    min_tp1_distance_pips_vwap_scalp: float = 30.0
 
     hide_micro_targets: bool = True
     max_candidate_targets_debug: int = 20
@@ -314,14 +314,15 @@ def build_official_tp_ladder(
                 continue
             selected.append(item)
 
-    official_targets = [_official_target(item, idx + 1) for idx, item in enumerate(selected[: policy.max_official_targets])]
+    selected_official_targets = [_official_target(item, idx + 1) for idx, item in enumerate(selected[: policy.max_official_targets])]
     runner_target = None
     if policy.allow_runner_target and len(selected) > policy.max_official_targets:
         runner_target = _official_target(selected[policy.max_official_targets], policy.max_official_targets + 1, runner=True)
-    theoretical_targets = [_official_target(item, idx + 1, theoretical=True) for idx, item in enumerate((selected or displayable)[: policy.max_theoretical_targets_on_watch])]
+    theoretical_source = selected or displayable or cluster_targets
+    theoretical_targets = [_official_target(item, idx + 1, theoretical=True) for idx, item in enumerate(theoretical_source[: policy.max_theoretical_targets_on_watch])]
 
     validation = _validate_ladder(
-        official_targets=official_targets,
+        official_targets=selected_official_targets,
         risk_pips=risk_pips,
         policy=policy,
         setup_target_type=setup_target_type,
@@ -330,15 +331,19 @@ def build_official_tp_ladder(
     )
     if validation["valid"]:
         reason_codes.append("official_tp_ladder_valid")
-        if any(item.get("cluster_range") for item in official_targets):
+        if any(item.get("cluster_range") for item in selected_official_targets):
             reason_codes.append("target_cluster_used")
     else:
-        if not official_targets:
+        if not selected_official_targets:
             reason_codes.extend(["no_official_target_available", "no_clean_target_space_no_trade"])
         elif validation["target_pips"] < min_tp1:
             reason_codes.append("official_tp1_too_close")
+        else:
+            reason_codes.append("target_rr_insufficient")
     reason_codes = _dedupe_strings([*reason_codes, *validation["reason_codes"]])
     validation["reason_codes"] = _dedupe_strings(validation["reason_codes"])
+    official_targets = selected_official_targets if validation["valid"] else []
+    runner_target = runner_target if validation["valid"] else None
 
     return {
         "official_targets": official_targets,
@@ -697,19 +702,19 @@ def _policy(config: TargetPolicy | Any | None) -> TargetPolicy:
     if config is None:
         return TargetPolicy()
     return TargetPolicy(
-        min_normal_reaction_target_pips=float(getattr(config, "min_normal_reaction_target_pips", 5.0)),
-        preferred_reaction_target_pips=float(getattr(config, "preferred_reaction_target_pips", 10.0)),
+        min_normal_reaction_target_pips=float(getattr(config, "min_normal_reaction_target_pips", 50.0)),
+        preferred_reaction_target_pips=float(getattr(config, "preferred_reaction_target_pips", 100.0)),
         allow_vwap_1r_target=bool(getattr(config, "allow_vwap_1r_target", True)),
-        min_vwap_target_pips=float(getattr(config, "min_vwap_target_pips", 3.0)),
+        min_vwap_target_pips=float(getattr(config, "min_vwap_target_pips", 30.0)),
         min_rr_normal=float(getattr(config, "min_rr_normal", 1.5)),
         min_rr_vwap_scalp=float(getattr(config, "min_rr_vwap_scalp", 1.0)),
         max_official_targets=int(getattr(config, "max_official_targets", 3)),
         allow_runner_target=bool(getattr(config, "allow_runner_target", True)),
-        min_gap_between_official_targets_pips=float(getattr(config, "min_gap_between_official_targets_pips", 5.0)),
-        min_gap_between_scalp_targets_pips=float(getattr(config, "min_gap_between_scalp_targets_pips", 3.0)),
-        target_cluster_tolerance_pips=float(getattr(config, "target_cluster_tolerance_pips", 2.5)),
-        min_tp1_distance_pips=float(getattr(config, "min_tp1_distance_pips", 5.0)),
-        min_tp1_distance_pips_vwap_scalp=float(getattr(config, "min_tp1_distance_pips_vwap_scalp", 3.0)),
+        min_gap_between_official_targets_pips=float(getattr(config, "min_gap_between_official_targets_pips", 50.0)),
+        min_gap_between_scalp_targets_pips=float(getattr(config, "min_gap_between_scalp_targets_pips", 30.0)),
+        target_cluster_tolerance_pips=float(getattr(config, "target_cluster_tolerance_pips", 25.0)),
+        min_tp1_distance_pips=float(getattr(config, "min_tp1_distance_pips", 50.0)),
+        min_tp1_distance_pips_vwap_scalp=float(getattr(config, "min_tp1_distance_pips_vwap_scalp", 30.0)),
         hide_micro_targets=bool(getattr(config, "hide_micro_targets", True)),
         max_candidate_targets_debug=int(getattr(config, "max_candidate_targets_debug", 20)),
         show_theoretical_plan_on_watch=bool(getattr(config, "show_theoretical_plan_on_watch", True)),

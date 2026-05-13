@@ -5,6 +5,7 @@ from typing import Any
 
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision
+from dazro_trade.core.symbols import price_to_pips
 
 log = logging.getLogger(__name__)
 
@@ -50,14 +51,15 @@ def format_scalping_decision(decision: ScalpingDecision) -> str:
     direction_label = {"LONG": "LONG", "SHORT": "SHORT", "WAIT": "WAIT"}.get(decision.direction, "WAIT")
     operational = _is_operational_message(decision)
     if operational:
+        entry_ref = decision.entry or _entry_midpoint(decision.entry_area)
         lines = [f"{decision.symbol} — {direction_label} VALID", ""]
-        lines.append(f"Entry: {_fmt_price(decision.entry or _entry_midpoint(decision.entry_area))}")
+        lines.append(f"Entry: {_fmt_price(entry_ref)}")
         if decision.entry_area:
             lines.append(f"Entry area: {_fmt_price(decision.entry_area[0])} - {_fmt_price(decision.entry_area[1])}")
         lines.append(f"SL: {_fmt_price(decision.stop)}")
         lines.append("")
         for target in decision.targets[:3]:
-            lines.append(_format_target_line(target, theoretical=False))
+            lines.append(_format_target_line(target, theoretical=False, symbol=decision.symbol, entry=entry_ref))
         lines.extend(["", "Target validation:"])
         lines.extend(f"- {reason}" for reason in _target_validation_reasons(decision))
         lines.extend(_setup_footer(decision, include_missing=False))
@@ -111,8 +113,11 @@ def format_scalping_decision(decision: ScalpingDecision) -> str:
         ]
     )
     theoretical_targets = decision.theoretical_targets or []
+    entry_ref = decision.entry or _entry_midpoint(decision.entry_area)
+    if _target_rr_insufficient(decision):
+        lines.append("- Target/RR insufficiente: non valido come TP operativo")
     if theoretical_targets:
-        lines.extend(_format_target_line(target, theoretical=True) for target in theoretical_targets[:3])
+        lines.extend(_format_target_line(target, theoretical=True, symbol=decision.symbol, entry=entry_ref) for target in theoretical_targets[:3])
     else:
         lines.append("- nessun TP teorico pulito disponibile")
     lines.extend(["", "Manca:"])
@@ -172,17 +177,43 @@ def _possible_direction(decision: ScalpingDecision) -> str:
     return "UNCLEAR / LIQUIDITY SEARCH"
 
 
-def _format_target_line(target: dict, *, theoretical: bool) -> str:
+def _format_target_line(target: dict, *, theoretical: bool, symbol: str, entry: float | None) -> str:
     label = target.get("label", "TP")
     if theoretical and "teorico" not in str(label).lower():
         label = f"{label} teorico"
-    return f"- {label}: {_fmt_price(target.get('price'))} — {target.get('basis', '-')} — {target.get('distance_pips', '-')} pips — RR {target.get('rr', '-')}"
+    return f"- {label}: {_fmt_price(target.get('price'))} - {target.get('basis', '-')} - {_target_distance_text(target, symbol=symbol, entry=entry)} - RR {target.get('rr', '-')}"
+
+
+def _target_distance_text(target: dict, *, symbol: str, entry: float | None) -> str:
+    price = target.get("price")
+    if entry is not None and price is not None:
+        try:
+            distance = abs(float(price) - float(entry))
+            pips = price_to_pips(symbol, distance)
+            return f"{_fmt_decimal(pips)} pips / {distance:.2f}$"
+        except (TypeError, ValueError):
+            pass
+    raw = target.get("distance_pips", "-")
+    return f"{raw} pips"
+
+
+def _fmt_decimal(value: float) -> str:
+    return f"{float(value):.1f}".rstrip("0").rstrip(".")
 
 
 def _target_validation_reasons(decision: ScalpingDecision) -> list[str]:
     reasons = list((decision.target_validation or {}).get("reason_codes") or [])
     reasons.extend(reason for reason in decision.reason_codes if reason.startswith(("official_", "target_", "vwap_", "normal_", "preferred_")))
     return _dedupe(reasons)[:8] or ["official_tp_ladder_valid"]
+
+
+def _target_rr_insufficient(decision: ScalpingDecision) -> bool:
+    validation = decision.target_validation or {}
+    if validation.get("valid", True):
+        return False
+    reasons = set(validation.get("reason_codes") or [])
+    reasons.update(decision.reason_codes)
+    return bool(reasons & {"official_tp1_too_close", "target_too_close_for_official_tp", "rr_below_minimum_normal", "rr_below_minimum_vwap_scalp", "target_rr_insufficient"})
 
 
 def _missing_items(decision: ScalpingDecision) -> list[str]:

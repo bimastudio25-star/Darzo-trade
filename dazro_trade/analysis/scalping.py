@@ -39,26 +39,26 @@ class ScalpingConfig:
     entry_buffer_points: float = 0.30
     invalidation_buffer_points: float = 0.80
     strict_closed_candle: bool = True
-    min_normal_reaction_target_pips: float = 5.0
-    preferred_reaction_target_pips: float = 10.0
+    min_normal_reaction_target_pips: float = 50.0
+    preferred_reaction_target_pips: float = 100.0
     allow_vwap_1r_target: bool = True
-    min_vwap_target_pips: float = 3.0
+    min_vwap_target_pips: float = 30.0
     min_rr_normal: float = 1.5
     min_rr_vwap_scalp: float = 1.0
     max_official_targets: int = 3
     allow_runner_target: bool = True
-    min_gap_between_official_targets_pips: float = 5.0
-    min_gap_between_scalp_targets_pips: float = 3.0
-    target_cluster_tolerance_pips: float = 2.5
-    min_tp1_distance_pips: float = 5.0
-    min_tp1_distance_pips_vwap_scalp: float = 3.0
+    min_gap_between_official_targets_pips: float = 50.0
+    min_gap_between_scalp_targets_pips: float = 30.0
+    target_cluster_tolerance_pips: float = 25.0
+    min_tp1_distance_pips: float = 50.0
+    min_tp1_distance_pips_vwap_scalp: float = 30.0
     hide_micro_targets: bool = True
     max_candidate_targets_debug: int = 20
     show_theoretical_plan_on_watch: bool = True
     max_theoretical_targets_on_watch: int = 3
-    theoretical_sl_buffer_pips: float = 1.0
-    min_stop_distance_pips: float = 2.0
-    max_stop_distance_pips: float = 15.0
+    theoretical_sl_buffer_pips: float = 10.0
+    min_stop_distance_pips: float = 20.0
+    max_stop_distance_pips: float = 150.0
 
 
 @dataclass
