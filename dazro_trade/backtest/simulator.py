@@ -7,6 +7,9 @@ from typing import Any, Literal
 
 import pandas as pd
 
+from dazro_trade.core.symbols import price_to_pips
+from dazro_trade.strategy.risk_labels import RiskLabel, classify_sl_risk
+
 log = logging.getLogger(__name__)
 
 Outcome = Literal["SL", "TP1", "TP2", "TP3", "TP4", "STILL_OPEN", "NO_DATA"]
@@ -35,6 +38,18 @@ class BacktestSignal:
     @property
     def sl_distance(self) -> float:
         return abs(float(self.entry) - float(self.stop))
+
+    @property
+    def sl_distance_usd(self) -> float:
+        return round(self.sl_distance, 4)
+
+    @property
+    def sl_distance_pips(self) -> float:
+        return round(price_to_pips(self.symbol, self.sl_distance), 1)
+
+    @property
+    def risk_label(self) -> RiskLabel:
+        return classify_sl_risk(self.sl_distance)
 
 
 @dataclass

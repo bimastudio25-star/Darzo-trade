@@ -29,6 +29,7 @@ from dazro_trade.strategy import (
     load_mae_stats_for_bucket,
     persist_harvested_sample,
 )
+from dazro_trade.strategy.risk_labels import classify_sl_risk, risk_label_warning
 from dazro_trade.risk.manager import RiskManager
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
@@ -995,16 +996,24 @@ class ScalpingScanner:
         rr4_risk = signal.rr_to_tp4_risk if signal.rr_to_tp4_risk is not None else signal.rr_tp4
         rr_cons = signal.rr_to_tp1_conservative if signal.rr_to_tp1_conservative is not None else signal.rr_tp1
         rr4_cons = signal.rr_to_tp4_conservative if signal.rr_to_tp4_conservative is not None else signal.rr_tp4
+        sl_risk_distance = abs(float(sl_risk) - float(signal.entry)) if sl_risk is not None else 0.0
+        sl_cons_distance = abs(float(sl_conservative) - float(signal.entry)) if sl_conservative is not None else 0.0
+        sl_risk_pips = round(price_to_pips(signal.symbol, sl_risk_distance), 1)
+        sl_cons_pips = round(price_to_pips(signal.symbol, sl_cons_distance), 1)
+        risk_label_risk = classify_sl_risk(sl_risk_distance)
+        risk_label_cons = classify_sl_risk(sl_cons_distance)
+        risk_warning = risk_label_warning(risk_label_risk) or risk_label_warning(risk_label_cons)
         lines = [
             f"{signal.symbol} - LIQUIDITY EXPANSION MODEL (STRATEGY 2.0)",
             f"Direzione: {signal.direction}",
+            f"Setup type: liquidity_expansion_model_2_0 / {signal.candle_model.lower()}",
             f"Modello candela: {signal.candle_model}",
             f"{ref_type.replace('_', ' ')} reference: {reference_price}",
             f"Fonte H1: {ref.h1_source}",
             f"Filtro M15 :45: source={ref.m15_source} high={ref.m15_ref_high} low={ref.m15_ref_low} -> sequenza valida",
             f"Entry: {signal.entry} (trigger: {signal.trigger_kind})",
-            f"SL Risk: {sl_risk}",
-            f"SL Conservative: {sl_conservative}",
+            f"SL Risk: {sl_risk} | distance: {round(sl_risk_distance, 2)} USD / {sl_risk_pips} pips | label: {risk_label_risk}",
+            f"SL Conservative: {sl_conservative} | distance: {round(sl_cons_distance, 2)} USD / {sl_cons_pips} pips | label: {risk_label_cons}",
             f"TP1: {signal.tp1}",
             f"TP2: {signal.tp2}",
             f"TP3: {signal.tp3}",
@@ -1013,6 +1022,8 @@ class ScalpingScanner:
             f"RR Risk TP1: {rr_risk} | TP4: {rr4_risk}",
             f"RR Conservative TP1: {rr_cons} | TP4: {rr4_cons}",
         ]
+        if risk_warning:
+            lines.append(f"NOTA RISCHIO: {risk_warning}")
         if lot_size is not None:
             lines.append(f"Lot size suggerito: {lot_size}")
         mae = signal.mae_stats_long if signal.direction == "LONG" else signal.mae_stats_short
