@@ -98,6 +98,9 @@ class Settings:
     ledger_db_path: str = "data/dazro_ledger.sqlite"
     mae_db_path: str = "data/darzo_trade.db"
     mae_engine_enabled: bool = True
+    mae_sample_harvest_enabled: bool = True
+    mae_close_back_inside_max_m15_candles: int = 4
+    mae_cleanup_every_n_saves: int = 100
     log_level: str = "INFO"
 
     send_watch_alerts: bool = False
@@ -272,6 +275,9 @@ class Settings:
             ledger_db_path=os.getenv("LEDGER_DB_PATH", "data/dazro_ledger.sqlite"),
             mae_db_path=os.getenv("MAE_DB_PATH", "data/darzo_trade.db"),
             mae_engine_enabled=_bool(os.getenv("MAE_ENGINE_ENABLED"), True),
+            mae_sample_harvest_enabled=_bool(os.getenv("MAE_SAMPLE_HARVEST_ENABLED"), True),
+            mae_close_back_inside_max_m15_candles=_int("MAE_CLOSE_BACK_INSIDE_MAX_M15_CANDLES", 4),
+            mae_cleanup_every_n_saves=_int("MAE_CLEANUP_EVERY_N_SAVES", 100),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             send_watch_alerts=_bool(os.getenv("SEND_WATCH_ALERTS"), False),
             send_approaching_alerts=_bool(os.getenv("SEND_APPROACHING_ALERTS"), False),

@@ -22,6 +22,13 @@ from dazro_trade.analysis.statistical_scalp import StatisticalScalpSignal, evalu
 from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, evaluate_liquidity_expansion
 from dazro_trade.runtime.coordinator import CoordinatorDecision, combine_strategy_results
 from dazro_trade.runtime.session_bias import SessionRelationship, classify_session_relationship
+from dazro_trade.storage import cleanup_old_mae_samples, init_db as init_mae_db
+from dazro_trade.strategy import (
+    classify_volatility_regime,
+    detect_manipulation_distribution,
+    load_mae_stats_for_bucket,
+    persist_harvested_sample,
+)
 from dazro_trade.risk.manager import RiskManager
 from dazro_trade.core.config import Settings
 from dazro_trade.core.models import ScalpingDecision, SetupZone
@@ -131,6 +138,12 @@ class ScalpingScanner:
         self.latest_liquidity_expansion_signal: LiquidityExpansionSignal | None = None
         self.latest_coordinator_decision: CoordinatorDecision | None = None
         self.latest_session_bias: SessionRelationship | None = None
+        self.latest_volatility_regime: str = "unknown"
+        self.latest_mae_stats_long: dict | None = None
+        self.latest_mae_stats_short: dict | None = None
+        self.latest_harvested_sample_id: int | None = None
+        self._mae_saves_since_cleanup: int = 0
+        self._mae_db_initialized: bool = False
         self.latest_zones: list[SetupZone] = []
         self.trades: list[VirtualTrade] = []
         self.stats = ScannerStats()
@@ -242,6 +255,10 @@ class ScalpingScanner:
         self._track_virtual_entries(market_data, now, previous_scan)
         self.last_scan = now
 
+        self._ensure_mae_db_ready()
+        self.latest_volatility_regime = classify_volatility_regime(market_data.get("M15", pd.DataFrame()))
+        self._refresh_mae_stats_cache(session)
+        self._maybe_harvest_mae_sample(market_data, session)
         if self.settings.session_bias_enabled:
             self.latest_session_bias = classify_session_relationship(
                 market_data,
@@ -516,6 +533,73 @@ class ScalpingScanner:
             PAPER_DISCLAIMER,
         ]
         return "\n".join(lines)
+
+    def _ensure_mae_db_ready(self) -> None:
+        if self._mae_db_initialized:
+            return
+        if not self.settings.mae_engine_enabled and not self.settings.mae_sample_harvest_enabled:
+            return
+        try:
+            init_mae_db(self.settings.mae_db_path)
+            cleanup_old_mae_samples(max_samples_per_bucket=5000, db_path=self.settings.mae_db_path)
+            self._mae_db_initialized = True
+        except Exception as exc:
+            log.warning("mae_db_init_failed: %s", exc)
+
+    def _refresh_mae_stats_cache(self, session: str) -> None:
+        if not self.settings.mae_engine_enabled:
+            self.latest_mae_stats_long = None
+            self.latest_mae_stats_short = None
+            return
+        try:
+            self.latest_mae_stats_long = load_mae_stats_for_bucket(
+                session=session,
+                reference_type="H1_LOW",
+                volatility_regime=self.latest_volatility_regime if self.latest_volatility_regime != "unknown" else None,
+                db_path=self.settings.mae_db_path,
+            )
+            self.latest_mae_stats_short = load_mae_stats_for_bucket(
+                session=session,
+                reference_type="H1_HIGH",
+                volatility_regime=self.latest_volatility_regime if self.latest_volatility_regime != "unknown" else None,
+                db_path=self.settings.mae_db_path,
+            )
+        except Exception as exc:
+            log.warning("mae_stats_cache_refresh_failed: %s", exc)
+            self.latest_mae_stats_long = None
+            self.latest_mae_stats_short = None
+
+    def _maybe_harvest_mae_sample(self, market_data: dict[str, pd.DataFrame], session: str) -> None:
+        if not self.settings.mae_sample_harvest_enabled:
+            return
+        h1 = market_data.get("H1")
+        m15 = market_data.get("M15")
+        if h1 is None or len(h1) == 0:
+            return
+        try:
+            harvested = detect_manipulation_distribution(
+                h1,
+                m15 if m15 is not None else pd.DataFrame(),
+                session=session,
+                close_back_inside_max_m15_candles=self.settings.mae_close_back_inside_max_m15_candles,
+                volatility_regime=self.latest_volatility_regime,
+            )
+        except Exception as exc:
+            log.warning("mae_harvest_detection_failed: %s", exc)
+            return
+        if harvested is None:
+            return
+        sample_id = persist_harvested_sample(harvested, db_path=self.settings.mae_db_path)
+        if sample_id is None:
+            return
+        self.latest_harvested_sample_id = sample_id
+        self._mae_saves_since_cleanup += 1
+        if self._mae_saves_since_cleanup >= max(1, self.settings.mae_cleanup_every_n_saves):
+            try:
+                cleanup_old_mae_samples(max_samples_per_bucket=5000, db_path=self.settings.mae_db_path)
+            except Exception as exc:
+                log.warning("mae_cleanup_failed: %s", exc)
+            self._mae_saves_since_cleanup = 0
 
     def _compute_liquidity_expansion_signal(self, market_data: dict[str, pd.DataFrame], session: str, now: datetime) -> LiquidityExpansionSignal | None:
         if self.first_silent_scan_pending or self.paused:
@@ -1562,6 +1646,16 @@ class ScalpingScanner:
             lines.append("Strategy 1.0 rejected reasons:")
             for r in adelin_rejected[:5]:
                 lines.append(f"- {r}")
+        if self.settings.mae_engine_enabled and (self.latest_mae_stats_long or self.latest_mae_stats_short):
+            lines.extend(["", "MAE STATS BUCKET"])
+            lines.append(f"Volatility regime: {self.latest_volatility_regime}")
+            for label, stats in (("H1_LOW (LONG side)", self.latest_mae_stats_long), ("H1_HIGH (SHORT side)", self.latest_mae_stats_short)):
+                if stats is None:
+                    continue
+                lines.append(f"- {label}: samples={stats.get('sample_count', 0)} | confidence={stats.get('confidence_level', '-')}")
+                lines.append(f"  mean={stats.get('mae_mean', '-')} | median={stats.get('mae_median', '-')} | p90={stats.get('mae_p90', '-')} | p95={stats.get('mae_p95', '-')} | max={stats.get('mae_max', '-')}")
+                if stats.get("uses_static_fallback"):
+                    lines.append("  using static fallback because sample_count < 30")
         bias = self.latest_session_bias
         if bias is not None:
             lines.extend([
