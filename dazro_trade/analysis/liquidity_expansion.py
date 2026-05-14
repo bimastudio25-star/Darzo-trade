@@ -98,6 +98,8 @@ class LiquidityExpansionSignal:
     rr_to_tp2_conservative: float | None = None
     rr_to_tp3_conservative: float | None = None
     rr_to_tp4_conservative: float | None = None
+    mae_stats_long: dict | None = None
+    mae_stats_short: dict | None = None
 
 
 def _rr(entry: float, stop: float, target: float) -> float:
@@ -117,6 +119,7 @@ def calculate_h1_liquidity_levels(
     pip_size: float | None = None,
     *,
     symbol: str = "XAUUSD",
+    mae_stats: dict | None = None,
 ) -> H1LiquidityLevels:
     spec = get_symbol_spec(symbol)
     if pip_size is not None and abs(float(pip_size) - spec.pip_size) > 1e-12:
@@ -125,13 +128,21 @@ def calculate_h1_liquidity_levels(
     ref = float(reference_price)
     direction_sign = 1.0 if reference_type == "H1_HIGH" else -1.0
     target_sign = -direction_sign
-    entry = ref + direction_sign * _price_delta(symbol, H1_MAE_ENTRY_DISTANCE_PRICE)
-    sl_risk = ref + direction_sign * _price_delta(symbol, H1_SL_RISK_DISTANCE_PRICE)
-    sl_conservative = ref + direction_sign * _price_delta(symbol, H1_SL_CONSERVATIVE_DISTANCE_PRICE)
-    tp1 = ref + target_sign * _price_delta(symbol, H1_TP1_DISTANCE_PRICE)
-    tp2 = ref + target_sign * _price_delta(symbol, H1_TP2_DISTANCE_PRICE)
-    tp3 = ref + target_sign * _price_delta(symbol, H1_TP3_DISTANCE_PRICE)
-    tp4 = ref + target_sign * _price_delta(symbol, H1_TP4_DISTANCE_PRICE)
+    stats = mae_stats or {}
+    entry_distance = float(stats.get("entry_distance", H1_MAE_ENTRY_DISTANCE_PRICE))
+    sl_risk_distance = float(stats.get("sl_risk_distance", H1_SL_RISK_DISTANCE_PRICE))
+    sl_conservative_distance = float(stats.get("sl_conservative_distance", H1_SL_CONSERVATIVE_DISTANCE_PRICE))
+    tp1_distance = float(stats.get("tp1_distance", H1_TP1_DISTANCE_PRICE))
+    tp2_distance = float(stats.get("tp2_distance", H1_TP2_DISTANCE_PRICE))
+    tp3_distance = float(stats.get("tp3_distance", H1_TP3_DISTANCE_PRICE))
+    tp4_distance = float(stats.get("tp4_distance", H1_TP4_DISTANCE_PRICE))
+    entry = ref + direction_sign * _price_delta(symbol, entry_distance)
+    sl_risk = ref + direction_sign * _price_delta(symbol, sl_risk_distance)
+    sl_conservative = ref + direction_sign * _price_delta(symbol, sl_conservative_distance)
+    tp1 = ref + target_sign * _price_delta(symbol, tp1_distance)
+    tp2 = ref + target_sign * _price_delta(symbol, tp2_distance)
+    tp3 = ref + target_sign * _price_delta(symbol, tp3_distance)
+    tp4 = ref + target_sign * _price_delta(symbol, tp4_distance)
 
     return H1LiquidityLevels(
         reference_price=normalize_price(symbol, ref),
@@ -408,6 +419,10 @@ def evaluate_liquidity_expansion(
     range_in_range_max_pips: float = 30.0,
     m15_reference_timezone: str = "broker",
     now_utc: datetime | None = None,
+    session: str | None = None,
+    mae_engine_enabled: bool = False,
+    mae_db_path: str | None = None,
+    volatility_regime: str | None = None,
 ) -> LiquidityExpansionSignal | None:
     m1 = _normalize(m1_df)
     m5 = _normalize(m5_df)
@@ -449,8 +464,29 @@ def evaluate_liquidity_expansion(
     long_valid = t_low_h1 is not None and (t_high_m15 is None or t_low_h1 <= t_high_m15)
     short_valid = t_high_h1 is not None and (t_low_m15 is None or t_high_h1 <= t_low_m15)
 
-    long_levels = calculate_h1_liquidity_levels(reference.h1_ref_low, "H1_LOW", symbol=symbol)
-    short_levels = calculate_h1_liquidity_levels(reference.h1_ref_high, "H1_HIGH", symbol=symbol)
+    mae_stats_long: dict | None = None
+    mae_stats_short: dict | None = None
+    if mae_engine_enabled:
+        try:
+            from dazro_trade.strategy.mae_engine import load_mae_stats_for_bucket
+            db_path = mae_db_path or "data/darzo_trade.db"
+            mae_stats_long = load_mae_stats_for_bucket(
+                session=session,
+                reference_type="H1_LOW",
+                volatility_regime=volatility_regime,
+                db_path=db_path,
+            )
+            mae_stats_short = load_mae_stats_for_bucket(
+                session=session,
+                reference_type="H1_HIGH",
+                volatility_regime=volatility_regime,
+                db_path=db_path,
+            )
+        except Exception:
+            mae_stats_long = None
+            mae_stats_short = None
+    long_levels = calculate_h1_liquidity_levels(reference.h1_ref_low, "H1_LOW", symbol=symbol, mae_stats=mae_stats_long)
+    short_levels = calculate_h1_liquidity_levels(reference.h1_ref_high, "H1_HIGH", symbol=symbol, mae_stats=mae_stats_short)
 
     direction: ExpansionDirection | None = None
     levels: H1LiquidityLevels | None = None
@@ -515,6 +551,8 @@ def evaluate_liquidity_expansion(
         rr_to_tp2_conservative=levels.rr_to_tp2_conservative,
         rr_to_tp3_conservative=levels.rr_to_tp3_conservative,
         rr_to_tp4_conservative=levels.rr_to_tp4_conservative,
+        mae_stats_long=mae_stats_long,
+        mae_stats_short=mae_stats_short,
     )
 
 

@@ -4,6 +4,9 @@ import logging
 import statistics
 from typing import Any, Iterable, Literal
 
+from dazro_trade.storage.database import DEFAULT_MAE_DB_PATH
+from dazro_trade.storage.mae_sample_repository import DEFAULT_QUERY_LIMIT, get_mae_samples
+
 log = logging.getLogger(__name__)
 
 ReferenceType = Literal["H1_HIGH", "H1_LOW"]
@@ -156,9 +159,38 @@ def calculate_mae_stats(samples: Iterable[Any], *, entry_mode: str = "mean") -> 
     }
 
 
+def load_mae_stats_for_bucket(
+    *,
+    session: str | None,
+    reference_type: ReferenceType,
+    volatility_regime: str | None = None,
+    timeframe: str = "H1",
+    setup_type: str = "manipulation_distribution",
+    limit: int = DEFAULT_QUERY_LIMIT,
+    db_path: str = DEFAULT_MAE_DB_PATH,
+    entry_mode: str = "mean",
+) -> dict[str, Any]:
+    try:
+        rows = get_mae_samples(
+            timeframe=timeframe,
+            session=session,
+            reference_type=reference_type,
+            setup_type=setup_type,
+            volatility_regime=volatility_regime,
+            limit=limit,
+            db_path=db_path,
+        )
+    except Exception as exc:
+        log.warning("load_mae_stats_for_bucket failed: %s — using static fallback", exc)
+        rows = []
+    return calculate_mae_stats(rows, entry_mode=entry_mode)
+
+
 __all__ = [
     "DEFAULT_XAUUSD_MAE_STATS",
     "MAE_DISTANCE_CONSTANTS",
+    "ReferenceType",
     "calculate_mae_stats",
     "calculate_manipulation_depth",
+    "load_mae_stats_for_bucket",
 ]

@@ -541,6 +541,9 @@ class ScalpingScanner:
             range_in_range_max_pips=self.settings.liquidity_expansion_range_in_range_max_pips,
             m15_reference_timezone=self.settings.liquidity_expansion_m15_reference_timezone,
             now_utc=now,
+            session=session,
+            mae_engine_enabled=self.settings.mae_engine_enabled,
+            mae_db_path=self.settings.mae_db_path,
         )
         if signal is None:
             return None
@@ -928,6 +931,15 @@ class ScalpingScanner:
         ]
         if lot_size is not None:
             lines.append(f"Lot size suggerito: {lot_size}")
+        mae = signal.mae_stats_long if signal.direction == "LONG" else signal.mae_stats_short
+        if mae is not None:
+            lines.append("")
+            lines.append("MAE STATS BUCKET:")
+            lines.append(f"- Samples: {mae.get('sample_count', 0)} | Confidence: {mae.get('confidence_level', '-')}")
+            lines.append(f"- Mean: {mae.get('mae_mean', '-')} | Median: {mae.get('mae_median', '-')}")
+            lines.append(f"- P90 (SL Risk): {mae.get('mae_p90', '-')} | P95 (SL Cons.): {mae.get('mae_p95', '-')} | Max: {mae.get('mae_max', '-')}")
+            if mae.get("uses_static_fallback"):
+                lines.append("- using static fallback because sample_count < 30")
         lines.extend([
             "Gestione: alla presa del TP1 lo stop e' spostato a BE automaticamente.",
             "Reason codes:",
