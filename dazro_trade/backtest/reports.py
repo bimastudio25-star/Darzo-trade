@@ -66,6 +66,23 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
             writer.writerow(row)
 
 
+def _serialize_diagnostics(diagnostics: dict[str, object] | None) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    if not diagnostics:
+        return out
+    for name, value in diagnostics.items():
+        if value is None:
+            continue
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            out[name] = to_dict()
+        elif isinstance(value, dict):
+            out[name] = dict(value)
+        else:
+            out[name] = {"repr": repr(value)}
+    return out
+
+
 def export_backtest_reports(
     *,
     output_dir: str,
@@ -73,6 +90,7 @@ def export_backtest_reports(
     signals: Iterable[BacktestSignal],
     trades: Iterable[BacktestTrade],
     equity_curve: Iterable[tuple[str, float]] | None = None,
+    strategy_diagnostics: dict[str, object] | None = None,
 ) -> dict[str, str]:
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -89,17 +107,23 @@ def export_backtest_reports(
         "executed_trades": str(out_root / "executed_trades.csv"),
         "rejected_signals": str(out_root / "rejected_signals.csv"),
         "equity_curve": str(out_root / "equity_curve.csv"),
+        "diagnostics_json": str(out_root / "strategy_diagnostics.json"),
     }
 
     metrics_dict = metrics.to_dict()
+    diag_dict = _serialize_diagnostics(strategy_diagnostics)
+    if diag_dict:
+        metrics_dict = {**metrics_dict, "strategy_diagnostics": diag_dict}
     Path(paths["summary_json"]).write_text(json.dumps(metrics_dict, indent=2), encoding="utf-8")
     _write_csv(Path(paths["summary_csv"]), [{"metric": k, "value": v if not isinstance(v, dict) else json.dumps(v)} for k, v in metrics_dict.items()])
     _write_csv(Path(paths["executed_trades"]), executed_rows)
     _write_csv(Path(paths["rejected_signals"]), rejected_rows)
     eq_rows = [{"time": t, "cumulative_r": r} for t, r in (equity_curve or [])]
     _write_csv(Path(paths["equity_curve"]), eq_rows)
+    Path(paths["diagnostics_json"]).write_text(json.dumps(diag_dict, indent=2), encoding="utf-8")
 
-    log.info("backtest_reports_exported dir=%s executed=%s rejected=%s", out_root, len(executed_rows), len(rejected_rows))
+    log.info("backtest_reports_exported dir=%s executed=%s rejected=%s diagnostics=%s",
+             out_root, len(executed_rows), len(rejected_rows), list(diag_dict.keys()))
     return paths
 
 

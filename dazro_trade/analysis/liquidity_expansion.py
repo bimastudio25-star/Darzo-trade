@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -407,6 +407,48 @@ def _classify_candle_model(h1_df: pd.DataFrame) -> CandleModel:
     return "IMMEDIATE_EXPANSION"
 
 
+@dataclass
+class LiquidityExpansionDiagnostics:
+    total_calls: int = 0
+    skip_missing_data: int = 0
+    skip_no_reference: int = 0
+    skip_insufficient_stats: int = 0
+    skip_no_current_window: int = 0
+    h1_sweep_long_detected: int = 0
+    h1_sweep_short_detected: int = 0
+    m15_long_validity_passed: int = 0
+    m15_short_validity_passed: int = 0
+    skip_no_validity: int = 0
+    skip_mae_gate_failed: int = 0
+    skip_no_trigger: int = 0
+    skip_invalid_risk: int = 0
+    signals_emitted: int = 0
+    long_signals: int = 0
+    short_signals: int = 0
+    trigger_kind_counts: dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "total_calls": self.total_calls,
+            "skip_missing_data": self.skip_missing_data,
+            "skip_no_reference": self.skip_no_reference,
+            "skip_insufficient_stats": self.skip_insufficient_stats,
+            "skip_no_current_window": self.skip_no_current_window,
+            "h1_sweep_long_detected": self.h1_sweep_long_detected,
+            "h1_sweep_short_detected": self.h1_sweep_short_detected,
+            "m15_long_validity_passed": self.m15_long_validity_passed,
+            "m15_short_validity_passed": self.m15_short_validity_passed,
+            "skip_no_validity": self.skip_no_validity,
+            "skip_mae_gate_failed": self.skip_mae_gate_failed,
+            "skip_no_trigger": self.skip_no_trigger,
+            "skip_invalid_risk": self.skip_invalid_risk,
+            "signals_emitted": self.signals_emitted,
+            "long_signals": self.long_signals,
+            "short_signals": self.short_signals,
+            "trigger_kind_counts": dict(self.trigger_kind_counts),
+        }
+
+
 def evaluate_liquidity_expansion(
     m1_df: pd.DataFrame,
     m5_df: pd.DataFrame,
@@ -423,14 +465,21 @@ def evaluate_liquidity_expansion(
     mae_engine_enabled: bool = False,
     mae_db_path: str | None = None,
     volatility_regime: str | None = None,
+    diagnostics: LiquidityExpansionDiagnostics | None = None,
 ) -> LiquidityExpansionSignal | None:
+    if diagnostics is not None:
+        diagnostics.total_calls += 1
     m1 = _normalize(m1_df)
     m5 = _normalize(m5_df)
     m15 = _normalize(m15_df)
     h1 = _normalize(h1_df)
     if len(m1) == 0 or len(m5) == 0 or len(m15) == 0 or len(h1) < 2:
+        if diagnostics is not None:
+            diagnostics.skip_missing_data += 1
         return None
     if "time" not in m1.columns or "time" not in h1.columns:
+        if diagnostics is not None:
+            diagnostics.skip_missing_data += 1
         return None
 
     reference = build_reference_levels(
@@ -440,15 +489,21 @@ def evaluate_liquidity_expansion(
         m15_reference_timezone=m15_reference_timezone,
     )
     if reference is None:
+        if diagnostics is not None:
+            diagnostics.skip_no_reference += 1
         return None
 
     stats = compute_h1_sweep_stats(h1, symbol=symbol, lookback_h1=lookback_h1)
     if stats.insufficient:
+        if diagnostics is not None:
+            diagnostics.skip_insufficient_stats += 1
         return None
 
     latest_h1_open = pd.Timestamp(h1.iloc[-1]["time"])
     current_window = m1[m1["time"] >= latest_h1_open]
     if len(current_window) == 0:
+        if diagnostics is not None:
+            diagnostics.skip_no_current_window += 1
         return None
 
     high_m15_hits = current_window[current_window["h"].astype(float) >= reference.m15_ref_high]
@@ -463,6 +518,17 @@ def evaluate_liquidity_expansion(
 
     long_valid = t_low_h1 is not None and (t_high_m15 is None or t_low_h1 <= t_high_m15)
     short_valid = t_high_h1 is not None and (t_low_m15 is None or t_high_h1 <= t_low_m15)
+    if diagnostics is not None:
+        if t_low_h1 is not None:
+            diagnostics.h1_sweep_long_detected += 1
+        if t_high_h1 is not None:
+            diagnostics.h1_sweep_short_detected += 1
+        if long_valid:
+            diagnostics.m15_long_validity_passed += 1
+        if short_valid:
+            diagnostics.m15_short_validity_passed += 1
+        if not long_valid and not short_valid:
+            diagnostics.skip_no_validity += 1
 
     mae_stats_long: dict | None = None
     mae_stats_short: dict | None = None
@@ -498,11 +564,15 @@ def evaluate_liquidity_expansion(
         levels = short_levels
 
     if direction is None:
+        if diagnostics is not None:
+            diagnostics.skip_mae_gate_failed += 1
         return None
     assert levels is not None
 
     trigger = _detect_trigger(m1, m5, direction, reference.h1_ref_low, reference.h1_ref_high)
     if trigger is None:
+        if diagnostics is not None:
+            diagnostics.skip_no_trigger += 1
         return None
 
     entry = levels.entry
@@ -520,6 +590,14 @@ def evaluate_liquidity_expansion(
         "h1_reference_level_based_levels",
         f"reference_type_{levels.reference_type.lower()}",
     ]
+
+    if diagnostics is not None:
+        diagnostics.signals_emitted += 1
+        if direction == "LONG":
+            diagnostics.long_signals += 1
+        else:
+            diagnostics.short_signals += 1
+        diagnostics.trigger_kind_counts[trigger] = diagnostics.trigger_kind_counts.get(trigger, 0) + 1
 
     return LiquidityExpansionSignal(
         symbol=symbol,
@@ -560,6 +638,7 @@ __all__ = [
     "SweepStatistics",
     "H1LiquidityLevels",
     "H1ReferenceType",
+    "LiquidityExpansionDiagnostics",
     "LiquidityReferenceLevels",
     "LiquidityExpansionSignal",
     "build_reference_levels",

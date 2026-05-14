@@ -86,10 +86,14 @@ def main(argv: list[str] | None = None) -> int:
         signals=signals,
         trades=trades,
         equity_curve=equity_curve,
+        strategy_diagnostics=cfg.strategy_diagnostics,
     )
 
     log.info("backtest_summary signals=%s trades=%s win_rate=%.3f profit_factor=%.3f avg_r=%.3f mdd=%.3f",
              metrics.total_signals, metrics.valid_trades, metrics.win_rate, metrics.profit_factor, metrics.average_r, metrics.max_drawdown_r)
+    for name, diag in cfg.strategy_diagnostics.items():
+        d = diag.to_dict() if hasattr(diag, "to_dict") else dict(diag) if isinstance(diag, dict) else {}
+        log.info("diagnostics strategy=%s data=%s", name, d)
     log.info("backtest_reports paths=%s", paths)
     return 0
 

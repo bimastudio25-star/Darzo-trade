@@ -7,7 +7,11 @@ from typing import Callable, Iterable
 
 import pandas as pd
 
-from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, evaluate_liquidity_expansion
+from dazro_trade.analysis.liquidity_expansion import (
+    LiquidityExpansionDiagnostics,
+    LiquidityExpansionSignal,
+    evaluate_liquidity_expansion,
+)
 from dazro_trade.backtest.data_loader import slice_market_data_up_to
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade, simulate_trade_outcome
 from dazro_trade.core.config import Settings
@@ -27,6 +31,7 @@ class BacktestConfig:
     max_sim_bars: int = 480
     per_strategy_max_sl: dict[str, float] = field(default_factory=lambda: {"strategy_1_adelin": 5.0, "mtpc_range": 5.0})
     min_score_overrides: dict[str, int] = field(default_factory=dict)
+    strategy_diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 def _session_label_for(ts: datetime) -> str:
@@ -66,15 +71,22 @@ def _evaluate_strategy_2(
     when: datetime,
     session: str,
     settings: Settings,
+    diagnostics: LiquidityExpansionDiagnostics | None = None,
 ) -> list[BacktestSignal]:
     m1 = market_data.get("M1")
     m5 = market_data.get("M5")
     m15 = market_data.get("M15")
     h1 = market_data.get("H1")
     if any(df is None or len(df) == 0 for df in (m1, m5, m15, h1)):
+        if diagnostics is not None:
+            diagnostics.total_calls += 1
+            diagnostics.skip_missing_data += 1
         return []
     last_price = float(m1["close"].iloc[-1]) if "close" in m1.columns else float(m1.iloc[-1]["c"]) if "c" in m1.columns else 0.0
     if last_price <= 0:
+        if diagnostics is not None:
+            diagnostics.total_calls += 1
+            diagnostics.skip_missing_data += 1
         return []
     try:
         lex = evaluate_liquidity_expansion(
@@ -88,6 +100,7 @@ def _evaluate_strategy_2(
             session=session,
             mae_engine_enabled=False,
             mae_db_path=None,
+            diagnostics=diagnostics,
         )
     except Exception as exc:
         log.warning("strategy_2_eval_failed when=%s err=%s", when, exc)
@@ -95,6 +108,12 @@ def _evaluate_strategy_2(
     if lex is None:
         return []
     return [_strategy_2_to_signal(lex, settings.mt5_symbol or "XAUUSD", when, session)]
+
+
+def _build_strategy_2_evaluator(diagnostics: LiquidityExpansionDiagnostics) -> "SignalEvaluator":
+    def _wrapped(market_data, when, session, settings):
+        return _evaluate_strategy_2(market_data, when, session, settings, diagnostics=diagnostics)
+    return _wrapped
 
 
 DEFAULT_EVALUATORS: dict[str, SignalEvaluator] = {
@@ -131,7 +150,11 @@ def run_backtest(
     evaluators: dict[str, SignalEvaluator] | None = None,
 ) -> tuple[list[BacktestSignal], list[BacktestTrade]]:
     cfg = config or BacktestConfig()
-    evaluators = evaluators or DEFAULT_EVALUATORS
+    if evaluators is None:
+        if "strategy_2_liquidity_expansion" not in cfg.strategy_diagnostics:
+            cfg.strategy_diagnostics["strategy_2_liquidity_expansion"] = LiquidityExpansionDiagnostics()
+        diag = cfg.strategy_diagnostics["strategy_2_liquidity_expansion"]
+        evaluators = {"strategy_2_liquidity_expansion": _build_strategy_2_evaluator(diag)}
 
     driver = market_data.get(cfg.driver_timeframe)
     if driver is None or len(driver) == 0:
