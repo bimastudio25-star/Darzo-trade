@@ -96,6 +96,7 @@ class Settings:
     orderflow_confidence_level: str = "LOW"
 
     ledger_db_path: str = "data/dazro_ledger.sqlite"
+    mae_db_path: str = "data/darzo_trade.db"
     log_level: str = "INFO"
 
     send_watch_alerts: bool = False
@@ -268,6 +269,7 @@ class Settings:
             orderflow_symbol=os.getenv("ORDERFLOW_SYMBOL", os.getenv("MT5_SYMBOL", "XAUUSD")),
             orderflow_confidence_level=os.getenv("ORDERFLOW_CONFIDENCE_LEVEL", "LOW"),
             ledger_db_path=os.getenv("LEDGER_DB_PATH", "data/dazro_ledger.sqlite"),
+            mae_db_path=os.getenv("MAE_DB_PATH", "data/darzo_trade.db"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             send_watch_alerts=_bool(os.getenv("SEND_WATCH_ALERTS"), False),
             send_approaching_alerts=_bool(os.getenv("SEND_APPROACHING_ALERTS"), False),
