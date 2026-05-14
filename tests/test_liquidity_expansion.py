@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from dazro_trade.analysis.liquidity_expansion import (
     LiquidityReferenceLevels,
     SweepStatistics,
     build_reference_levels,
+    calculate_h1_liquidity_levels,
     compute_h1_sweep_stats,
     evaluate_liquidity_expansion,
 )
@@ -96,6 +98,46 @@ def test_compute_stats_two_h1_window():
     assert stats.max_excursion_pips >= stats.mae_avg_pips
 
 
+def test_h1_high_reference_levels_are_anchored_to_reference():
+    levels = calculate_h1_liquidity_levels(
+        4679.0,
+        "H1_HIGH",
+        pips_to_price("XAUUSD", 1.0),
+        symbol="XAUUSD",
+    )
+    assert levels.reference_price == 4679.0
+    assert levels.reference_type == "H1_HIGH"
+    assert levels.entry == 4724.9
+    assert levels.sl_risk == 4777.8
+    assert levels.sl_conservative == 4802.5
+    assert levels.tp1 == 4582.2
+    assert levels.tp2 == 4485.4
+    assert levels.tp3 == 4388.6
+    assert levels.tp4 == 4291.8
+    assert levels.rr_to_tp1_risk == 2.7
+    assert levels.rr_to_tp1_conservative == 1.84
+
+
+def test_h1_low_reference_levels_are_anchored_to_reference():
+    levels = calculate_h1_liquidity_levels(
+        4679.0,
+        "H1_LOW",
+        pips_to_price("XAUUSD", 1.0),
+        symbol="XAUUSD",
+    )
+    assert levels.reference_price == 4679.0
+    assert levels.reference_type == "H1_LOW"
+    assert levels.entry == 4633.1
+    assert levels.sl_risk == 4580.2
+    assert levels.sl_conservative == 4555.5
+    assert levels.tp1 == 4775.8
+    assert levels.tp2 == 4872.6
+    assert levels.tp3 == 4969.4
+    assert levels.tp4 == 5066.2
+    assert levels.rr_to_tp4_risk == 8.19
+    assert levels.rr_to_tp4_conservative == 5.58
+
+
 def test_evaluate_returns_none_when_stats_insufficient():
     h1 = _h1_df([(100, 101, 99, 100), (100, 102, 99, 101), (101, 103, 100, 102)])
     m15 = _m15_df([(datetime(2026, 5, 13, 6, 45, tzinfo=timezone.utc), 100.5, 101.0, 100.3, 100.7)])
@@ -138,8 +180,8 @@ def test_long_happy_path_reclaim_trigger():
     ref = build_reference_levels(h1, m15, symbol="XAUUSD")
     assert ref is not None
     assert not stats.insufficient
-    mae_price = pips_to_price("XAUUSD", stats.mae_avg_pips)
-    target_price = ref.h1_ref_low - mae_price * 1.2
+    levels = calculate_h1_liquidity_levels(ref.h1_ref_low, "H1_LOW", symbol="XAUUSD")
+    target_price = levels.entry
     m1_times = [h1_open_time.to_pydatetime() + timedelta(minutes=i) for i in range(6)]
     m1 = _m1_df([
         (m1_times[0], ref.h1_ref_low, ref.h1_ref_low + 0.05, target_price, target_price + 0.02),
@@ -152,19 +194,24 @@ def test_long_happy_path_reclaim_trigger():
     assert result is not None
     assert result.direction == "LONG"
     assert result.trigger_kind == "reclaim"
+    assert result.reference_type == "H1_LOW"
+    assert result.reference_price == levels.reference_price
+    assert result.entry == levels.entry
+    assert result.stop == levels.sl_conservative
+    assert result.sl_risk == levels.sl_risk
+    assert result.sl_conservative == levels.sl_conservative
+    assert result.tp1 == levels.tp1
+    assert result.tp2 == levels.tp2
+    assert result.tp3 == levels.tp3
+    assert result.tp4 == levels.tp4
     assert result.rr_tp1 > 0
 
 
-def test_adaptive_tp1_kicks_in_when_avg_below_quartile():
-    stats = SweepStatistics(mae_avg_pips=5.0, max_excursion_pips=12.0, avg_expansion_pips=5.0, max_expansion_pips=80.0, samples=15)
-    quartile_25 = stats.max_expansion_pips * 0.25
-    assert stats.avg_expansion_pips < quartile_25
-    h1_ref_low = 4700.0
-    entry = h1_ref_low - pips_to_price("XAUUSD", stats.mae_avg_pips)
-    expected_tp1 = round(h1_ref_low + pips_to_price("XAUUSD", stats.avg_expansion_pips), 2)
-    expected_quartile_tp1 = round(h1_ref_low + pips_to_price("XAUUSD", quartile_25), 2)
-    assert expected_tp1 != expected_quartile_tp1
-    assert abs(expected_tp1 - h1_ref_low - pips_to_price("XAUUSD", stats.avg_expansion_pips)) < 1e-9
+def test_h1_reference_levels_do_not_calculate_targets_from_entry():
+    levels = calculate_h1_liquidity_levels(4700.0, "H1_LOW", symbol="XAUUSD")
+    entry_based_tp1 = round(levels.entry + pips_to_price("XAUUSD", 96.8), 2)
+    assert levels.tp1 == 4796.8
+    assert levels.tp1 != entry_based_tp1
 
 
 class _DummySender:
@@ -255,6 +302,35 @@ def test_risk_manager_blocks_signal():
     assert result is False
     assert len(sender.sent) == pre_count
     assert scanner.risk.state.signals_today == pre_register
+
+
+def test_liquidity_expansion_message_shows_absolute_h1_reference_levels():
+    signal = _make_signal(rr_tp1=2.0, direction="SHORT")
+    levels = calculate_h1_liquidity_levels(4679.0, "H1_HIGH", symbol="XAUUSD")
+    signal = replace(
+        signal,
+        entry=levels.entry,
+        stop=levels.sl_conservative,
+        tp1=levels.tp1,
+        tp2=levels.tp2,
+        tp3=levels.tp3,
+        tp4=levels.tp4,
+        reference_type=levels.reference_type,
+        reference_price=levels.reference_price,
+        sl_risk=levels.sl_risk,
+        sl_conservative=levels.sl_conservative,
+        rr_to_tp1_risk=levels.rr_to_tp1_risk,
+        rr_to_tp4_risk=levels.rr_to_tp4_risk,
+        rr_to_tp1_conservative=levels.rr_to_tp1_conservative,
+        rr_to_tp4_conservative=levels.rr_to_tp4_conservative,
+    )
+    text = ScalpingScanner._format_liquidity_expansion_message(signal, lot_size=None)
+    assert "H1 HIGH reference: 4679.0" in text
+    assert "Entry: 4724.9" in text
+    assert "SL Risk: 4777.8" in text
+    assert "SL Conservative: 4802.5" in text
+    assert "TP1: 4582.2" in text
+    assert text.splitlines()[-1] == "Paper/demo signal only. No real-money execution."
 
 
 def test_tp1_hit_moves_stop_to_be_and_progresses_to_tp2():

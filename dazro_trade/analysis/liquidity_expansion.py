@@ -7,11 +7,20 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from dazro_trade.core.symbols import pips_to_price, price_to_pips
+from dazro_trade.core.symbols import get_symbol_spec, normalize_price, pips_to_price, price_to_pips
 
 ExpansionDirection = Literal["LONG", "SHORT"]
 TriggerKind = Literal["reclaim", "rejection", "aggressive_shift", "displacement"]
 CandleModel = Literal["IMMEDIATE_EXPANSION", "ACCUMULATION_BEFORE_EXPANSION"]
+H1ReferenceType = Literal["H1_HIGH", "H1_LOW"]
+
+H1_MAE_ENTRY_DISTANCE_PRICE = 45.9
+H1_SL_RISK_DISTANCE_PRICE = 98.8
+H1_SL_CONSERVATIVE_DISTANCE_PRICE = 123.5
+H1_TP1_DISTANCE_PRICE = 96.8
+H1_TP2_DISTANCE_PRICE = 193.6
+H1_TP3_DISTANCE_PRICE = 290.4
+H1_TP4_DISTANCE_PRICE = 387.2
 
 
 @dataclass(frozen=True)
@@ -38,6 +47,27 @@ class LiquidityReferenceLevels:
 
 
 @dataclass(frozen=True)
+class H1LiquidityLevels:
+    reference_price: float
+    reference_type: H1ReferenceType
+    entry: float
+    sl_risk: float
+    sl_conservative: float
+    tp1: float
+    tp2: float
+    tp3: float
+    tp4: float
+    rr_to_tp1_risk: float
+    rr_to_tp2_risk: float
+    rr_to_tp3_risk: float
+    rr_to_tp4_risk: float
+    rr_to_tp1_conservative: float
+    rr_to_tp2_conservative: float
+    rr_to_tp3_conservative: float
+    rr_to_tp4_conservative: float
+
+
+@dataclass(frozen=True)
 class LiquidityExpansionSignal:
     symbol: str
     direction: ExpansionDirection
@@ -50,12 +80,78 @@ class LiquidityExpansionSignal:
     tp2: float
     tp3: float
     tp4: float
-    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive"]
+    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"]
     rr_tp1: float
     rr_tp4: float
     trigger_kind: TriggerKind
     reason_codes: list[str]
     timestamp_utc: datetime
+    reference_type: H1ReferenceType | None = None
+    reference_price: float | None = None
+    sl_risk: float | None = None
+    sl_conservative: float | None = None
+    rr_to_tp1_risk: float | None = None
+    rr_to_tp2_risk: float | None = None
+    rr_to_tp3_risk: float | None = None
+    rr_to_tp4_risk: float | None = None
+    rr_to_tp1_conservative: float | None = None
+    rr_to_tp2_conservative: float | None = None
+    rr_to_tp3_conservative: float | None = None
+    rr_to_tp4_conservative: float | None = None
+
+
+def _rr(entry: float, stop: float, target: float) -> float:
+    risk = abs(stop - entry)
+    if risk <= 0:
+        return 0.0
+    return round(abs(target - entry) / risk, 2)
+
+
+def _price_delta(symbol: str, distance: float) -> float:
+    return pips_to_price(symbol, price_to_pips(symbol, distance))
+
+
+def calculate_h1_liquidity_levels(
+    reference_price: float,
+    reference_type: H1ReferenceType,
+    pip_size: float | None = None,
+    *,
+    symbol: str = "XAUUSD",
+) -> H1LiquidityLevels:
+    spec = get_symbol_spec(symbol)
+    if pip_size is not None and abs(float(pip_size) - spec.pip_size) > 1e-12:
+        raise ValueError("pip_size_mismatch_for_symbol")
+
+    ref = float(reference_price)
+    direction_sign = 1.0 if reference_type == "H1_HIGH" else -1.0
+    target_sign = -direction_sign
+    entry = ref + direction_sign * _price_delta(symbol, H1_MAE_ENTRY_DISTANCE_PRICE)
+    sl_risk = ref + direction_sign * _price_delta(symbol, H1_SL_RISK_DISTANCE_PRICE)
+    sl_conservative = ref + direction_sign * _price_delta(symbol, H1_SL_CONSERVATIVE_DISTANCE_PRICE)
+    tp1 = ref + target_sign * _price_delta(symbol, H1_TP1_DISTANCE_PRICE)
+    tp2 = ref + target_sign * _price_delta(symbol, H1_TP2_DISTANCE_PRICE)
+    tp3 = ref + target_sign * _price_delta(symbol, H1_TP3_DISTANCE_PRICE)
+    tp4 = ref + target_sign * _price_delta(symbol, H1_TP4_DISTANCE_PRICE)
+
+    return H1LiquidityLevels(
+        reference_price=normalize_price(symbol, ref),
+        reference_type=reference_type,
+        entry=normalize_price(symbol, entry),
+        sl_risk=normalize_price(symbol, sl_risk),
+        sl_conservative=normalize_price(symbol, sl_conservative),
+        tp1=normalize_price(symbol, tp1),
+        tp2=normalize_price(symbol, tp2),
+        tp3=normalize_price(symbol, tp3),
+        tp4=normalize_price(symbol, tp4),
+        rr_to_tp1_risk=_rr(entry, sl_risk, tp1),
+        rr_to_tp2_risk=_rr(entry, sl_risk, tp2),
+        rr_to_tp3_risk=_rr(entry, sl_risk, tp3),
+        rr_to_tp4_risk=_rr(entry, sl_risk, tp4),
+        rr_to_tp1_conservative=_rr(entry, sl_conservative, tp1),
+        rr_to_tp2_conservative=_rr(entry, sl_conservative, tp2),
+        rr_to_tp3_conservative=_rr(entry, sl_conservative, tp3),
+        rr_to_tp4_conservative=_rr(entry, sl_conservative, tp4),
+    )
 
 
 def _normalize(df: pd.DataFrame | None) -> pd.DataFrame:
@@ -353,46 +449,29 @@ def evaluate_liquidity_expansion(
     long_valid = t_low_h1 is not None and (t_high_m15 is None or t_low_h1 <= t_high_m15)
     short_valid = t_high_h1 is not None and (t_low_m15 is None or t_high_h1 <= t_low_m15)
 
+    long_levels = calculate_h1_liquidity_levels(reference.h1_ref_low, "H1_LOW", symbol=symbol)
+    short_levels = calculate_h1_liquidity_levels(reference.h1_ref_high, "H1_HIGH", symbol=symbol)
+
     direction: ExpansionDirection | None = None
-    if long_valid and current_price <= reference.h1_ref_low - pips_to_price(symbol, stats.mae_avg_pips):
+    levels: H1LiquidityLevels | None = None
+    if long_valid and current_price <= long_levels.entry:
         direction = "LONG"
-    elif short_valid and current_price >= reference.h1_ref_high + pips_to_price(symbol, stats.mae_avg_pips):
+        levels = long_levels
+    elif short_valid and current_price >= short_levels.entry:
         direction = "SHORT"
+        levels = short_levels
 
     if direction is None:
         return None
+    assert levels is not None
 
     trigger = _detect_trigger(m1, m5, direction, reference.h1_ref_low, reference.h1_ref_high)
     if trigger is None:
         return None
 
-    if direction == "LONG":
-        level = reference.h1_ref_low
-        stop = level - pips_to_price(symbol, stats.max_excursion_pips * 1.25)
-        sign = 1.0
-    else:
-        level = reference.h1_ref_high
-        stop = level + pips_to_price(symbol, stats.max_excursion_pips * 1.25)
-        sign = -1.0
-
-    quartile_25 = stats.max_expansion_pips * 0.25
-    adaptive = stats.avg_expansion_pips < quartile_25
-    tp1_pips = stats.avg_expansion_pips if adaptive else quartile_25
-    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive"] = (
-        "avg_expansion_adaptive" if adaptive else "quartile_25"
-    )
-
-    tp1 = level + sign * pips_to_price(symbol, tp1_pips)
-    tp2 = level + sign * pips_to_price(symbol, stats.max_expansion_pips * 0.50)
-    tp3 = level + sign * pips_to_price(symbol, stats.max_expansion_pips * 0.75)
-    tp4 = level + sign * pips_to_price(symbol, stats.max_expansion_pips * 1.00)
-
-    entry = float(current_price)
-    risk = abs(entry - stop)
-    if risk <= 0:
-        return None
-    rr_tp1 = abs(tp1 - entry) / risk
-    rr_tp4 = abs(tp4 - entry) / risk
+    entry = levels.entry
+    stop = levels.sl_conservative
+    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"] = "h1_reference_statistics"
 
     candle_model = _classify_candle_model(h1)
 
@@ -402,9 +481,9 @@ def evaluate_liquidity_expansion(
         f"h1_source_{reference.h1_source}",
         f"m15_source_{reference.m15_source}",
         f"candle_model_{candle_model.lower()}",
+        "h1_reference_level_based_levels",
+        f"reference_type_{levels.reference_type.lower()}",
     ]
-    if adaptive:
-        reason_codes.append("adaptive_tp1_avg_expansion")
 
     return LiquidityExpansionSignal(
         symbol=symbol,
@@ -412,26 +491,41 @@ def evaluate_liquidity_expansion(
         candle_model=candle_model,
         reference=reference,
         stats=stats,
-        entry=round(entry, 2),
-        stop=round(stop, 2),
-        tp1=round(tp1, 2),
-        tp2=round(tp2, 2),
-        tp3=round(tp3, 2),
-        tp4=round(tp4, 2),
+        entry=entry,
+        stop=stop,
+        tp1=levels.tp1,
+        tp2=levels.tp2,
+        tp3=levels.tp3,
+        tp4=levels.tp4,
         tp1_basis=tp1_basis,
-        rr_tp1=round(rr_tp1, 2),
-        rr_tp4=round(rr_tp4, 2),
+        rr_tp1=levels.rr_to_tp1_conservative,
+        rr_tp4=levels.rr_to_tp4_conservative,
         trigger_kind=trigger,
         reason_codes=reason_codes,
         timestamp_utc=now_utc or datetime.now(timezone.utc),
+        reference_type=levels.reference_type,
+        reference_price=levels.reference_price,
+        sl_risk=levels.sl_risk,
+        sl_conservative=levels.sl_conservative,
+        rr_to_tp1_risk=levels.rr_to_tp1_risk,
+        rr_to_tp2_risk=levels.rr_to_tp2_risk,
+        rr_to_tp3_risk=levels.rr_to_tp3_risk,
+        rr_to_tp4_risk=levels.rr_to_tp4_risk,
+        rr_to_tp1_conservative=levels.rr_to_tp1_conservative,
+        rr_to_tp2_conservative=levels.rr_to_tp2_conservative,
+        rr_to_tp3_conservative=levels.rr_to_tp3_conservative,
+        rr_to_tp4_conservative=levels.rr_to_tp4_conservative,
     )
 
 
 __all__ = [
     "SweepStatistics",
+    "H1LiquidityLevels",
+    "H1ReferenceType",
     "LiquidityReferenceLevels",
     "LiquidityExpansionSignal",
     "build_reference_levels",
+    "calculate_h1_liquidity_levels",
     "compute_h1_sweep_stats",
     "evaluate_liquidity_expansion",
 ]

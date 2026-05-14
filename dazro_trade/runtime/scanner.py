@@ -609,6 +609,14 @@ class ScalpingScanner:
                 "trigger": signal.trigger_kind,
                 "rr_tp1": signal.rr_tp1,
                 "rr_tp4": signal.rr_tp4,
+                "reference_type": signal.reference_type,
+                "reference_price": signal.reference_price,
+                "sl_risk": signal.sl_risk,
+                "sl_conservative": signal.sl_conservative,
+                "rr_to_tp1_risk": signal.rr_to_tp1_risk,
+                "rr_to_tp4_risk": signal.rr_to_tp4_risk,
+                "rr_to_tp1_conservative": signal.rr_to_tp1_conservative,
+                "rr_to_tp4_conservative": signal.rr_to_tp4_conservative,
                 "h1_source": signal.reference.h1_source,
                 "m15_source": signal.reference.m15_source,
                 "stats_samples": signal.stats.samples,
@@ -750,6 +758,14 @@ class ScalpingScanner:
                     "tp4": lex_signal.tp4,
                     "rr_tp1": lex_signal.rr_tp1,
                     "rr_tp4": lex_signal.rr_tp4,
+                    "reference_type": lex_signal.reference_type,
+                    "reference_price": lex_signal.reference_price,
+                    "sl_risk": lex_signal.sl_risk,
+                    "sl_conservative": lex_signal.sl_conservative,
+                    "rr_to_tp1_risk": lex_signal.rr_to_tp1_risk,
+                    "rr_to_tp4_risk": lex_signal.rr_to_tp4_risk,
+                    "rr_to_tp1_conservative": lex_signal.rr_to_tp1_conservative,
+                    "rr_to_tp4_conservative": lex_signal.rr_to_tp4_conservative,
                     "trigger_kind": lex_signal.trigger_kind,
                     "candle_model": lex_signal.candle_model,
                 },
@@ -846,6 +862,12 @@ class ScalpingScanner:
         direction = lex_signal.direction
         tp1 = adelin_signal.get("tp1") or {}
         tp2 = adelin_signal.get("tp2") or {}
+        ref_type = lex_signal.reference_type or ("H1_LOW" if direction == "LONG" else "H1_HIGH")
+        ref_price = lex_signal.reference_price
+        if ref_price is None:
+            ref_price = lex_signal.reference.h1_ref_low if direction == "LONG" else lex_signal.reference.h1_ref_high
+        sl_risk = lex_signal.sl_risk if lex_signal.sl_risk is not None else lex_signal.stop
+        sl_conservative = lex_signal.sl_conservative if lex_signal.sl_conservative is not None else lex_signal.stop
         lines = [
             f"{lex_signal.symbol} - A++ SETUP (STRATEGY 1.0 + 2.0 CONFLUENCE)",
             f"Direzione: {direction}",
@@ -858,10 +880,12 @@ class ScalpingScanner:
             f"TP2: {tp2.get('price', '-')} (RR {tp2.get('rr', '-')})",
             "",
             "STRATEGY 2.0 (Liquidity Expansion):",
-            f"H1 level: {('LOW' if direction == 'LONG' else 'HIGH')} {lex_signal.reference.h1_ref_low if direction == 'LONG' else lex_signal.reference.h1_ref_high}",
-            f"Entry: {lex_signal.entry} | Stop: {lex_signal.stop}",
+            f"{ref_type.replace('_', ' ')} reference: {ref_price}",
+            f"Entry: {lex_signal.entry}",
+            f"SL Risk: {sl_risk}",
+            f"SL Conservative: {sl_conservative}",
             f"TP1-TP4: {lex_signal.tp1} / {lex_signal.tp2} / {lex_signal.tp3} / {lex_signal.tp4}",
-            f"RR TP1: {lex_signal.rr_tp1} | RR TP4: {lex_signal.rr_tp4}",
+            f"RR conservative TP1: {lex_signal.rr_tp1} | TP4: {lex_signal.rr_tp4}",
             "",
             "Confluenza Strategia 1.0 + Strategia 2.0",
             "Gestione: alla presa del TP1 lo stop e' spostato a BE automaticamente (lato Strategy 2.0).",
@@ -874,22 +898,33 @@ class ScalpingScanner:
     @staticmethod
     def _format_liquidity_expansion_message(signal: LiquidityExpansionSignal, *, lot_size: float | None) -> str:
         ref = signal.reference
-        level_name = "LOW" if signal.direction == "LONG" else "HIGH"
-        level_value = ref.h1_ref_low if signal.direction == "LONG" else ref.h1_ref_high
+        ref_type = signal.reference_type or ("H1_LOW" if signal.direction == "LONG" else "H1_HIGH")
+        reference_price = signal.reference_price
+        if reference_price is None:
+            reference_price = ref.h1_ref_low if signal.direction == "LONG" else ref.h1_ref_high
+        sl_risk = signal.sl_risk if signal.sl_risk is not None else signal.stop
+        sl_conservative = signal.sl_conservative if signal.sl_conservative is not None else signal.stop
+        rr_risk = signal.rr_to_tp1_risk if signal.rr_to_tp1_risk is not None else signal.rr_tp1
+        rr4_risk = signal.rr_to_tp4_risk if signal.rr_to_tp4_risk is not None else signal.rr_tp4
+        rr_cons = signal.rr_to_tp1_conservative if signal.rr_to_tp1_conservative is not None else signal.rr_tp1
+        rr4_cons = signal.rr_to_tp4_conservative if signal.rr_to_tp4_conservative is not None else signal.rr_tp4
         lines = [
             f"{signal.symbol} - LIQUIDITY EXPANSION MODEL (STRATEGY 2.0)",
             f"Direzione: {signal.direction}",
             f"Modello candela: {signal.candle_model}",
-            f"Livello H1: {level_name} {level_value} (fonte: {ref.h1_source})",
+            f"{ref_type.replace('_', ' ')} reference: {reference_price}",
+            f"Fonte H1: {ref.h1_source}",
             f"Filtro M15 :45: source={ref.m15_source} high={ref.m15_ref_high} low={ref.m15_ref_low} -> sequenza valida",
             f"Entry: {signal.entry} (trigger: {signal.trigger_kind})",
-            f"Stop: {signal.stop} (Max Excursion x 1.25)",
-            f"TP1: {signal.tp1} ({signal.tp1_basis})",
-            f"TP2: {signal.tp2} (quartile_50)",
-            f"TP3: {signal.tp3} (quartile_75)",
-            f"TP4: {signal.tp4} (quartile_100)",
+            f"SL Risk: {sl_risk}",
+            f"SL Conservative: {sl_conservative}",
+            f"TP1: {signal.tp1}",
+            f"TP2: {signal.tp2}",
+            f"TP3: {signal.tp3}",
+            f"TP4: {signal.tp4}",
             f"Stats H1: mae_avg={signal.stats.mae_avg_pips} pips | max_exc={signal.stats.max_excursion_pips} pips | avg_exp={signal.stats.avg_expansion_pips} pips | max_exp={signal.stats.max_expansion_pips} pips | samples={signal.stats.samples}",
-            f"RR TP1: {signal.rr_tp1} | RR TP4: {signal.rr_tp4}",
+            f"RR Risk TP1: {rr_risk} | TP4: {rr4_risk}",
+            f"RR Conservative TP1: {rr_cons} | TP4: {rr4_cons}",
         ]
         if lot_size is not None:
             lines.append(f"Lot size suggerito: {lot_size}")
