@@ -47,6 +47,51 @@ def _detect_separator(path: Path, encoding: str) -> str | None:
     return best[0]
 
 
+HEADERLESS_COLUMN_SCHEMAS: dict[int, list[str]] = {
+    5: ["time", "open", "high", "low", "close"],
+    6: ["time", "open", "high", "low", "close", "tick_volume"],
+    7: ["time", "open", "high", "low", "close", "tick_volume", "spread"],
+    8: ["time", "open", "high", "low", "close", "tick_volume", "real_volume", "spread"],
+}
+
+
+def _looks_like_numeric(value: object) -> bool:
+    try:
+        float(str(value).strip().replace(",", "."))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _looks_like_datetime(value: object) -> bool:
+    s = str(value).strip()
+    if not s:
+        return False
+    has_digit = any(c.isdigit() for c in s)
+    has_separator = any(c in s for c in (":", "-", ".", "/", " "))
+    if not (has_digit and has_separator):
+        return False
+    parsed = pd.to_datetime(s, errors="coerce")
+    return parsed is not pd.NaT and not pd.isna(parsed)
+
+
+def _columns_look_like_data(columns: list[str]) -> bool:
+    if not columns:
+        return False
+    first = columns[0]
+    if _looks_like_datetime(first):
+        return True
+    if all(_looks_like_numeric(c) for c in columns):
+        return True
+    return False
+
+
+def _read_csv_with(path: Path, enc: str, sep: object, header: object) -> pd.DataFrame:
+    if sep is None:
+        return pd.read_csv(path, encoding=enc, sep=None, engine="python", header=header)
+    return pd.read_csv(path, encoding=enc, sep=sep, header=header)
+
+
 def _read_csv_robust(path: Path) -> pd.DataFrame:
     detected_encoding = _detect_encoding(path)
     encodings = [detected_encoding] + [e for e in ENCODING_FALLBACKS if e != detected_encoding]
@@ -59,26 +104,41 @@ def _read_csv_robust(path: Path) -> pd.DataFrame:
         separators = [sniffed_sep] if sniffed_sep else []
         for sep in separators + list(SEPARATOR_FALLBACKS):
             try:
-                if sep is None:
-                    df = pd.read_csv(path, encoding=enc, sep=None, engine="python")
-                else:
-                    df = pd.read_csv(path, encoding=enc, sep=sep)
+                df = _read_csv_with(path, enc, sep, header=0)
             except UnicodeError as exc:
                 last_exc = exc
                 break
             except Exception as exc:
                 last_exc = exc
                 continue
-            if len(df.columns) >= MIN_EXPECTED_COLUMNS:
-                df.attrs["source_encoding"] = enc
-                df.attrs["source_separator"] = sep if sep is not None else "sniff"
-                return df
-            last_exc = ValueError(f"parsed_columns_too_few={list(df.columns)}")
+            if len(df.columns) < MIN_EXPECTED_COLUMNS:
+                last_exc = ValueError(f"parsed_columns_too_few={list(df.columns)}")
+                continue
+            if _columns_look_like_data([str(c) for c in df.columns]):
+                try:
+                    df = _read_csv_with(path, enc, sep, header=None)
+                except Exception as exc:
+                    last_exc = exc
+                    continue
+                ncols = len(df.columns)
+                schema = HEADERLESS_COLUMN_SCHEMAS.get(ncols)
+                if schema is None:
+                    last_exc = ValueError(f"headerless_csv_unknown_column_count={ncols}")
+                    continue
+                df.columns = schema
+            df.attrs["source_encoding"] = enc
+            df.attrs["source_separator"] = sep if sep is not None else "sniff"
+            return df
     raise ValueError(f"could not parse {path} with any encoding/separator combination: {last_exc}")
 
 
 def _coerce_utc(series: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(series, utc=True, errors="coerce")
+    if parsed.isna().all():
+        for fmt in ("%Y.%m.%d %H:%M", "%Y.%m.%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            attempt = pd.to_datetime(series, format=fmt, utc=True, errors="coerce")
+            if not attempt.isna().all():
+                return attempt
     return parsed
 
 
@@ -105,7 +165,7 @@ def _load_single_csv(path: Path) -> pd.DataFrame:
             taken_aliases.add(alias)
     if rename:
         df = df.rename(columns=rename)
-    drop_dupes = [c for c in ("vol", "tickvol", "volume", "real_volume", "spr") if c in df.columns and c not in rename.values()]
+    drop_dupes = [c for c in ("vol", "tickvol", "volume", "spr") if c in df.columns and c not in rename.values()]
     if drop_dupes:
         df = df.drop(columns=drop_dupes)
     missing = REQUIRED_COLUMNS - set(df.columns)

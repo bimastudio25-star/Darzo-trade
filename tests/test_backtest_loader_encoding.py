@@ -83,3 +83,61 @@ def test_tickvol_and_vol_dont_create_duplicate_columns(tmp_path):
     path.write_bytes(_mt5_unicode_text_bytes(rows=3))
     df = _load_single_csv(path)
     assert list(df.columns).count("tick_volume") == 1
+
+
+def _mt5_headerless_utf16(rows: int = 5, ncols: int = 7) -> bytes:
+    """MT5 export without header row, UTF-16 LE BOM, comma separator, MT5 date format."""
+    lines = []
+    for i in range(rows):
+        if ncols == 5:
+            lines.append(f"2025.03.{i+1:02d} 01:00,2857.88,2876.88,2855.10,2870.81")
+        elif ncols == 6:
+            lines.append(f"2025.03.{i+1:02d} 01:00,2857.88,2876.88,2855.10,2870.81,3989")
+        elif ncols == 7:
+            lines.append(f"2025.03.{i+1:02d} 01:00,2857.88,2876.88,2855.10,2870.81,3989,0")
+        elif ncols == 8:
+            lines.append(f"2025.03.{i+1:02d} 01:00,2857.88,2876.88,2855.10,2870.81,3989,0,2")
+    content = "\n".join(lines) + "\n"
+    return b"\xff\xfe" + content.encode("utf-16-le")
+
+
+def test_loads_headerless_mt5_7col(tmp_path):
+    path = tmp_path / "XAUUSD" / "H1.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_mt5_headerless_utf16(rows=8, ncols=7))
+    df = _load_single_csv(path)
+    assert list(df.columns) == ["time", "open", "high", "low", "close", "tick_volume", "spread"]
+    assert len(df) == 8
+    assert df["time"].iloc[0].isoformat().startswith("2025-03-01")
+    assert float(df["close"].iloc[0]) == 2870.81
+
+
+def test_loads_headerless_mt5_5col(tmp_path):
+    path = tmp_path / "XAUUSD" / "H1.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_mt5_headerless_utf16(rows=4, ncols=5))
+    df = _load_single_csv(path)
+    assert list(df.columns) == ["time", "open", "high", "low", "close"]
+    assert len(df) == 4
+
+
+def test_loads_headerless_mt5_8col(tmp_path):
+    path = tmp_path / "XAUUSD" / "H1.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_mt5_headerless_utf16(rows=3, ncols=8))
+    df = _load_single_csv(path)
+    assert "real_volume" in df.columns
+    assert "tick_volume" in df.columns
+    assert "spread" in df.columns
+    assert len(df) == 3
+
+
+def test_headerless_format_with_tab_separator(tmp_path):
+    path = tmp_path / "XAUUSD" / "H1.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"2025.03.{i+1:02d} 01:00\t2857.88\t2876.88\t2855.10\t2870.81\t3989\t0" for i in range(5)]
+    content = "\n".join(lines) + "\n"
+    path.write_bytes(b"\xff\xfe" + content.encode("utf-16-le"))
+    df = _load_single_csv(path)
+    assert list(df.columns)[:5] == ["time", "open", "high", "low", "close"]
+    assert len(df) == 5
