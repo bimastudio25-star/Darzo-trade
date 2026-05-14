@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dazro_trade.backtest import (
     BacktestConfig,
     compute_backtest_metrics,
     export_backtest_reports,
+    format_validation_report,
     load_csv_timeframes,
     run_backtest,
+    validate_csv_timeframes,
 )
 from dazro_trade.backtest.runner import build_equity_curve
 from dazro_trade.core.config import Settings
@@ -35,11 +39,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", default="backtests/reports")
     parser.add_argument("--driver-timeframe", default="H1")
     parser.add_argument("--max-sim-bars", type=int, default=480)
+    parser.add_argument("--validate-only", action="store_true", help="Validate CSVs and exit without running backtest")
     args = parser.parse_args(argv)
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
     date_from = _parse_date(args.date_from)
     date_to = _parse_date(args.date_to)
+
+    if args.validate_only:
+        log.info("validate_only symbol=%s tfs=%s dir=%s", args.symbol, tfs, args.data_dir)
+        report = validate_csv_timeframes(args.symbol, tfs, data_dir=args.data_dir)
+        text = format_validation_report(report)
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "data_validation.json").write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        (out_dir / "data_validation.txt").write_text(text, encoding="utf-8")
+        print(text)
+        return 0 if report.ok else 1
 
     log.info("backtest_start symbol=%s tfs=%s from=%s to=%s", args.symbol, tfs, date_from, date_to)
 

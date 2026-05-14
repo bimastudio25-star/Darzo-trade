@@ -11,6 +11,7 @@ from dazro_trade.analysis.liquidity_expansion import LiquidityExpansionSignal, e
 from dazro_trade.backtest.data_loader import slice_market_data_up_to
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade, simulate_trade_outcome
 from dazro_trade.core.config import Settings
+from dazro_trade.runtime.sessions import current_session_name
 
 log = logging.getLogger(__name__)
 
@@ -29,14 +30,7 @@ class BacktestConfig:
 
 
 def _session_label_for(ts: datetime) -> str:
-    t = ts.astimezone(timezone.utc).time()
-    if t.hour < 7:
-        return "asia"
-    if t.hour < 12:
-        return "london"
-    if t.hour < 21:
-        return "ny"
-    return "off_hours"
+    return current_session_name(ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc))
 
 
 def _strategy_2_to_signal(lex: LiquidityExpansionSignal, symbol: str, when: datetime, session: str) -> BacktestSignal:
