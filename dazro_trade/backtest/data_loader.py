@@ -110,7 +110,12 @@ def _load_single_csv(path: Path) -> pd.DataFrame:
         df = df.drop(columns=drop_dupes)
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
-        raise ValueError(f"csv {path} missing columns: {missing}")
+        raise ValueError(
+            f"csv {path} missing columns: {sorted(missing)} | "
+            f"found columns: {list(df.columns)} | "
+            f"encoding={df.attrs.get('source_encoding')} "
+            f"separator={df.attrs.get('source_separator')!r}"
+        )
     df["time"] = _coerce_utc(df["time"])
     df = df.dropna(subset=["time"]).sort_values("time").reset_index(drop=True)
     return df
