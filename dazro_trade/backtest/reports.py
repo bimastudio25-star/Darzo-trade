@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
 
-from dazro_trade.backtest.metrics import BacktestMetrics
+from dazro_trade.backtest.metrics import BacktestMetrics, compute_per_strategy_metrics
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade
 
 log = logging.getLogger(__name__)
@@ -112,9 +112,14 @@ def export_backtest_reports(
 
     metrics_dict = metrics.to_dict()
     diag_dict = _serialize_diagnostics(strategy_diagnostics)
+    per_strategy = compute_per_strategy_metrics(signals_list, trades_list)
+    if per_strategy:
+        metrics_dict = {**metrics_dict, "per_strategy": per_strategy}
     if diag_dict:
         metrics_dict = {**metrics_dict, "strategy_diagnostics": diag_dict}
     Path(paths["summary_json"]).write_text(json.dumps(metrics_dict, indent=2), encoding="utf-8")
+    paths["per_strategy_json"] = str(out_root / "per_strategy.json")
+    Path(paths["per_strategy_json"]).write_text(json.dumps(per_strategy, indent=2), encoding="utf-8")
     _write_csv(Path(paths["summary_csv"]), [{"metric": k, "value": v if not isinstance(v, dict) else json.dumps(v)} for k, v in metrics_dict.items()])
     _write_csv(Path(paths["executed_trades"]), executed_rows)
     _write_csv(Path(paths["rejected_signals"]), rejected_rows)

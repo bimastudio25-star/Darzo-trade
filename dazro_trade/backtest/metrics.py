@@ -90,6 +90,26 @@ def _max_drawdown(r_series: list[float]) -> float:
     return max_dd
 
 
+def compute_per_strategy_metrics(signals: Iterable[BacktestSignal], trades: Iterable[BacktestTrade]) -> dict[str, dict]:
+    signals = list(signals)
+    trades = list(trades)
+    strategies = sorted({s.strategy for s in signals} | {t.signal.strategy for t in trades})
+    out: dict[str, dict] = {}
+    for name in strategies:
+        s_sub = [s for s in signals if s.strategy == name]
+        t_sub = [t for t in trades if t.signal.strategy == name]
+        metrics = compute_backtest_metrics(s_sub, t_sub)
+        timestamps = sorted({s.timestamp for s in s_sub if s.timestamp is not None})
+        days_span = max((timestamps[-1] - timestamps[0]).days if len(timestamps) >= 2 else 1, 1)
+        signals_per_day = len(s_sub) / days_span if days_span > 0 else 0.0
+        out[name] = {
+            **metrics.to_dict(),
+            "days_observed": days_span,
+            "signals_per_day": round(signals_per_day, 3),
+        }
+    return out
+
+
 def compute_backtest_metrics(signals: Iterable[BacktestSignal], trades: Iterable[BacktestTrade]) -> BacktestMetrics:
     signals = list(signals)
     trades = [t for t in trades if t.outcome != "NO_DATA"]

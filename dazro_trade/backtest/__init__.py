@@ -7,7 +7,7 @@ from dazro_trade.backtest.data_validator import (
     format_validation_report,
     validate_csv_timeframes,
 )
-from dazro_trade.backtest.metrics import compute_backtest_metrics
+from dazro_trade.backtest.metrics import compute_backtest_metrics, compute_per_strategy_metrics
 from dazro_trade.backtest.reports import export_backtest_reports
 from dazro_trade.backtest.runner import BacktestConfig, run_backtest
 from dazro_trade.backtest.simulator import (
@@ -23,6 +23,7 @@ __all__ = [
     "TimeframeValidation",
     "ValidationReport",
     "compute_backtest_metrics",
+    "compute_per_strategy_metrics",
     "export_backtest_reports",
     "format_validation_report",
     "load_csv_timeframes",
