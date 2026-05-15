@@ -339,6 +339,18 @@ def compute_h1_sweep_stats(
     )
 
 
+def build_live_mae_stats(stats: SweepStatistics, symbol: str) -> dict[str, float]:
+    return {
+        "entry_distance": pips_to_price(symbol, stats.mae_avg_pips),
+        "sl_risk_distance": pips_to_price(symbol, stats.max_excursion_pips),
+        "sl_conservative_distance": pips_to_price(symbol, stats.max_excursion_pips * H1_SL_BUFFER_MULTIPLIER),
+        "tp1_distance": pips_to_price(symbol, stats.max_expansion_pips * TP_QUARTILES[0]),
+        "tp2_distance": pips_to_price(symbol, stats.max_expansion_pips * TP_QUARTILES[1]),
+        "tp3_distance": pips_to_price(symbol, stats.max_expansion_pips * TP_QUARTILES[2]),
+        "tp4_distance": pips_to_price(symbol, stats.max_expansion_pips * TP_QUARTILES[3]),
+    }
+
+
 def _detect_trigger(
     m1: pd.DataFrame,
     m5: pd.DataFrame,
@@ -579,27 +591,31 @@ def evaluate_liquidity_expansion(
         if not long_valid and not short_valid:
             diagnostics.skip_no_validity += 1
 
-    mae_stats_long: dict | None = None
-    mae_stats_short: dict | None = None
+    live_mae_stats = build_live_mae_stats(stats, symbol)
+    mae_stats_long: dict = live_mae_stats
+    mae_stats_short: dict = live_mae_stats
     if mae_engine_enabled:
         try:
             from dazro_trade.strategy.mae_engine import load_mae_stats_for_bucket
             db_path = mae_db_path or "data/darzo_trade.db"
-            mae_stats_long = load_mae_stats_for_bucket(
+            db_long = load_mae_stats_for_bucket(
                 session=session,
                 reference_type="H1_LOW",
                 volatility_regime=volatility_regime,
                 db_path=db_path,
             )
-            mae_stats_short = load_mae_stats_for_bucket(
+            db_short = load_mae_stats_for_bucket(
                 session=session,
                 reference_type="H1_HIGH",
                 volatility_regime=volatility_regime,
                 db_path=db_path,
             )
+            if db_long:
+                mae_stats_long = db_long
+            if db_short:
+                mae_stats_short = db_short
         except Exception:
-            mae_stats_long = None
-            mae_stats_short = None
+            pass
     long_levels = calculate_h1_liquidity_levels(reference.h1_ref_low, "H1_LOW", symbol=symbol, mae_stats=mae_stats_long)
     short_levels = calculate_h1_liquidity_levels(reference.h1_ref_high, "H1_HIGH", symbol=symbol, mae_stats=mae_stats_short)
 
@@ -626,7 +642,7 @@ def evaluate_liquidity_expansion(
 
     entry = levels.entry
     stop = levels.sl_conservative
-    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"] = "h1_reference_statistics"
+    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"] = "quartile_25"
 
     candle_model = _classify_candle_model(h1)
 
@@ -690,6 +706,7 @@ __all__ = [
     "LiquidityExpansionDiagnostics",
     "LiquidityReferenceLevels",
     "LiquidityExpansionSignal",
+    "build_live_mae_stats",
     "build_reference_levels",
     "calculate_h1_liquidity_levels",
     "compute_h1_sweep_stats",
