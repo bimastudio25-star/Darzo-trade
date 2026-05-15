@@ -14,7 +14,12 @@ def _pip(pip: float | None = None) -> float:
 def _normalize(df: pd.DataFrame | None) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame()
-    out = df.copy().rename(columns={"open": "o", "high": "h", "low": "l", "close": "c", "tick_volume": "vol"})
+    rename = {
+        source: alias
+        for source, alias in {"open": "o", "high": "h", "low": "l", "close": "c", "tick_volume": "vol"}.items()
+        if source in df.columns and alias not in df.columns
+    }
+    out = df.copy().rename(columns=rename)
     if {"h", "l", "c"}.issubset(out.columns):
         if "vol" not in out.columns:
             out["vol"] = 1.0

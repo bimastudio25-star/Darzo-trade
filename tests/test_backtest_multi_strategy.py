@@ -43,10 +43,44 @@ def test_backtest_runs_both_strategies_and_populates_diagnostics():
     assert adelin.total_calls >= 1
 
 
-def test_adelin_uses_m5_driver_strategy_2_uses_h1():
+def test_adelin_uses_m5_driver_strategy_2_uses_m15():
     cfg = BacktestConfig()
-    assert cfg.evaluator_drivers["strategy_2_liquidity_expansion"] == "H1"
+    assert cfg.evaluator_drivers["strategy_2_liquidity_expansion"] == "M15"
     assert cfg.evaluator_drivers["strategy_1_adelin_scalp"] == "M5"
+
+
+def test_backtest_config_exposes_tf_architecture_per_strategy():
+    cfg = BacktestConfig()
+    assert cfg.strategy_2_setup_tf == "M15"
+    assert cfg.strategy_2_refinement_tf == "M5"
+    assert cfg.strategy_2_trigger_tf == "M1"
+    assert cfg.strategy_2_htf_context == ["D1", "H4", "H1"]
+    assert cfg.adelin_scalp_driver == "M5"
+    assert cfg.adelin_scalp_setup_tf == "M15"
+    assert cfg.adelin_scalp_refinement_tf == "M5"
+    assert cfg.adelin_scalp_trigger_tf == "M1"
+    assert cfg.adelin_scalp_htf_context == ["D1", "H4", "H1"]
+
+
+def test_diagnostics_expose_tf_metadata_and_signals_per_day():
+    md = _generate_flat_market(n_h1=12)
+    cfg = BacktestConfig()
+    run_backtest(md, config=cfg)
+    s2_diag = cfg.strategy_diagnostics["strategy_2_liquidity_expansion"].to_dict()
+    adelin_diag = cfg.strategy_diagnostics["strategy_1_adelin_scalp"].to_dict()
+    assert s2_diag["driver_timeframe"] == "M15"
+    assert s2_diag["setup_timeframe"] == "M15"
+    assert s2_diag["refinement_timeframe"] == "M5"
+    assert s2_diag["trigger_timeframe"] == "M1"
+    assert s2_diag["htf_context_timeframes"] == ["D1", "H4", "H1"]
+    assert "signals_per_day" in s2_diag
+    assert "rejections_by_layer" in s2_diag
+    assert "evaluation_count" in s2_diag
+    assert adelin_diag["driver_timeframe"] == "M5"
+    assert adelin_diag["setup_timeframe"] == "M15"
+    assert adelin_diag["trigger_timeframe"] == "M1"
+    assert "signals_per_day" in adelin_diag
+    assert "rejections_by_layer" in adelin_diag
 
 
 def test_per_strategy_metrics_separates_strategies():

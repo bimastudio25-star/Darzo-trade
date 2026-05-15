@@ -426,9 +426,45 @@ class LiquidityExpansionDiagnostics:
     long_signals: int = 0
     short_signals: int = 0
     trigger_kind_counts: dict[str, int] = field(default_factory=dict)
+    driver_timeframe: str = "M15"
+    setup_timeframe: str = "M15"
+    refinement_timeframe: str = "M5"
+    trigger_timeframe: str = "M1"
+    htf_context_timeframes: list[str] = field(default_factory=lambda: ["D1", "H4", "H1"])
+    first_eval_time: datetime | None = None
+    last_eval_time: datetime | None = None
+
+    def rejections_by_layer(self) -> dict[str, int]:
+        layers: dict[str, int] = {}
+        mapping = [
+            ("DATA", self.skip_missing_data),
+            ("HTF_CONTEXT", self.skip_no_reference + self.skip_insufficient_stats),
+            ("SETUP_M15", self.skip_no_current_window + self.skip_no_validity),
+            ("REFINEMENT_M5", self.skip_mae_gate_failed),
+            ("TRIGGER_M1", self.skip_no_trigger),
+            ("RISK", self.skip_invalid_risk),
+        ]
+        for layer, count in mapping:
+            if count > 0:
+                layers[layer] = count
+        return layers
+
+    def signals_per_day(self) -> float:
+        if self.signals_emitted <= 0 or self.first_eval_time is None or self.last_eval_time is None:
+            return 0.0
+        delta = (self.last_eval_time - self.first_eval_time).total_seconds() / 86400.0
+        if delta <= 0:
+            return 0.0
+        return round(self.signals_emitted / delta, 4)
 
     def to_dict(self) -> dict:
         return {
+            "evaluation_count": self.total_calls,
+            "driver_timeframe": self.driver_timeframe,
+            "setup_timeframe": self.setup_timeframe,
+            "refinement_timeframe": self.refinement_timeframe,
+            "trigger_timeframe": self.trigger_timeframe,
+            "htf_context_timeframes": list(self.htf_context_timeframes),
             "total_calls": self.total_calls,
             "skip_missing_data": self.skip_missing_data,
             "skip_no_reference": self.skip_no_reference,
@@ -443,9 +479,13 @@ class LiquidityExpansionDiagnostics:
             "skip_no_trigger": self.skip_no_trigger,
             "skip_invalid_risk": self.skip_invalid_risk,
             "signals_emitted": self.signals_emitted,
+            "signals_per_day": self.signals_per_day(),
             "long_signals": self.long_signals,
             "short_signals": self.short_signals,
             "trigger_kind_counts": dict(self.trigger_kind_counts),
+            "rejections_by_layer": self.rejections_by_layer(),
+            "first_eval_time": self.first_eval_time.isoformat() if self.first_eval_time else None,
+            "last_eval_time": self.last_eval_time.isoformat() if self.last_eval_time else None,
         }
 
 

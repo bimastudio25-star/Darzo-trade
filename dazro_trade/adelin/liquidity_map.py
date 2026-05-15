@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from dazro_trade.core.symbols import get_symbol_spec
@@ -14,9 +15,18 @@ def _pip(pip: float | None = None) -> float:
 def _normalize(df: pd.DataFrame | None) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame()
-    out = df.copy().rename(columns={"open": "o", "high": "h", "low": "l", "close": "c", "tick_volume": "vol"})
+    if {"h", "l", "c"}.issubset(df.columns):
+        out = df
+    else:
+        out = df.rename(columns={"open": "o", "high": "h", "low": "l", "close": "c", "tick_volume": "vol"})
     if {"h", "l", "c"}.issubset(out.columns):
-        return out
+        if all(pd.api.types.is_numeric_dtype(out[col]) for col in ("h", "l", "c")):
+            return out
+        out = out.copy()
+        for col in ("o", "h", "l", "c", "vol"):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+        return out.dropna(subset=["h", "l", "c"])
     return pd.DataFrame()
 
 
@@ -71,18 +81,18 @@ def _swing_levels(frame: pd.DataFrame, timeframe: str, scope: str, pip: float) -
     levels: list[dict[str, Any]] = []
     if len(frame) < 5:
         return levels
-    recent = frame.tail(min(len(frame), 120)).reset_index(drop=True)
+    recent = frame.tail(min(len(frame), 120))
     tolerance = 2.5 * pip
+    highs = recent["h"].to_numpy(dtype=float, copy=False)
+    lows = recent["l"].to_numpy(dtype=float, copy=False)
     for idx in range(2, len(recent) - 2):
-        window = recent.iloc[idx - 2 : idx + 3]
-        row = recent.iloc[idx]
-        high = float(row["h"])
-        low = float(row["l"])
-        high_touches = int((recent["h"].astype(float).sub(high).abs() <= tolerance).sum())
-        low_touches = int((recent["l"].astype(float).sub(low).abs() <= tolerance).sum())
-        if high == float(window["h"].max()) and high_touches >= 2:
+        high = float(highs[idx])
+        low = float(lows[idx])
+        high_touches = int(np.count_nonzero(np.abs(highs - high) <= tolerance))
+        low_touches = int(np.count_nonzero(np.abs(lows - low) <= tolerance))
+        if high == float(np.max(highs[idx - 2 : idx + 3])) and high_touches >= 2:
             levels.append(_level(f"{timeframe}_swing_high", high, "buy_side", timeframe, scope, "swing_high", 80))
-        if low == float(window["l"].min()) and low_touches >= 2:
+        if low == float(np.min(lows[idx - 2 : idx + 3])) and low_touches >= 2:
             levels.append(_level(f"{timeframe}_swing_low", low, "sell_side", timeframe, scope, "swing_low", 80))
     return levels[-16:]
 

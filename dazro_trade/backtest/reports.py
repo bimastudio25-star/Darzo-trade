@@ -91,6 +91,7 @@ def export_backtest_reports(
     trades: Iterable[BacktestTrade],
     equity_curve: Iterable[tuple[str, float]] | None = None,
     strategy_diagnostics: dict[str, object] | None = None,
+    partial: bool = False,
 ) -> dict[str, str]:
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -102,7 +103,7 @@ def export_backtest_reports(
     rejected_rows = [_flatten_signal(s) for s in signals_list if not s.accepted]
 
     paths = {
-        "summary_json": str(out_root / "summary.json"),
+        "summary_json": str(out_root / ("summary_partial.json" if partial else "summary.json")),
         "summary_csv": str(out_root / "summary.csv"),
         "executed_trades": str(out_root / "executed_trades.csv"),
         "rejected_signals": str(out_root / "rejected_signals.csv"),
@@ -111,6 +112,8 @@ def export_backtest_reports(
     }
 
     metrics_dict = metrics.to_dict()
+    if partial:
+        metrics_dict = {**metrics_dict, "partial": True}
     diag_dict = _serialize_diagnostics(strategy_diagnostics)
     per_strategy = compute_per_strategy_metrics(signals_list, trades_list)
     if per_strategy:

@@ -9,7 +9,13 @@ from dazro_trade.backtest.data_validator import (
 )
 from dazro_trade.backtest.metrics import compute_backtest_metrics, compute_per_strategy_metrics
 from dazro_trade.backtest.reports import export_backtest_reports
-from dazro_trade.backtest.runner import BacktestConfig, run_backtest
+from dazro_trade.backtest.runner import (
+    BacktestConfig,
+    BacktestInterrupted,
+    BacktestPerformanceConfig,
+    resolve_strategy_selection,
+    run_backtest,
+)
 from dazro_trade.backtest.simulator import (
     BacktestSignal,
     BacktestTrade,
@@ -18,6 +24,8 @@ from dazro_trade.backtest.simulator import (
 
 __all__ = [
     "BacktestConfig",
+    "BacktestInterrupted",
+    "BacktestPerformanceConfig",
     "BacktestSignal",
     "BacktestTrade",
     "TimeframeValidation",
@@ -27,6 +35,7 @@ __all__ = [
     "export_backtest_reports",
     "format_validation_report",
     "load_csv_timeframes",
+    "resolve_strategy_selection",
     "run_backtest",
     "simulate_trade_outcome",
     "validate_csv_timeframes",

@@ -25,6 +25,8 @@ def run_adelin_scan(
     spread_pips: float | None = None,
     now_utc: datetime | None = None,
     session_name: str | None = None,
+    liquidity_map_cache: dict[tuple[Any, ...], list[dict[str, Any]]] | None = None,
+    liquidity_map_lookback_by_timeframe: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     now = now_utc or datetime.now(timezone.utc)
     symbol = getattr(settings, "mt5_symbol", "XAUUSD")
@@ -46,7 +48,13 @@ def run_adelin_scan(
     if rejected:
         return _result(now, None, rejected, None, None, None, "NO_TRADE", {"session": session, "pip": pip_size})
 
-    liq_map = build_liquidity_map(frames.get("H4"), frames.get("H1"), frames.get("M15"), frames.get("M5"), pip_size)
+    liq_map = _cached_liquidity_map(
+        frames,
+        symbol=symbol,
+        pip_size=pip_size,
+        cache=liquidity_map_cache,
+        lookback_by_timeframe=liquidity_map_lookback_by_timeframe,
+    )
     profiles = build_multi_anchor_volume_profiles(frames, liq_map, price, pip_size)
     vwap_data = calculate_vwap_bands(frames.get("M5", pd.DataFrame())) or {}
     sweep = find_liquidity_sweep(frames.get("M5", pd.DataFrame()), frames.get("M1", pd.DataFrame()), liq_map=liq_map, pip=pip_size)
@@ -137,6 +145,51 @@ def _fetch_market_data(mt5: Any | None) -> dict[str, pd.DataFrame]:
     if mt5 is None:
         return {}
     return {tf: mt5.get_candles(tf, 500) for tf in ("D1", "H4", "H1", "M15", "M5", "M1")}
+
+
+def _latest_timestamp(frame: pd.DataFrame | None) -> str | None:
+    if frame is None or len(frame) == 0 or "time" not in frame.columns:
+        return None
+    value = frame["time"].iloc[-1]
+    return pd.Timestamp(value).isoformat()
+
+
+def _limit_frame(frame: pd.DataFrame | None, limit: int | None) -> pd.DataFrame | None:
+    if frame is None or len(frame) == 0 or limit is None or limit <= 0:
+        return frame
+    return frame.tail(int(limit))
+
+
+def _cached_liquidity_map(
+    frames: dict[str, pd.DataFrame],
+    *,
+    symbol: str,
+    pip_size: float,
+    cache: dict[tuple[Any, ...], list[dict[str, Any]]] | None,
+    lookback_by_timeframe: dict[str, int] | None,
+) -> list[dict[str, Any]]:
+    key = (
+        "strategy_1_adelin_scalp",
+        symbol,
+        round(float(pip_size), 10),
+        _latest_timestamp(frames.get("H4")),
+        _latest_timestamp(frames.get("H1")),
+        _latest_timestamp(frames.get("M15")),
+        _latest_timestamp(frames.get("M5")),
+    )
+    if cache is not None and key in cache:
+        return cache[key]
+    limits = lookback_by_timeframe or {}
+    liq_map = build_liquidity_map(
+        _limit_frame(frames.get("H4"), limits.get("H4")),
+        _limit_frame(frames.get("H1"), limits.get("H1")),
+        _limit_frame(frames.get("M15"), limits.get("M15")),
+        _limit_frame(frames.get("M5"), limits.get("M5")),
+        pip_size,
+    )
+    if cache is not None:
+        cache[key] = liq_map
+    return liq_map
 
 
 def _infer_price(frames: dict[str, pd.DataFrame]) -> float:

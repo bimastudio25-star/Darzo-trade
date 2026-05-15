@@ -13,6 +13,13 @@ REQUIRED_COLUMNS = {"time", "open", "high", "low", "close"}
 ENCODING_FALLBACKS = ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1")
 SEPARATOR_FALLBACKS = (None, ",", ";", "\t", "|")
 MIN_EXPECTED_COLUMNS = 4
+NUMERIC_COLUMN_ALIASES = {
+    "open": "o",
+    "high": "h",
+    "low": "l",
+    "close": "c",
+    "tick_volume": "vol",
+}
 
 
 def _detect_encoding(path: Path) -> str:
@@ -217,15 +224,85 @@ def _utc_timestamp(value: datetime) -> pd.Timestamp:
     return ts.tz_convert("UTC")
 
 
+class BacktestDataSlicer:
+    def __init__(
+        self,
+        market_data: dict[str, pd.DataFrame],
+        *,
+        fast_mode: bool = False,
+        lookback_by_timeframe: dict[str, int] | None = None,
+    ):
+        self.fast_mode = fast_mode
+        self.lookback_by_timeframe = dict(lookback_by_timeframe or {})
+        self.frames: dict[str, pd.DataFrame] = {}
+        self.time_values: dict[str, pd.Series] = {}
+        self._last_cutoff_ns: int | None = None
+        self._last_slice: dict[str, pd.DataFrame] | None = None
+        for tf, df in market_data.items():
+            if df is None or len(df) == 0:
+                self.frames[tf] = pd.DataFrame()
+                continue
+            prepared = df.copy()
+            prepared = _ensure_numeric_backtest_columns(prepared)
+            if "time" in prepared.columns:
+                prepared["time"] = pd.to_datetime(prepared["time"], utc=True)
+                prepared = prepared.sort_values("time").reset_index(drop=True)
+                self.time_values[tf] = prepared["time"]
+            else:
+                prepared = prepared.reset_index(drop=True)
+            self.frames[tf] = prepared
+
+    def frame(self, timeframe: str) -> pd.DataFrame:
+        return self.frames.get(timeframe, pd.DataFrame())
+
+    def _index_at(self, timeframe: str, cutoff: datetime, *, side: str = "right") -> int:
+        times = self.time_values.get(timeframe)
+        frame = self.frame(timeframe)
+        if times is None:
+            return len(frame)
+        return int(times.searchsorted(_utc_timestamp(cutoff), side=side))
+
+    def slice_up_to(self, cutoff: datetime) -> dict[str, pd.DataFrame]:
+        cutoff_ns = _utc_timestamp(cutoff).value
+        if self._last_cutoff_ns == cutoff_ns and self._last_slice is not None:
+            return self._last_slice
+        sliced: dict[str, pd.DataFrame] = {}
+        for tf, df in self.frames.items():
+            if df.empty:
+                sliced[tf] = df
+                continue
+            idx = self._index_at(tf, cutoff, side="right")
+            start = 0
+            if self.fast_mode:
+                limit = int(self.lookback_by_timeframe.get(tf, 0) or 0)
+                if limit > 0:
+                    start = max(0, idx - limit)
+            sliced[tf] = df.iloc[start:idx]
+        self._last_cutoff_ns = cutoff_ns
+        self._last_slice = sliced
+        return sliced
+
+    def slice_after(self, timeframe: str, cutoff: datetime, *, max_rows: int | None = None) -> pd.DataFrame:
+        df = self.frame(timeframe)
+        if df.empty:
+            return df
+        start = self._index_at(timeframe, cutoff, side="right")
+        end = len(df) if max_rows is None else min(len(df), start + int(max_rows))
+        return df.iloc[start:end]
+
+
+def _ensure_numeric_backtest_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df
+    for source, alias in NUMERIC_COLUMN_ALIASES.items():
+        if source in out.columns:
+            out[source] = pd.to_numeric(out[source], errors="coerce")
+        elif alias in out.columns:
+            out[alias] = pd.to_numeric(out[alias], errors="coerce")
+    return out
+
+
 def slice_market_data_up_to(market_data: dict[str, pd.DataFrame], cutoff: datetime) -> dict[str, pd.DataFrame]:
-    cutoff_ts = _utc_timestamp(cutoff)
-    sliced: dict[str, pd.DataFrame] = {}
-    for tf, df in market_data.items():
-        if df is None or len(df) == 0:
-            sliced[tf] = df if df is not None else pd.DataFrame()
-            continue
-        sliced[tf] = df[df["time"] <= cutoff_ts].reset_index(drop=True)
-    return sliced
+    return BacktestDataSlicer(market_data).slice_up_to(cutoff)
 
 
-__all__ = ["SUPPORTED_TIMEFRAMES", "load_csv_timeframes", "slice_market_data_up_to"]
+__all__ = ["BacktestDataSlicer", "SUPPORTED_TIMEFRAMES", "load_csv_timeframes", "slice_market_data_up_to"]

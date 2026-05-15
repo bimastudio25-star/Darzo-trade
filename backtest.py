@@ -9,10 +9,13 @@ from pathlib import Path
 
 from dazro_trade.backtest import (
     BacktestConfig,
+    BacktestInterrupted,
+    BacktestPerformanceConfig,
     compute_backtest_metrics,
     export_backtest_reports,
     format_validation_report,
     load_csv_timeframes,
+    resolve_strategy_selection,
     run_backtest,
     validate_csv_timeframes,
 )
@@ -29,6 +32,20 @@ def _parse_date(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
+def _parse_lookback(value: str | None, defaults: dict[str, int]) -> dict[str, int]:
+    if not value:
+        return dict(defaults)
+    out = dict(defaults)
+    for item in value.split(","):
+        if not item.strip():
+            continue
+        if "=" not in item:
+            raise ValueError(f"invalid_lookback_item={item}")
+        tf, raw = item.split("=", 1)
+        out[tf.strip().upper()] = int(raw.strip())
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="dazro_trade backtest runner")
     parser.add_argument("--symbol", default="XAUUSD")
@@ -37,14 +54,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeframes", default="M1,M5,M15,H1,H4,D1")
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--output-dir", default="backtests/reports")
-    parser.add_argument("--driver-timeframe", default="H1")
+    parser.add_argument("--driver-timeframe", default="M15")
     parser.add_argument("--max-sim-bars", type=int, default=480)
+    parser.add_argument("--strategies", default="all", help="Strategy aliases: adelin, strategy_2_0, liquidity_expansion, all")
+    parser.add_argument("--fast", action="store_true", help="Use precomputed no-lookahead slicing with bounded lookback windows")
+    parser.add_argument("--max-candles", type=int, default=None, help="Debug cap per evaluator driver")
+    parser.add_argument("--progress-every-candles", type=int, default=500)
+    parser.add_argument("--lookback", default=None, help="Comma-separated fast lookbacks, e.g. M1=2000,M5=2000,H1=1000")
+    parser.add_argument("--liquidity-map-lookback", default=None, help="Comma-separated Adelin liquidity map lookbacks, e.g. H4=300,H1=500,M15=1000,M5=1500")
     parser.add_argument("--validate-only", action="store_true", help="Validate CSVs and exit without running backtest")
     args = parser.parse_args(argv)
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
     date_from = _parse_date(args.date_from)
     date_to = _parse_date(args.date_to)
+    try:
+        strategies = resolve_strategy_selection(args.strategies)
+        perf_defaults = BacktestPerformanceConfig()
+        lookback_by_timeframe = _parse_lookback(args.lookback, perf_defaults.lookback_by_timeframe)
+        liquidity_map_lookback = _parse_lookback(args.liquidity_map_lookback, perf_defaults.liquidity_map_lookback_by_timeframe)
+    except ValueError as exc:
+        log.error("backtest_cli_invalid_arg: %s", exc)
+        return 2
 
     if args.validate_only:
         log.info("validate_only symbol=%s tfs=%s dir=%s", args.symbol, tfs, args.data_dir)
@@ -57,7 +88,16 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
         return 0 if report.ok else 1
 
-    log.info("backtest_start symbol=%s tfs=%s from=%s to=%s", args.symbol, tfs, date_from, date_to)
+    log.info(
+        "backtest_start symbol=%s tfs=%s from=%s to=%s strategies=%s fast=%s max_candles=%s",
+        args.symbol,
+        tfs,
+        date_from,
+        date_to,
+        strategies,
+        args.fast,
+        args.max_candles,
+    )
 
     market_data = load_csv_timeframes(
         args.symbol,
@@ -76,8 +116,23 @@ def main(argv: list[str] | None = None) -> int:
         settings=Settings.from_env(env_file=None),
         driver_timeframe=args.driver_timeframe,
         max_sim_bars=args.max_sim_bars,
+        strategies=strategies,
+        performance=BacktestPerformanceConfig(
+            progress_every_candles=args.progress_every_candles,
+            max_candles=args.max_candles,
+            fast_mode=args.fast,
+            lookback_by_timeframe=lookback_by_timeframe,
+            liquidity_map_lookback_by_timeframe=liquidity_map_lookback,
+        ),
     )
-    signals, trades = run_backtest(market_data, config=cfg)
+    partial = False
+    try:
+        signals, trades = run_backtest(market_data, config=cfg)
+    except BacktestInterrupted as exc:
+        partial = True
+        signals, trades = exc.signals, exc.trades
+        cfg = exc.config
+        log.warning("backtest_interrupted_partial_output signals=%s trades=%s", len(signals), len(trades))
     metrics = compute_backtest_metrics(signals, trades)
     equity_curve = build_equity_curve(trades)
     paths = export_backtest_reports(
@@ -87,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         trades=trades,
         equity_curve=equity_curve,
         strategy_diagnostics=cfg.strategy_diagnostics,
+        partial=partial,
     )
 
     log.info("backtest_summary signals=%s trades=%s win_rate=%.3f profit_factor=%.3f avg_r=%.3f mdd=%.3f",
@@ -95,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
         d = diag.to_dict() if hasattr(diag, "to_dict") else dict(diag) if isinstance(diag, dict) else {}
         log.info("diagnostics strategy=%s data=%s", name, d)
     log.info("backtest_reports paths=%s", paths)
+    if partial:
+        log.warning("backtest_partial_output_saved paths=%s", paths)
+        return 130
     return 0
 
 

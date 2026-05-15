@@ -8,6 +8,8 @@ __pycache__/
 venv/
 data/*.sqlite
 data/*.db
+data/
+backtests/
 logs/
 signals.log
 _codex_backup_current/
