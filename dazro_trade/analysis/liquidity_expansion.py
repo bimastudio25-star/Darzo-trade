@@ -14,13 +14,20 @@ TriggerKind = Literal["reclaim", "rejection", "aggressive_shift", "displacement"
 CandleModel = Literal["IMMEDIATE_EXPANSION", "ACCUMULATION_BEFORE_EXPANSION"]
 H1ReferenceType = Literal["H1_HIGH", "H1_LOW"]
 
-H1_MAE_ENTRY_DISTANCE_PRICE = 45.9
-H1_SL_RISK_DISTANCE_PRICE = 98.8
-H1_SL_CONSERVATIVE_DISTANCE_PRICE = 123.5
-H1_TP1_DISTANCE_PRICE = 96.8
-H1_TP2_DISTANCE_PRICE = 193.6
-H1_TP3_DISTANCE_PRICE = 290.4
-H1_TP4_DISTANCE_PRICE = 387.2
+# Fallback statistics used by Strategy 2.0 (XAUUSD Liquidity Expansion Model)
+# when live SweepStatistics has insufficient samples (< MIN_SAMPLES_REQUIRED).
+# All values are in USD price distance (not pips). Derived empirically from
+# historical H1 sweep behaviour on XAUUSD.
+#
+# Document-defined relations (kept here for traceability):
+#   SL = MAX_EXCURSION * (1 + SL_BUFFER_PCT)       → SL_BUFFER_MULTIPLIER = 1.25
+#   TPi = MAX_EXPANSION * quartile_i                → quartiles = 0.25, 0.50, 0.75, 1.00
+H1_FALLBACK_MAE_ENTRY_USD = 45.9
+H1_FALLBACK_MAX_EXCURSION_USD = 98.8
+H1_FALLBACK_MAX_EXPANSION_USD = 387.2
+H1_SL_BUFFER_MULTIPLIER = 1.25
+TP_QUARTILES: tuple[float, float, float, float] = (0.25, 0.50, 0.75, 1.00)
+MIN_SAMPLES_REQUIRED = 10
 
 
 @dataclass(frozen=True)
@@ -33,7 +40,7 @@ class SweepStatistics:
 
     @property
     def insufficient(self) -> bool:
-        return self.samples < 10
+        return self.samples < MIN_SAMPLES_REQUIRED
 
 
 @dataclass(frozen=True)
@@ -129,13 +136,15 @@ def calculate_h1_liquidity_levels(
     direction_sign = 1.0 if reference_type == "H1_HIGH" else -1.0
     target_sign = -direction_sign
     stats = mae_stats or {}
-    entry_distance = float(stats.get("entry_distance", H1_MAE_ENTRY_DISTANCE_PRICE))
-    sl_risk_distance = float(stats.get("sl_risk_distance", H1_SL_RISK_DISTANCE_PRICE))
-    sl_conservative_distance = float(stats.get("sl_conservative_distance", H1_SL_CONSERVATIVE_DISTANCE_PRICE))
-    tp1_distance = float(stats.get("tp1_distance", H1_TP1_DISTANCE_PRICE))
-    tp2_distance = float(stats.get("tp2_distance", H1_TP2_DISTANCE_PRICE))
-    tp3_distance = float(stats.get("tp3_distance", H1_TP3_DISTANCE_PRICE))
-    tp4_distance = float(stats.get("tp4_distance", H1_TP4_DISTANCE_PRICE))
+    fallback_max_excursion = H1_FALLBACK_MAX_EXCURSION_USD
+    fallback_max_expansion = H1_FALLBACK_MAX_EXPANSION_USD
+    entry_distance = float(stats.get("entry_distance", H1_FALLBACK_MAE_ENTRY_USD))
+    sl_risk_distance = float(stats.get("sl_risk_distance", fallback_max_excursion))
+    sl_conservative_distance = float(stats.get("sl_conservative_distance", fallback_max_excursion * H1_SL_BUFFER_MULTIPLIER))
+    tp1_distance = float(stats.get("tp1_distance", fallback_max_expansion * TP_QUARTILES[0]))
+    tp2_distance = float(stats.get("tp2_distance", fallback_max_expansion * TP_QUARTILES[1]))
+    tp3_distance = float(stats.get("tp3_distance", fallback_max_expansion * TP_QUARTILES[2]))
+    tp4_distance = float(stats.get("tp4_distance", fallback_max_expansion * TP_QUARTILES[3]))
     entry = ref + direction_sign * _price_delta(symbol, entry_distance)
     sl_risk = ref + direction_sign * _price_delta(symbol, sl_risk_distance)
     sl_conservative = ref + direction_sign * _price_delta(symbol, sl_conservative_distance)
