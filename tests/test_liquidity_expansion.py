@@ -12,6 +12,7 @@ from dazro_trade.analysis.liquidity_expansion import (
     LiquidityExpansionSignal,
     LiquidityReferenceLevels,
     SweepStatistics,
+    build_live_mae_stats,
     build_reference_levels,
     calculate_h1_liquidity_levels,
     compute_h1_sweep_stats,
@@ -180,7 +181,8 @@ def test_long_happy_path_reclaim_trigger():
     ref = build_reference_levels(h1, m15, symbol="XAUUSD")
     assert ref is not None
     assert not stats.insufficient
-    levels = calculate_h1_liquidity_levels(ref.h1_ref_low, "H1_LOW", symbol="XAUUSD")
+    live_mae_stats = build_live_mae_stats(stats, "XAUUSD")
+    levels = calculate_h1_liquidity_levels(ref.h1_ref_low, "H1_LOW", symbol="XAUUSD", mae_stats=live_mae_stats)
     target_price = levels.entry
     m1_times = [h1_open_time.to_pydatetime() + timedelta(minutes=i) for i in range(6)]
     m1 = _m1_df([
