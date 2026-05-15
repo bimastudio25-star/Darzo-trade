@@ -162,6 +162,7 @@ def _strategy_2_to_signal(lex: LiquidityExpansionSignal, symbol: str, when: date
             "h1_source": lex.reference.h1_source,
             "m15_source": lex.reference.m15_source,
             "samples": lex.stats.samples,
+            "enable_be_after_tp1": True,
         },
     )
 

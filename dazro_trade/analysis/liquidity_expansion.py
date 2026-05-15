@@ -592,6 +592,12 @@ def evaluate_liquidity_expansion(
             diagnostics.skip_no_validity += 1
 
     live_mae_stats = build_live_mae_stats(stats, symbol)
+    tp1_standard_pips = stats.max_expansion_pips * TP_QUARTILES[0]
+    use_adaptive_tp1 = (
+        0 < stats.avg_expansion_pips < tp1_standard_pips
+    )
+    if use_adaptive_tp1:
+        live_mae_stats["tp1_distance"] = pips_to_price(symbol, stats.avg_expansion_pips)
     mae_stats_long: dict = live_mae_stats
     mae_stats_short: dict = live_mae_stats
     if mae_engine_enabled:
@@ -642,7 +648,9 @@ def evaluate_liquidity_expansion(
 
     entry = levels.entry
     stop = levels.sl_conservative
-    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"] = "quartile_25"
+    tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"] = (
+        "avg_expansion_adaptive" if use_adaptive_tp1 else "quartile_25"
+    )
 
     candle_model = _classify_candle_model(h1)
 

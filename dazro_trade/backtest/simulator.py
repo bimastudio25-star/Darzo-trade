@@ -12,7 +12,7 @@ from dazro_trade.strategy.risk_labels import RiskLabel, classify_sl_risk
 
 log = logging.getLogger(__name__)
 
-Outcome = Literal["SL", "TP1", "TP2", "TP3", "TP4", "STILL_OPEN", "NO_DATA"]
+Outcome = Literal["SL", "TP1", "TP2", "TP3", "TP4", "BE", "STILL_OPEN", "NO_DATA"]
 Direction = Literal["LONG", "SHORT"]
 
 
@@ -107,7 +107,9 @@ def simulate_trade_outcome(
     entry = float(signal.entry)
     stop = float(signal.stop)
     risk = signal.sl_distance
-    tps: list[tuple[str, float]] = [(label, float(level)) for label, level in (("TP1", signal.tp1), ("TP2", signal.tp2), ("TP3", signal.tp3), ("TP4", signal.tp4)) if level is not None]
+    enable_be = bool(signal.metadata.get("enable_be_after_tp1", False))
+    initial_tps: list[tuple[str, float]] = [(label, float(level)) for label, level in (("TP1", signal.tp1), ("TP2", signal.tp2), ("TP3", signal.tp3), ("TP4", signal.tp4)) if level is not None]
+    remaining_tps = list(initial_tps)
 
     mae = 0.0
     mfe = 0.0
@@ -115,6 +117,7 @@ def simulate_trade_outcome(
     outcome: Outcome = "STILL_OPEN"
     exit_time: datetime | None = None
     exit_price: float | None = None
+    tp1_locked = False
 
     iter_frame = frame.head(max_bars)
     for _, candle in iter_frame.iterrows():
@@ -129,25 +132,10 @@ def simulate_trade_outcome(
             mfe = max(mfe, favorable_excursion)
             sl_hit = low <= stop
             tp_hit_label: str | None = None
-            for label, tp in tps:
+            for label, tp in remaining_tps:
                 if high >= tp:
                     tp_hit_label = label
                     break
-            if sl_hit and tp_hit_label is not None:
-                outcome = "SL"
-                exit_price = stop
-                exit_time = when
-                break
-            if sl_hit:
-                outcome = "SL"
-                exit_price = stop
-                exit_time = when
-                break
-            if tp_hit_label is not None:
-                outcome = tp_hit_label  # type: ignore[assignment]
-                exit_price = next(tp for label, tp in tps if label == tp_hit_label)
-                exit_time = when
-                break
         else:
             adverse_excursion = max(0.0, high - entry)
             favorable_excursion = max(0.0, entry - low)
@@ -155,29 +143,37 @@ def simulate_trade_outcome(
             mfe = max(mfe, favorable_excursion)
             sl_hit = high >= stop
             tp_hit_label = None
-            for label, tp in tps:
+            for label, tp in remaining_tps:
                 if low <= tp:
                     tp_hit_label = label
                     break
-            if sl_hit and tp_hit_label is not None:
-                outcome = "SL"
-                exit_price = stop
+
+        if sl_hit:
+            outcome = "BE" if tp1_locked else "SL"
+            exit_price = stop
+            exit_time = when
+            break
+        if tp_hit_label == "TP1" and enable_be and not tp1_locked:
+            stop = entry
+            tp1_locked = True
+            remaining_tps = [t for t in remaining_tps if t[0] != "TP1"]
+            if not remaining_tps:
+                outcome = "TP1"
+                exit_price = next(level for label, level in initial_tps if label == "TP1")
                 exit_time = when
                 break
-            if sl_hit:
-                outcome = "SL"
-                exit_price = stop
-                exit_time = when
-                break
-            if tp_hit_label is not None:
-                outcome = tp_hit_label  # type: ignore[assignment]
-                exit_price = next(tp for label, tp in tps if label == tp_hit_label)
-                exit_time = when
-                break
+            continue
+        if tp_hit_label is not None:
+            outcome = tp_hit_label  # type: ignore[assignment]
+            exit_price = next(level for label, level in initial_tps if label == tp_hit_label)
+            exit_time = when
+            break
 
     r_multiple = 0.0
     if outcome == "SL":
         r_multiple = -1.0
+    elif outcome == "BE":
+        r_multiple = 0.0
     elif outcome in {"TP1", "TP2", "TP3", "TP4"} and exit_price is not None:
         reward = abs(float(exit_price) - entry)
         r_multiple = reward / risk if risk > 0 else 0.0

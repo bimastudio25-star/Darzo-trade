@@ -35,6 +35,7 @@ class BacktestMetrics:
     tp3_hit_rate: float
     tp4_hit_rate: float
     sl_hit_rate: float
+    be_hit_rate: float
     still_open_rate: float
     average_bars_held: float
 
@@ -66,6 +67,7 @@ class BacktestMetrics:
             "tp3_hit_rate": round(self.tp3_hit_rate, 4),
             "tp4_hit_rate": round(self.tp4_hit_rate, 4),
             "sl_hit_rate": round(self.sl_hit_rate, 4),
+            "be_hit_rate": round(self.be_hit_rate, 4),
             "still_open_rate": round(self.still_open_rate, 4),
             "average_bars_held": round(self.average_bars_held, 4),
         }
@@ -168,6 +170,7 @@ def compute_backtest_metrics(signals: Iterable[BacktestSignal], trades: Iterable
         tp3_hit_rate=_safe_div(outcomes.count("TP3"), valid),
         tp4_hit_rate=_safe_div(outcomes.count("TP4"), valid),
         sl_hit_rate=_safe_div(outcomes.count("SL"), valid),
+        be_hit_rate=_safe_div(outcomes.count("BE"), valid),
         still_open_rate=_safe_div(outcomes.count("STILL_OPEN"), valid),
         average_bars_held=fmean(bars) if bars else 0.0,
     )
