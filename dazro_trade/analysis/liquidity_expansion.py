@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from dazro_trade.core.symbols import get_symbol_spec, normalize_price, pips_to_price, price_to_pips
+from dazro_trade.strategy.risk_labels import RiskLabel, classify_sl_risk
 
 ExpansionDirection = Literal["LONG", "SHORT"]
 TriggerKind = Literal["reclaim", "rejection", "aggressive_shift", "displacement"]
@@ -107,6 +108,7 @@ class LiquidityExpansionSignal:
     rr_to_tp4_conservative: float | None = None
     mae_stats_long: dict | None = None
     mae_stats_short: dict | None = None
+    risk_label: RiskLabel | None = None
 
 
 def _rr(entry: float, stop: float, target: float) -> float:
@@ -435,10 +437,18 @@ class LiquidityExpansionDiagnostics:
     skip_no_reference: int = 0
     skip_insufficient_stats: int = 0
     skip_no_current_window: int = 0
+    h1_reference_built: int = 0
+    previous_h1_reference_used: int = 0
+    range_dominant_h1_used: int = 0
+    m15_45_found: int = 0
+    m15_fallback_used: int = 0
     h1_sweep_long_detected: int = 0
     h1_sweep_short_detected: int = 0
     m15_long_validity_passed: int = 0
     m15_short_validity_passed: int = 0
+    high_m15_taken_before_low_h1: int = 0
+    low_m15_taken_before_high_h1: int = 0
+    mae_entry_reached: int = 0
     skip_no_validity: int = 0
     skip_mae_gate_failed: int = 0
     skip_no_trigger: int = 0
@@ -447,6 +457,8 @@ class LiquidityExpansionDiagnostics:
     long_signals: int = 0
     short_signals: int = 0
     trigger_kind_counts: dict[str, int] = field(default_factory=dict)
+    risk_label_counts: dict[str, int] = field(default_factory=dict)
+    tp1_basis_counts: dict[str, int] = field(default_factory=dict)
     driver_timeframe: str = "M15"
     setup_timeframe: str = "M15"
     refinement_timeframe: str = "M5"
@@ -491,10 +503,18 @@ class LiquidityExpansionDiagnostics:
             "skip_no_reference": self.skip_no_reference,
             "skip_insufficient_stats": self.skip_insufficient_stats,
             "skip_no_current_window": self.skip_no_current_window,
+            "h1_reference_built": self.h1_reference_built,
+            "previous_h1_reference_used": self.previous_h1_reference_used,
+            "range_dominant_h1_used": self.range_dominant_h1_used,
+            "m15_45_found": self.m15_45_found,
+            "m15_fallback_used": self.m15_fallback_used,
             "h1_sweep_long_detected": self.h1_sweep_long_detected,
             "h1_sweep_short_detected": self.h1_sweep_short_detected,
             "m15_long_validity_passed": self.m15_long_validity_passed,
             "m15_short_validity_passed": self.m15_short_validity_passed,
+            "high_m15_taken_before_low_h1": self.high_m15_taken_before_low_h1,
+            "low_m15_taken_before_high_h1": self.low_m15_taken_before_high_h1,
+            "mae_entry_reached": self.mae_entry_reached,
             "skip_no_validity": self.skip_no_validity,
             "skip_mae_gate_failed": self.skip_mae_gate_failed,
             "skip_no_trigger": self.skip_no_trigger,
@@ -504,6 +524,8 @@ class LiquidityExpansionDiagnostics:
             "long_signals": self.long_signals,
             "short_signals": self.short_signals,
             "trigger_kind_counts": dict(self.trigger_kind_counts),
+            "risk_label_counts": dict(self.risk_label_counts),
+            "tp1_basis_counts": dict(self.tp1_basis_counts),
             "rejections_by_layer": self.rejections_by_layer(),
             "first_eval_time": self.first_eval_time.isoformat() if self.first_eval_time else None,
             "last_eval_time": self.last_eval_time.isoformat() if self.last_eval_time else None,
@@ -553,6 +575,16 @@ def evaluate_liquidity_expansion(
         if diagnostics is not None:
             diagnostics.skip_no_reference += 1
         return None
+    if diagnostics is not None:
+        diagnostics.h1_reference_built += 1
+        if reference.h1_source == "previous_h1":
+            diagnostics.previous_h1_reference_used += 1
+        elif reference.h1_source == "range_dominant_h1":
+            diagnostics.range_dominant_h1_used += 1
+        if reference.m15_source == "minute_45":
+            diagnostics.m15_45_found += 1
+        elif reference.m15_source == "fallback_last_m15":
+            diagnostics.m15_fallback_used += 1
 
     stats = compute_h1_sweep_stats(h1, symbol=symbol, lookback_h1=lookback_h1)
     if stats.insufficient:
@@ -588,6 +620,10 @@ def evaluate_liquidity_expansion(
             diagnostics.m15_long_validity_passed += 1
         if short_valid:
             diagnostics.m15_short_validity_passed += 1
+        if t_low_h1 is not None and t_high_m15 is not None and t_high_m15 < t_low_h1:
+            diagnostics.high_m15_taken_before_low_h1 += 1
+        if t_high_h1 is not None and t_low_m15 is not None and t_low_m15 < t_high_h1:
+            diagnostics.low_m15_taken_before_high_h1 += 1
         if not long_valid and not short_valid:
             diagnostics.skip_no_validity += 1
 
@@ -639,6 +675,8 @@ def evaluate_liquidity_expansion(
             diagnostics.skip_mae_gate_failed += 1
         return None
     assert levels is not None
+    if diagnostics is not None:
+        diagnostics.mae_entry_reached += 1
 
     trigger = _detect_trigger(m1, m5, direction, reference.h1_ref_low, reference.h1_ref_high)
     if trigger is None:
@@ -651,6 +689,8 @@ def evaluate_liquidity_expansion(
     tp1_basis: Literal["quartile_25", "avg_expansion_adaptive", "h1_reference_statistics"] = (
         "avg_expansion_adaptive" if use_adaptive_tp1 else "quartile_25"
     )
+    sl_distance = abs(entry - stop)
+    risk_label = classify_sl_risk(sl_distance)
 
     candle_model = _classify_candle_model(h1)
 
@@ -662,6 +702,8 @@ def evaluate_liquidity_expansion(
         f"candle_model_{candle_model.lower()}",
         "h1_reference_level_based_levels",
         f"reference_type_{levels.reference_type.lower()}",
+        f"tp1_basis_{tp1_basis}",
+        f"risk_label_{risk_label}",
     ]
 
     if diagnostics is not None:
@@ -671,6 +713,8 @@ def evaluate_liquidity_expansion(
         else:
             diagnostics.short_signals += 1
         diagnostics.trigger_kind_counts[trigger] = diagnostics.trigger_kind_counts.get(trigger, 0) + 1
+        diagnostics.risk_label_counts[risk_label] = diagnostics.risk_label_counts.get(risk_label, 0) + 1
+        diagnostics.tp1_basis_counts[tp1_basis] = diagnostics.tp1_basis_counts.get(tp1_basis, 0) + 1
 
     return LiquidityExpansionSignal(
         symbol=symbol,
@@ -704,6 +748,7 @@ def evaluate_liquidity_expansion(
         rr_to_tp4_conservative=levels.rr_to_tp4_conservative,
         mae_stats_long=mae_stats_long,
         mae_stats_short=mae_stats_short,
+        risk_label=risk_label,
     )
 
 
