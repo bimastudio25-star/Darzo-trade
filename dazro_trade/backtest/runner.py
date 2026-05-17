@@ -246,6 +246,9 @@ class AdelinDiagnostics:
     htf_context_timeframes: list[str] = field(default_factory=lambda: ["D1", "H4", "H1"])
     first_eval_time: datetime | None = None
     last_eval_time: datetime | None = None
+    sl_tier_counts: dict[str, int] = field(default_factory=dict)
+    sl_tier_acceptance_reason_counts: dict[str, int] = field(default_factory=dict)
+    ex_rejected_recovered_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -264,6 +267,9 @@ class AdelinDiagnostics:
             "rejections_by_layer": dict(self.rejections_by_layer),
             "long_signals": self.long_signals,
             "short_signals": self.short_signals,
+            "sl_tier_counts": dict(self.sl_tier_counts),
+            "sl_tier_acceptance_reason_counts": dict(self.sl_tier_acceptance_reason_counts),
+            "ex_rejected_recovered_count": self.ex_rejected_recovered_count,
             "first_eval_time": self.first_eval_time.isoformat() if self.first_eval_time else None,
             "last_eval_time": self.last_eval_time.isoformat() if self.last_eval_time else None,
         }
@@ -393,12 +399,17 @@ def _apply_per_strategy_sl_filter(signal: BacktestSignal, max_sl_map: dict[str, 
         signal.rejection_reasons.append(f"SL_TOO_WIDE_for_{signal.strategy}_max={max_sl}_actual={round(signal.sl_distance, 2)}")
 
 
-def _apply_adelin_sl_policy(signal: BacktestSignal, policy: AdelinSLPolicy) -> AdelinSLDecision:
-    """Evaluate Adelin signal against the dynamic SL policy and mutate
-    `signal.accepted` / `rejection_reasons` accordingly.
+LEGACY_ADELIN_MAX_SL_USD = 5.0
 
-    Returns the AdelinSLDecision so the caller can record diagnostics
-    (tier counters, ex-rejected recovery, etc.).
+
+def _apply_adelin_sl_policy(
+    signal: BacktestSignal,
+    policy: AdelinSLPolicy,
+    diagnostics: AdelinDiagnostics | None = None,
+) -> AdelinSLDecision:
+    """Evaluate Adelin signal against the dynamic SL policy and mutate
+    `signal.accepted` / `rejection_reasons` accordingly. Also bumps the
+    tier counters on the optional diagnostics object.
     """
     decision = evaluate_adelin_sl_acceptance(
         sl_usd=signal.sl_distance,
@@ -412,6 +423,13 @@ def _apply_adelin_sl_policy(signal: BacktestSignal, policy: AdelinSLPolicy) -> A
         code = decision.rejection_code()
         if code:
             signal.rejection_reasons.append(code)
+    if diagnostics is not None:
+        diagnostics.sl_tier_counts[decision.tier] = diagnostics.sl_tier_counts.get(decision.tier, 0) + 1
+        diagnostics.sl_tier_acceptance_reason_counts[decision.reason] = (
+            diagnostics.sl_tier_acceptance_reason_counts.get(decision.reason, 0) + 1
+        )
+        if decision.accepted and signal.sl_distance > LEGACY_ADELIN_MAX_SL_USD:
+            diagnostics.ex_rejected_recovered_count += 1
     return decision
 
 
@@ -570,7 +588,9 @@ def run_backtest(
                 eval_signals += len(evaluated)
                 for sig in evaluated:
                     if sig.strategy == STRATEGY_1_NAME and cfg.adelin_sl_policy is not None:
-                        _apply_adelin_sl_policy(sig, cfg.adelin_sl_policy)
+                        adelin_diag = cfg.strategy_diagnostics.get(STRATEGY_1_NAME)
+                        adelin_diag_obj = adelin_diag if isinstance(adelin_diag, AdelinDiagnostics) else None
+                        _apply_adelin_sl_policy(sig, cfg.adelin_sl_policy, diagnostics=adelin_diag_obj)
                     else:
                         _apply_per_strategy_sl_filter(sig, cfg.per_strategy_max_sl)
                     min_score = cfg.min_score_overrides.get(sig.strategy)
