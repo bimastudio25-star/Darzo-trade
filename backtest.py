@@ -19,6 +19,12 @@ from dazro_trade.backtest import (
     run_backtest,
     validate_csv_timeframes,
 )
+from dazro_trade.analytics.candle_behavior_report import (
+    build_report as build_candle_behavior_report,
+    iterate_candle_behavior_records,
+    write_report_files as write_candle_behavior_files,
+)
+from dazro_trade.analytics.zone_features import extract_htf_liquidity_zones
 from dazro_trade.backtest.runner import build_equity_curve
 from dazro_trade.core.config import Settings
 
@@ -63,6 +69,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lookback", default=None, help="Comma-separated fast lookbacks, e.g. M1=2000,M5=2000,H1=1000")
     parser.add_argument("--liquidity-map-lookback", default=None, help="Comma-separated Adelin liquidity map lookbacks, e.g. H4=300,H1=500,M15=1000,M5=1500")
     parser.add_argument("--validate-only", action="store_true", help="Validate CSVs and exit without running backtest")
+    parser.add_argument(
+        "--profile-candle-behavior",
+        action="store_true",
+        help="After the backtest, scan the chosen M1/M5 timeframe and emit profile_candle_behavior.{json,md} with per-candle features + zone-reaction stats. Read-only; does not change live rules.",
+    )
+    parser.add_argument(
+        "--profile-candle-tf",
+        default="M5",
+        choices=("M1", "M5"),
+        help="Timeframe to scan for the candle-behavior profile. Default M5.",
+    )
     args = parser.parse_args(argv)
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
@@ -151,6 +168,20 @@ def main(argv: list[str] | None = None) -> int:
         d = diag.to_dict() if hasattr(diag, "to_dict") else dict(diag) if isinstance(diag, dict) else {}
         log.info("diagnostics strategy=%s data=%s", name, d)
     log.info("backtest_reports paths=%s", paths)
+
+    if args.profile_candle_behavior:
+        scan_tf = args.profile_candle_tf
+        df_scan = market_data.get(scan_tf)
+        if df_scan is None or len(df_scan) == 0:
+            log.warning("profile_candle_behavior_no_data tf=%s", scan_tf)
+        else:
+            zones = extract_htf_liquidity_zones(market_data)
+            log.info("profile_candle_behavior_start tf=%s candles=%s zones=%s", scan_tf, len(df_scan), len(zones))
+            records = iterate_candle_behavior_records(df_scan, zones)
+            report = build_candle_behavior_report(records)
+            profile_paths = write_candle_behavior_files(output_dir=args.output_dir, report=report)
+            log.info("profile_candle_behavior_written paths=%s records=%s", profile_paths, len(records))
+
     if partial:
         log.warning("backtest_partial_output_saved paths=%s", paths)
         return 130
