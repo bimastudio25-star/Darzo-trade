@@ -197,39 +197,110 @@ def test_a_plus_subset_found_when_filter_yields_pf_above_1():
     records = []
     sigs = []
     trades = []
-    # 25 trades with swept_high + reclaim -> all winners
-    for i in range(25):
+    # 60 trades with swept_high + reclaim -> all winners
+    for i in range(60):
         rec = _record(base + timedelta(minutes=i * 5), swept_high=True, reclaim_after_sweep=True)
         records.append(rec)
         s = _signal(rec.timestamp, score=85)
         sigs.append(s)
         trades.append(_trade(s, 2.0))
-    # 25 trades without -> all losers
-    for i in range(25, 50):
+    # 60 trades without -> all losers
+    for i in range(60, 120):
         rec = _record(base + timedelta(minutes=i * 5))
         records.append(rec)
         s = _signal(rec.timestamp, score=65)
         sigs.append(s)
         trades.append(_trade(s, -1.0))
     links = link_records_to_trades(records, sigs, trades, timeframe_minutes=5)
-    cfg = TradeLinkedConfig(min_trades_for_a_plus=20, a_plus_min_profit_factor=1.0, a_plus_min_avg_r=0.0)
+    cfg = TradeLinkedConfig(valid_min_trades=50, valid_min_profit_factor=1.15)
     linked = build_linked_trades(records, links)
-    a_plus = find_a_plus_subsets(linked, cfg=cfg)
-    assert len(a_plus) > 0
-    top = a_plus[0]
-    assert "swept_high" in top["filter"] or "reclaim_after_sweep" in top["filter"]
-    assert top["profit_factor"] >= 1.0
+    result = find_a_plus_subsets(linked, cfg=cfg)
+    assert isinstance(result, dict)
+    assert "robust_candidates" in result
+    assert "valid_candidates" in result
+    assert "exploratory_candidates" in result
+    assert len(result["valid_candidates"]) > 0
+    top = result["valid_candidates"][0]
+    assert "swept_high" in top["filter_rules_required"] or "reclaim_after_sweep" in top["filter_rules_required"]
+    assert top["profit_factor"] >= 1.15
+    assert top["valid_candidate"] is True
 
 
 def test_a_plus_subset_empty_when_no_filter_above_threshold():
     base = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
-    records = [_record(base + timedelta(minutes=i * 5)) for i in range(40)]
+    records = [_record(base + timedelta(minutes=i * 5)) for i in range(60)]
     sigs = [_signal(r.timestamp) for r in records]
     trades = [_trade(s, -1.0) for s in sigs]  # all losses
     links = link_records_to_trades(records, sigs, trades, timeframe_minutes=5)
-    cfg = TradeLinkedConfig(min_trades_for_a_plus=20, a_plus_min_profit_factor=1.0, a_plus_min_avg_r=0.0)
+    cfg = TradeLinkedConfig(valid_min_trades=50, valid_min_profit_factor=1.15)
     linked = build_linked_trades(records, links)
-    assert find_a_plus_subsets(linked, cfg=cfg) == []
+    result = find_a_plus_subsets(linked, cfg=cfg)
+    assert result["valid_candidates"] == []
+    assert result["robust_candidates"] == []
+
+
+def test_a_plus_guardrails_set_warnings_and_validity_flags():
+    base = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+    # Build 25 trades with swept_high + reclaim, mixed outcomes, PF ~ 1.5
+    records = []
+    sigs = []
+    trades = []
+    for i in range(25):
+        rec = _record(base + timedelta(minutes=i * 5), swept_high=True, reclaim_after_sweep=True)
+        records.append(rec)
+        s = _signal(rec.timestamp, score=85)
+        sigs.append(s)
+        trades.append(_trade(s, 2.0 if i % 3 != 0 else -1.0))
+    # Add 50 "other" trades all losers
+    for i in range(25, 75):
+        rec = _record(base + timedelta(minutes=i * 5))
+        records.append(rec)
+        s = _signal(rec.timestamp, score=65)
+        sigs.append(s)
+        trades.append(_trade(s, -1.0))
+    links = link_records_to_trades(records, sigs, trades, timeframe_minutes=5)
+    linked = build_linked_trades(records, links)
+    cfg = TradeLinkedConfig()
+    result = find_a_plus_subsets(linked, cfg=cfg)
+    # Subset of 25 -> below valid_min_trades=50, should land in exploratory
+    found_subset = None
+    for cand in result["exploratory_candidates"]:
+        if "swept_high" in cand["filter_rules_required"] and "reclaim_after_sweep" in cand["filter_rules_required"]:
+            found_subset = cand
+            break
+    assert found_subset is not None
+    assert found_subset["valid_candidate"] is False
+    assert any("strong_warning" in w for w in found_subset["warnings"])
+    assert "longest_loss_streak" in found_subset
+    assert "sample_pct" in found_subset
+    assert "delta_profit_factor_vs_baseline" in found_subset
+
+
+def test_verdict_no_edge_when_baseline_unprofitable():
+    base = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+    records = [_record(base + timedelta(minutes=i * 5)) for i in range(60)]
+    sigs = [_signal(r.timestamp) for r in records]
+    trades = [_trade(s, -1.0) for s in sigs]
+    links = link_records_to_trades(records, sigs, trades, timeframe_minutes=5)
+    from dazro_trade.analytics.trade_linked_edge_report import build_trade_linked_report
+    report = build_trade_linked_report(records, links)
+    assert report["verdict"]["decision"] == "NO_EDGE_FOUND_SUSPEND_OR_REWORK"
+
+
+def test_verdict_baseline_ok_when_baseline_profitable_no_filter_needed():
+    base = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+    records = [_record(base + timedelta(minutes=i * 5)) for i in range(60)]
+    sigs = [_signal(r.timestamp) for r in records]
+    # Generate mixed outcomes that produce PF > 1 baseline without any
+    # confluence-flag subset clearly emerging.
+    trades = [_trade(s, 2.0 if i % 2 == 0 else -1.0) for i, s in enumerate(sigs)]
+    links = link_records_to_trades(records, sigs, trades, timeframe_minutes=5)
+    from dazro_trade.analytics.trade_linked_edge_report import build_trade_linked_report
+    report = build_trade_linked_report(records, links)
+    # Baseline is PF=2.0, but since no flag is True on the records,
+    # there are no candidate subsets at all -> baseline-ok verdict.
+    assert report["overall"]["profit_factor"] >= 1.0
+    assert report["verdict"]["decision"] in {"BASELINE_OK_NO_FILTER_NEEDED", "WEAK_EXPLORATORY_ONLY"}
 
 
 # ----------------------------------------------------------------------
@@ -244,7 +315,7 @@ def test_render_trade_linked_markdown_contains_required_sections():
     links = link_records_to_trades(records, sigs, trades, timeframe_minutes=5)
     report = build_trade_linked_report(records, links)
     md = render_trade_linked_markdown(report)
-    for header in ("# Adelin trade-linked edge report", "## Overall", "### By candle pattern", "## A+ subsets"):
+    for header in ("# Adelin trade-linked edge report", "## Overall", "### By candle pattern", "## Verdict", "## Robust candidates", "## Valid candidates", "## Exploratory candidates"):
         assert header in md
 
 

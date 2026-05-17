@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
-from statistics import fmean
+from statistics import fmean, median
 from typing import Any, Iterable, Sequence
 
 from dazro_trade.analytics.candle_behavior_report import CandleBehaviorRecord
@@ -35,9 +35,15 @@ from dazro_trade.analytics.trade_link import TradeLink
 @dataclass(frozen=True)
 class TradeLinkedConfig:
     min_trades_for_significance: int = 30
-    min_trades_for_a_plus: int = 20
-    a_plus_min_profit_factor: float = 1.0
-    a_plus_min_avg_r: float = 0.0
+    # Anti-overfitting guardrails for the A+ subset finder.
+    exploratory_min_trades: int = 20
+    valid_min_trades: int = 50
+    robust_min_trades: int = 100
+    valid_min_profit_factor: float = 1.15
+    valid_min_avg_r: float = 0.0
+    # Soft warning thresholds
+    confidence_warn_below: int = 30
+    strong_warn_below: int = 50
     displacement_buckets: tuple[tuple[str, float, float], ...] = (
         ("d_lt_1.0", 0.0, 1.0),
         ("d_1.0_to_1.5", 1.0, 1.5),
@@ -157,13 +163,27 @@ def _max_drawdown_r(rs: Sequence[float]) -> float:
     return round(max_dd, 4)
 
 
+def _longest_loss_streak(rs: Sequence[float]) -> int:
+    longest = 0
+    current = 0
+    for r in rs:
+        if r < 0:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
 def _trade_stats(trades: Sequence[LinkedTrade]) -> dict[str, Any]:
     rs = [t.r_multiple for t in trades if t.trade_outcome != "NO_DATA"]
     if not rs:
         return {
             "n_trades": 0, "wins": 0, "losses": 0, "be": 0,
-            "win_rate": 0.0, "loss_rate": 0.0, "avg_r": 0.0,
+            "win_rate": 0.0, "loss_rate": 0.0, "avg_r": 0.0, "median_r": 0.0,
+            "expectancy_r": 0.0,
             "profit_factor": 0.0, "max_drawdown_r": 0.0,
+            "longest_loss_streak": 0,
             "best_r": 0.0, "worst_r": 0.0, "statistically_significant": False,
         }
     wins = sum(1 for r in rs if r > 0)
@@ -178,6 +198,7 @@ def _trade_stats(trades: Sequence[LinkedTrade]) -> dict[str, Any]:
     else:
         pf = 0.0
     denom = wins + losses
+    avg_r = round(fmean(rs), 4)
     return {
         "n_trades": len(rs),
         "wins": wins,
@@ -185,9 +206,12 @@ def _trade_stats(trades: Sequence[LinkedTrade]) -> dict[str, Any]:
         "be": be,
         "win_rate": round(wins / denom, 4) if denom > 0 else 0.0,
         "loss_rate": round(losses / denom, 4) if denom > 0 else 0.0,
-        "avg_r": round(fmean(rs), 4),
+        "avg_r": avg_r,
+        "median_r": round(median(rs), 4),
+        "expectancy_r": avg_r,
         "profit_factor": pf,
         "max_drawdown_r": _max_drawdown_r(rs),
+        "longest_loss_streak": _longest_loss_streak(rs),
         "best_r": round(max(rs), 4),
         "worst_r": round(min(rs), 4),
         "statistically_significant": len(rs) >= 30,
@@ -283,38 +307,129 @@ def _matches_filter(t: LinkedTrade, filter_spec: tuple[tuple[str, bool], ...]) -
     return True
 
 
+def _score_candidate(
+    combo: tuple[str, ...],
+    subset_stats: dict[str, Any],
+    baseline_stats: dict[str, Any],
+    baseline_n: int,
+    cfg: TradeLinkedConfig,
+) -> dict[str, Any]:
+    """Wrap subset_stats with anti-overfitting guardrails."""
+    n = int(subset_stats.get("n_trades", 0))
+    sample_pct = round(n / baseline_n, 4) if baseline_n > 0 else 0.0
+    warnings: list[str] = []
+    if n < cfg.confidence_warn_below:
+        warnings.append(f"confidence_warning_n<{cfg.confidence_warn_below}")
+    if n < cfg.strong_warn_below:
+        warnings.append(f"strong_warning_n<{cfg.strong_warn_below}")
+    delta_pf = round(subset_stats["profit_factor"] - baseline_stats.get("profit_factor", 0.0), 4)
+    delta_avg_r = round(subset_stats["avg_r"] - baseline_stats.get("avg_r", 0.0), 4)
+    delta_win_rate = round(subset_stats["win_rate"] - baseline_stats.get("win_rate", 0.0), 4)
+    delta_max_dd = round(subset_stats["max_drawdown_r"] - baseline_stats.get("max_drawdown_r", 0.0), 4)
+    delta_longest_loss = subset_stats.get("longest_loss_streak", 0) - baseline_stats.get("longest_loss_streak", 0)
+    worse_aspects: list[str] = []
+    if delta_max_dd > 0:
+        worse_aspects.append(f"max_drawdown_r increased by {delta_max_dd}")
+    if delta_longest_loss > 0:
+        worse_aspects.append(f"longest_loss_streak increased by {delta_longest_loss}")
+    if subset_stats["worst_r"] < baseline_stats.get("worst_r", 0.0):
+        worse_aspects.append("worst trade R got worse")
+    valid_candidate = (
+        n >= cfg.valid_min_trades
+        and subset_stats["profit_factor"] >= cfg.valid_min_profit_factor
+        and subset_stats["avg_r"] >= cfg.valid_min_avg_r
+    )
+    is_robust = n >= cfg.robust_min_trades and valid_candidate
+    is_exploratory = n >= cfg.exploratory_min_trades and not valid_candidate
+
+    return {
+        "filter_rules_required": list(combo),
+        "rules_excluded_from_baseline": [k for k in FILTER_KEYS_FOR_A_PLUS if k not in combo],
+        "baseline_trade_count": baseline_n,
+        "trade_count": n,
+        "win_count": subset_stats["wins"],
+        "loss_count": subset_stats["losses"],
+        "be_count": subset_stats["be"],
+        "sample_pct": sample_pct,
+        "win_rate": subset_stats["win_rate"],
+        "profit_factor": subset_stats["profit_factor"],
+        "avg_r": subset_stats["avg_r"],
+        "median_r": subset_stats["median_r"],
+        "expectancy_r": subset_stats["expectancy_r"],
+        "max_drawdown_r": subset_stats["max_drawdown_r"],
+        "longest_loss_streak": subset_stats["longest_loss_streak"],
+        "best_r": subset_stats["best_r"],
+        "worst_r": subset_stats["worst_r"],
+        "delta_profit_factor_vs_baseline": delta_pf,
+        "delta_avg_r_vs_baseline": delta_avg_r,
+        "delta_win_rate_vs_baseline": delta_win_rate,
+        "delta_max_drawdown_vs_baseline": delta_max_dd,
+        "delta_longest_loss_streak_vs_baseline": delta_longest_loss,
+        "worse_than_baseline": worse_aspects,
+        "warnings": warnings,
+        "valid_candidate": valid_candidate,
+        "is_robust": is_robust,
+        "is_exploratory_only": is_exploratory,
+    }
+
+
 def find_a_plus_subsets(
     trades: Sequence[LinkedTrade],
     *,
     cfg: TradeLinkedConfig,
     keys: tuple[str, ...] = FILTER_KEYS_FOR_A_PLUS,
     max_combo_size: int = 3,
-) -> list[dict[str, Any]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Exhaustive scan of small filter combinations from `keys`.
 
-    Each filter is "attr=True" only (we are looking for *required*
-    confluence). Returns the subsets with n_trades >= min_trades_for_a_plus
-    AND profit_factor >= a_plus_min_profit_factor AND avg_r >= a_plus_min_avg_r,
-    sorted by profit_factor descending.
+    Returns a dict with three separately ranked lists:
+        exploratory_candidates  n >= cfg.exploratory_min_trades
+        valid_candidates        n >= cfg.valid_min_trades AND
+                                PF >= cfg.valid_min_profit_factor AND
+                                avg_r >= cfg.valid_min_avg_r
+        robust_candidates       n >= cfg.robust_min_trades AND valid
+
+    Each candidate carries anti-overfitting metadata: trade_count,
+    win_count/loss_count, sample_pct, WR/PF/AvgR/median_R/expectancy_R,
+    MaxDD, longest_loss_streak, delta_* vs baseline, worse_than_baseline
+    aspects, warnings (confidence/strong) and the boolean flags
+    valid_candidate / is_robust / is_exploratory_only.
     """
-    results: list[dict[str, Any]] = []
+    baseline_stats = _trade_stats(trades)
+    baseline_n = baseline_stats["n_trades"]
+    exploratory: list[dict[str, Any]] = []
+    valid: list[dict[str, Any]] = []
+    robust: list[dict[str, Any]] = []
+
     for size in range(1, max_combo_size + 1):
         for combo in combinations(keys, size):
             spec = tuple((k, True) for k in combo)
             subset = [t for t in trades if _matches_filter(t, spec)]
-            if len(subset) < cfg.min_trades_for_a_plus:
+            if len(subset) < cfg.exploratory_min_trades:
                 continue
             stats = _trade_stats(subset)
-            if stats["profit_factor"] < cfg.a_plus_min_profit_factor:
-                continue
-            if stats["avg_r"] < cfg.a_plus_min_avg_r:
-                continue
-            results.append({
-                "filter": list(combo),
-                **stats,
-            })
-    results.sort(key=lambda r: (r["profit_factor"], r["avg_r"]), reverse=True)
-    return results
+            scored = _score_candidate(combo, stats, baseline_stats, baseline_n, cfg)
+            if scored["is_robust"]:
+                robust.append(scored)
+                valid.append(scored)
+            elif scored["valid_candidate"]:
+                valid.append(scored)
+            else:
+                exploratory.append(scored)
+
+    def _sort_key(r: dict[str, Any]) -> tuple[float, float, int]:
+        return (float(r["profit_factor"]), float(r["avg_r"]), int(r["trade_count"]))
+
+    exploratory.sort(key=_sort_key, reverse=True)
+    valid.sort(key=_sort_key, reverse=True)
+    robust.sort(key=_sort_key, reverse=True)
+
+    return {
+        "baseline": {**baseline_stats, "baseline_trade_count": baseline_n},
+        "exploratory_candidates": exploratory,
+        "valid_candidates": valid,
+        "robust_candidates": robust,
+    }
 
 
 # ----------------------------------------------------------------------
@@ -339,12 +454,15 @@ def build_trade_linked_report(
     by_displacement = _by_bucket(linked, lambda t: t.displacement_score, cfg.displacement_buckets)
     by_relative_volume = _by_bucket(linked, lambda t: t.relative_volume_20, cfg.relative_volume_buckets)
     a_plus = find_a_plus_subsets(linked, cfg=cfg)
+    verdict = _build_verdict(overall, a_plus, cfg)
     return {
         "config": {
             "min_trades_for_significance": cfg.min_trades_for_significance,
-            "min_trades_for_a_plus": cfg.min_trades_for_a_plus,
-            "a_plus_min_profit_factor": cfg.a_plus_min_profit_factor,
-            "a_plus_min_avg_r": cfg.a_plus_min_avg_r,
+            "exploratory_min_trades": cfg.exploratory_min_trades,
+            "valid_min_trades": cfg.valid_min_trades,
+            "robust_min_trades": cfg.robust_min_trades,
+            "valid_min_profit_factor": cfg.valid_min_profit_factor,
+            "valid_min_avg_r": cfg.valid_min_avg_r,
             "displacement_buckets": [list(b) for b in cfg.displacement_buckets],
             "relative_volume_buckets": [list(b) for b in cfg.relative_volume_buckets],
         },
@@ -359,6 +477,53 @@ def build_trade_linked_report(
         "by_displacement_bucket": by_displacement,
         "by_relative_volume_bucket": by_relative_volume,
         "a_plus_subsets": a_plus,
+        "verdict": verdict,
+    }
+
+
+def _build_verdict(overall: dict[str, Any], a_plus: dict[str, list], cfg: TradeLinkedConfig) -> dict[str, Any]:
+    robust = a_plus.get("robust_candidates", [])
+    valid = a_plus.get("valid_candidates", [])
+    exploratory = a_plus.get("exploratory_candidates", [])
+    baseline_profitable = overall.get("profit_factor", 0.0) >= 1.0 and overall.get("avg_r", 0.0) >= 0.0
+    if robust:
+        decision = "PROFITABLE_SUBSET_FOUND_ROBUST"
+        rationale = (
+            f"At least {len(robust)} robust subset(s) found "
+            f"(n >= {cfg.robust_min_trades}, PF >= {cfg.valid_min_profit_factor}, avg_R >= {cfg.valid_min_avg_r}). "
+            "Strategy has actionable edge under those filters."
+        )
+    elif valid:
+        decision = "PROFITABLE_SUBSET_FOUND_NEEDS_MORE_DATA"
+        rationale = (
+            f"{len(valid)} valid subset(s) found at n >= {cfg.valid_min_trades} but none at the "
+            f"robust threshold (n >= {cfg.robust_min_trades}). Edge looks real but sample size still "
+            "too small for production deployment without further validation."
+        )
+    elif exploratory:
+        decision = "WEAK_EXPLORATORY_ONLY"
+        rationale = (
+            f"Only {len(exploratory)} exploratory candidate(s) above n >= {cfg.exploratory_min_trades} "
+            "and they failed the valid thresholds. Likely overfitting risk; no actionable edge yet."
+        )
+    elif baseline_profitable:
+        decision = "BASELINE_OK_NO_FILTER_NEEDED"
+        rationale = "Baseline Adelin is already profitable; no filter combination significantly improves it."
+    else:
+        decision = "NO_EDGE_FOUND_SUSPEND_OR_REWORK"
+        rationale = (
+            "Baseline Adelin is unprofitable (PF < 1 or avg_R < 0) and no subset filter restores "
+            "edge. Suspend Adelin until the entry/score logic is reworked."
+        )
+    return {
+        "decision": decision,
+        "rationale": rationale,
+        "robust_count": len(robust),
+        "valid_count": len(valid),
+        "exploratory_count": len(exploratory),
+        "baseline_profit_factor": overall.get("profit_factor", 0.0),
+        "baseline_avg_r": overall.get("avg_r", 0.0),
+        "baseline_max_drawdown_r": overall.get("max_drawdown_r", 0.0),
     }
 
 
@@ -416,25 +581,73 @@ def render_trade_linked_markdown(report: dict[str, Any]) -> str:
     for flag, buckets in by_flag.items():
         lines.append(_table(f"By flag: {flag}", buckets))
 
-    a_plus = report.get("a_plus_subsets") or []
-    lines.append(f"## A+ subsets (PF >= {report['config'].get('a_plus_min_profit_factor')}, avg_R >= {report['config'].get('a_plus_min_avg_r')}, n >= {report['config'].get('min_trades_for_a_plus')})\n")
-    if not a_plus:
-        lines.append("_no qualifying subset found_")
-    else:
-        headers = ["filter", "n", "WR", "PF", "avg_R", "max_DD"]
-        lines.append("| " + " | ".join(headers) + " |")
-        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-        for row in a_plus[:30]:
+    verdict = report.get("verdict") or {}
+    if verdict:
+        lines.append("## Verdict\n")
+        lines.append(f"- **decision**: `{verdict.get('decision')}`")
+        lines.append(f"- rationale: {verdict.get('rationale')}")
+        lines.append(f"- robust_count: {verdict.get('robust_count')}")
+        lines.append(f"- valid_count: {verdict.get('valid_count')}")
+        lines.append(f"- exploratory_count: {verdict.get('exploratory_count')}")
+        lines.append(f"- baseline_profit_factor: {_fmt(verdict.get('baseline_profit_factor'))}")
+        lines.append(f"- baseline_avg_r: {_fmt(verdict.get('baseline_avg_r'))}")
+        lines.append(f"- baseline_max_drawdown_r: {_fmt(verdict.get('baseline_max_drawdown_r'))}\n")
+
+    a_plus = report.get("a_plus_subsets") or {}
+    cfg = report.get("config") or {}
+
+    def _candidate_block(title: str, items: list[dict], threshold_label: str) -> str:
+        out_lines: list[str] = [f"## {title} ({threshold_label})\n"]
+        if not items:
+            out_lines.append("_no qualifying subset_\n")
+            return "\n".join(out_lines)
+        headers = [
+            "filter", "n", "sample%", "wins", "loss", "WR", "PF", "avg_R",
+            "median_R", "max_DD", "loss_streak",
+            "ΔPF", "Δavg_R", "ΔWR", "Δmax_DD",
+            "worse", "warnings",
+        ]
+        out_lines.append("| " + " | ".join(headers) + " |")
+        out_lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+        for row in items[:30]:
             cells = [
-                " + ".join(row.get("filter", [])),
-                str(row.get("n_trades")),
+                " + ".join(row.get("filter_rules_required", [])) or "(none)",
+                str(row.get("trade_count")),
+                _fmt(row.get("sample_pct")),
+                str(row.get("win_count")),
+                str(row.get("loss_count")),
                 _fmt(row.get("win_rate")),
                 _fmt(row.get("profit_factor")),
                 _fmt(row.get("avg_r")),
+                _fmt(row.get("median_r")),
                 _fmt(row.get("max_drawdown_r")),
+                str(row.get("longest_loss_streak")),
+                _fmt(row.get("delta_profit_factor_vs_baseline")),
+                _fmt(row.get("delta_avg_r_vs_baseline")),
+                _fmt(row.get("delta_win_rate_vs_baseline")),
+                _fmt(row.get("delta_max_drawdown_vs_baseline")),
+                "; ".join(row.get("worse_than_baseline") or []) or "—",
+                "; ".join(row.get("warnings") or []) or "—",
             ]
-            lines.append("| " + " | ".join(cells) + " |")
-        lines.append("")
+            out_lines.append("| " + " | ".join(cells) + " |")
+        out_lines.append("")
+        return "\n".join(out_lines)
+
+    lines.append(_candidate_block(
+        "Robust candidates",
+        a_plus.get("robust_candidates") or [],
+        f"n >= {cfg.get('robust_min_trades')}, PF >= {cfg.get('valid_min_profit_factor')}, avg_R >= {cfg.get('valid_min_avg_r')}",
+    ))
+    lines.append(_candidate_block(
+        "Valid candidates",
+        a_plus.get("valid_candidates") or [],
+        f"n >= {cfg.get('valid_min_trades')}, PF >= {cfg.get('valid_min_profit_factor')}, avg_R >= {cfg.get('valid_min_avg_r')}",
+    ))
+    lines.append(_candidate_block(
+        "Exploratory candidates (DO NOT DEPLOY — sample too small)",
+        a_plus.get("exploratory_candidates") or [],
+        f"n >= {cfg.get('exploratory_min_trades')} but failed valid thresholds",
+    ))
 
     return "\n".join(lines)
 
