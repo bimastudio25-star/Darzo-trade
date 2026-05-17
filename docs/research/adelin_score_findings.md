@@ -37,6 +37,18 @@ Fields prepared for future reports:
 
 Existing historical reports were not regenerated. Old CSV/JSON files will still miss these fields until a future small, bounded profiling run is executed.
 
+## Shared Simulator Metric Revision
+
+`metric_revision_due_to_still_open_policy: true`
+
+Affected strategies:
+
+- `strategy_1_adelin_scalp`
+- `strategy_2_liquidity_expansion`
+- `any_strategy_using_shared_simulator`
+
+The shared simulator no longer treats unresolved but valid trades as metric-neutral `STILL_OPEN` positions. Future backtests close them at the available close as either `TIMEOUT_CLOSE` or `END_OF_DATA_CLOSE`, so historical Adelin and Strategy 2.0 baselines can change. This is expected and should not be used to reinterpret Adelin as deployable; Adelin remains research-only / locked down.
+
 ## Prossimo step di ricerca, in ordine di priorità
 
 1. `fix/strategy-2-still-open`

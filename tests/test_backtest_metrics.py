@@ -63,6 +63,28 @@ def test_basic_aggregation():
     assert m.tp1_hit_rate == pytest_approx(1 / 3)
     assert m.tp2_hit_rate == pytest_approx(1 / 3)
     assert m.sl_hit_rate == pytest_approx(1 / 3)
+    payload = m.to_dict()
+    assert payload["metric_revision_due_to_still_open_policy"] is True
+    assert payload["affected_strategies"] == [
+        "strategy_1_adelin_scalp",
+        "strategy_2_liquidity_expansion",
+        "any_strategy_using_shared_simulator",
+    ]
+
+
+def test_timeout_and_end_of_data_closes_count_as_r_results():
+    signals = [_signal() for _ in range(3)]
+    trades = [
+        _trade("TIMEOUT_CLOSE", -0.2),
+        _trade("END_OF_DATA_CLOSE", 0.4),
+        _trade("STILL_OPEN", 0.0),
+    ]
+    m = compute_backtest_metrics(signals, trades)
+    assert m.valid_trades == 3
+    assert m.timeout_close_rate == pytest_approx(1 / 3)
+    assert m.end_of_data_close_rate == pytest_approx(1 / 3)
+    assert m.still_open_rate == pytest_approx(1 / 3)
+    assert m.average_r == pytest_approx(((-0.2) + 0.4 + 0.0) / 3)
 
 
 def test_rejected_signals_counted():
