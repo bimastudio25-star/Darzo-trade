@@ -14,6 +14,11 @@ from dazro_trade.analysis.liquidity_expansion import (
     LiquidityExpansionSignal,
     evaluate_liquidity_expansion,
 )
+from dazro_trade.backtest.adelin_sl_policy import (
+    AdelinSLDecision,
+    AdelinSLPolicy,
+    evaluate_adelin_sl_acceptance,
+)
 from dazro_trade.backtest.data_loader import BacktestDataSlicer
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade, simulate_trade_outcome
 from dazro_trade.core.config import Settings
@@ -110,6 +115,7 @@ class BacktestConfig:
     adelin_scalp_refinement_tf: str = "M5"
     adelin_scalp_trigger_tf: str = "M1"
     adelin_scalp_htf_context: list[str] = field(default_factory=lambda: ["D1", "H4", "H1"])
+    adelin_sl_policy: AdelinSLPolicy | None = None
 
 
 def _classify_adelin_rejection_layer(reason: str) -> str:
@@ -342,6 +348,7 @@ def _evaluate_adelin(
             "setup_mode": signal_data.get("setup_mode"),
             "sl_pips": signal_data.get("sl_pips"),
             "sl_dollars": signal_data.get("sl_dollars"),
+            "micro_confluence": signal_data.get("micro_confluence"),
         },
     )
     if diagnostics is not None:
@@ -384,6 +391,28 @@ def _apply_per_strategy_sl_filter(signal: BacktestSignal, max_sl_map: dict[str, 
     if signal.sl_distance > max_sl:
         signal.accepted = False
         signal.rejection_reasons.append(f"SL_TOO_WIDE_for_{signal.strategy}_max={max_sl}_actual={round(signal.sl_distance, 2)}")
+
+
+def _apply_adelin_sl_policy(signal: BacktestSignal, policy: AdelinSLPolicy) -> AdelinSLDecision:
+    """Evaluate Adelin signal against the dynamic SL policy and mutate
+    `signal.accepted` / `rejection_reasons` accordingly.
+
+    Returns the AdelinSLDecision so the caller can record diagnostics
+    (tier counters, ex-rejected recovery, etc.).
+    """
+    decision = evaluate_adelin_sl_acceptance(
+        sl_usd=signal.sl_distance,
+        score=signal.score,
+        setup_mode=(signal.metadata or {}).get("setup_mode"),
+        micro_confluence=(signal.metadata or {}).get("micro_confluence"),
+        policy=policy,
+    )
+    if not decision.accepted:
+        signal.accepted = False
+        code = decision.rejection_code()
+        if code:
+            signal.rejection_reasons.append(code)
+    return decision
 
 
 def _future_m1(m1_full: pd.DataFrame, start_time: datetime) -> pd.DataFrame:
@@ -540,7 +569,10 @@ def run_backtest(
                     continue
                 eval_signals += len(evaluated)
                 for sig in evaluated:
-                    _apply_per_strategy_sl_filter(sig, cfg.per_strategy_max_sl)
+                    if sig.strategy == STRATEGY_1_NAME and cfg.adelin_sl_policy is not None:
+                        _apply_adelin_sl_policy(sig, cfg.adelin_sl_policy)
+                    else:
+                        _apply_per_strategy_sl_filter(sig, cfg.per_strategy_max_sl)
                     min_score = cfg.min_score_overrides.get(sig.strategy)
                     if sig.accepted and min_score is not None and sig.score is not None and sig.score < min_score:
                         sig.accepted = False
