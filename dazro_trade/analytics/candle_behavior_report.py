@@ -430,6 +430,74 @@ def write_report_files(
     return {"report_json": str(json_path), "report_md": str(md_path)}
 
 
+def write_records_csv(
+    *,
+    output_dir: str,
+    records: Sequence[CandleBehaviorRecord],
+    trade_links: dict[int, Any] | None = None,
+    file_stem: str = "profile_candle_records",
+) -> str:
+    """Flatten records to one row per (record, touch) for downstream
+    analysis in pandas / Excel.
+
+    When `trade_links` is provided ({record_index -> TradeLink}), each
+    row is enriched with the nearest Adelin signal/trade metadata —
+    enabling the trade-linked edge report.
+
+    Records without any touch are still emitted with empty zone /
+    reaction columns so we keep features statistics on the whole dataset.
+    """
+    trade_links = trade_links or {}
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for idx, r in enumerate(records):
+        base = {
+            "record_index": idx,
+            "timestamp": r.timestamp.isoformat() if hasattr(r.timestamp, "isoformat") else str(r.timestamp),
+            "session": r.session,
+            "pattern_label": r.pattern_label,
+        }
+        for k, v in (r.features or {}).items():
+            base[f"feature_{k}"] = v
+        link = trade_links.get(idx)
+        if link is not None:
+            for k, v in link.to_dict().items():
+                base[k] = v
+        if not r.touches:
+            rows.append(base)
+            continue
+        for touch, rxn in zip(r.touches, r.reactions):
+            row = dict(base)
+            row["zone_type"] = touch.zone.type
+            row["zone_side"] = touch.zone.side
+            row["zone_timeframe"] = touch.zone.timeframe
+            row["zone_label"] = touch.zone.label
+            row["zone_top"] = float(touch.zone.top)
+            row["zone_bottom"] = float(touch.zone.bottom)
+            row["zone_height"] = float(touch.zone.height)
+            row["touched_top"] = touch.touched_top
+            row["touched_bottom"] = touch.touched_bottom
+            row["touched_center"] = touch.touched_center
+            for h, val in (rxn.reaction_at or {}).items():
+                row[f"reaction_at_{h}"] = val
+            row["max_favorable_excursion"] = rxn.max_favorable_excursion
+            row["max_adverse_excursion"] = rxn.max_adverse_excursion
+            row["did_sweep"] = rxn.did_sweep
+            row["did_reclaim"] = rxn.did_reclaim
+            row["did_displace"] = rxn.did_displace
+            row["did_break_and_continue"] = rxn.did_break_and_continue
+            row["did_reject"] = rxn.did_reject
+            row["time_to_reaction_bars"] = rxn.time_to_reaction_bars
+            row["volume_on_touch"] = rxn.volume_on_touch
+            row["relative_volume_on_touch"] = rxn.relative_volume_on_touch
+            rows.append(row)
+    df = pd.DataFrame(rows)
+    csv_path = out_root / f"{file_stem}.csv"
+    df.to_csv(csv_path, index=False)
+    return str(csv_path)
+
+
 __all__ = [
     "NEWS_PROXIMITY_TODO_LABEL",
     "CandleBehaviorConfig",
@@ -442,5 +510,6 @@ __all__ = [
     "iterate_candle_behavior_records",
     "rank_combos",
     "render_markdown",
+    "write_records_csv",
     "write_report_files",
 ]

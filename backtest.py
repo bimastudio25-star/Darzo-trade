@@ -22,7 +22,13 @@ from dazro_trade.backtest import (
 from dazro_trade.analytics.candle_behavior_report import (
     build_report as build_candle_behavior_report,
     iterate_candle_behavior_records,
+    write_records_csv as write_candle_behavior_records_csv,
     write_report_files as write_candle_behavior_files,
+)
+from dazro_trade.analytics.trade_link import link_records_to_trades
+from dazro_trade.analytics.trade_linked_edge_report import (
+    build_trade_linked_report,
+    write_trade_linked_files,
 )
 from dazro_trade.analytics.zone_features import extract_htf_liquidity_zones
 from dazro_trade.backtest.runner import build_equity_curve
@@ -180,7 +186,22 @@ def main(argv: list[str] | None = None) -> int:
             records = iterate_candle_behavior_records(df_scan, zones)
             report = build_candle_behavior_report(records)
             profile_paths = write_candle_behavior_files(output_dir=args.output_dir, report=report)
-            log.info("profile_candle_behavior_written paths=%s records=%s", profile_paths, len(records))
+            tf_minutes = {"M1": 1, "M5": 5, "M15": 15, "H1": 60, "H4": 240, "D1": 1440}.get(scan_tf, 5)
+            trade_links = link_records_to_trades(
+                records, signals, trades,
+                strategy="strategy_1_adelin_scalp",
+                timeframe_minutes=tf_minutes,
+                link_window_bars=20,
+            )
+            csv_path = write_candle_behavior_records_csv(
+                output_dir=args.output_dir, records=records, trade_links=trade_links,
+            )
+            edge_report = build_trade_linked_report(records, trade_links)
+            edge_paths = write_trade_linked_files(output_dir=args.output_dir, report=edge_report)
+            log.info(
+                "profile_candle_behavior_written market=%s records_csv=%s edge=%s records=%s linked=%s",
+                profile_paths, csv_path, edge_paths, len(records), len(trade_links),
+            )
 
     if partial:
         log.warning("backtest_partial_output_saved paths=%s", paths)
