@@ -14,6 +14,56 @@ from dazro_trade.core.symbols import get_symbol_spec
 from dazro_trade.runtime.sessions import current_session_name
 
 
+def compute_micro_confluence(
+    *,
+    sweep: dict[str, Any] | None,
+    fvg: dict[str, Any] | None,
+    volume_confluence: dict[str, Any] | None,
+    tp1_rr: float,
+    min_rr: float = 2.0,
+) -> dict[str, Any]:
+    """Build the Adelin micro-confluence boolean map used by the SL policy.
+
+    Document fields mapped from current pipeline output (proxies noted):
+      - internal_liquidity_sweep -> sweep is not None
+      - fvg_present              -> bool(fvg)               (note: IFVG not yet
+                                                              distinguished from FVG)
+      - liquidity_crack_present  -> bool(volume_confluence) (proxy for
+                                                              gap-liquidity /
+                                                              liquidity crack)
+      - rr_ok                    -> tp1_rr >= min_rr
+      - trigger_m1_valid         -> implicit True if signal generated
+                                    (pipeline only emits when trigger fires)
+      - htf_aligned              -> implicit True since direction is derived
+                                    from sweep direction itself; explicit HTF
+                                    trend gate to be added in a later commit
+    """
+    sweep_present = sweep is not None
+    fvg_present = bool(fvg) and bool(fvg.get("top") is not None if isinstance(fvg, dict) else False)
+    liquidity_crack_present = bool(volume_confluence)
+    rr_ok = float(tp1_rr) >= float(min_rr)
+    # Trigger M1 and HTF alignment are implicit at this point in the pipeline
+    trigger_m1_valid = True
+    htf_aligned = True
+    has_post_sweep_zone = fvg_present or liquidity_crack_present
+    all_pass = (
+        sweep_present
+        and has_post_sweep_zone
+        and trigger_m1_valid
+        and rr_ok
+        and htf_aligned
+    )
+    return {
+        "sweep_present": sweep_present,
+        "fvg_present": fvg_present,
+        "liquidity_crack_present": liquidity_crack_present,
+        "rr_ok": rr_ok,
+        "trigger_m1_valid": trigger_m1_valid,
+        "htf_aligned": htf_aligned,
+        "all_pass": all_pass,
+    }
+
+
 def run_adelin_scan(
     *,
     mt5: Any | None = None,
@@ -100,6 +150,13 @@ def run_adelin_scan(
     setup_mode = str(score_detail["setup_mode"])
     signal = None
     if score_detail["verdict"] == "TRIGGERED":
+        micro = compute_micro_confluence(
+            sweep=sweep,
+            fvg=fvg,
+            volume_confluence=volume_check,
+            tp1_rr=float((levels.get("tp1") or {}).get("rr", 0.0) if isinstance(levels.get("tp1"), dict) else 0.0),
+            min_rr=float(getattr(settings, "adelin_a_plus_rr", 2.0)),
+        )
         signal = {
             "symbol": symbol,
             "setup_mode": setup_mode,
@@ -117,6 +174,7 @@ def run_adelin_scan(
             "number_theory": nt_confluence,
             "fvg": fvg,
             "sweep": sweep,
+            "micro_confluence": micro,
             "session": session,
             "spread_pips": float(spread_pips or 0.0),
             "paper_demo": True,
@@ -258,4 +316,4 @@ def _result(now: datetime, signal: dict[str, Any] | None, rejected: list[str], s
     }
 
 
-__all__ = ["run_adelin_scan"]
+__all__ = ["compute_micro_confluence", "run_adelin_scan"]
