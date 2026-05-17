@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 
 from dazro_trade.backtest import (
@@ -27,6 +27,7 @@ from dazro_trade.analytics.candle_behavior_report import (
 )
 from dazro_trade.analytics.trade_link import link_records_to_trades
 from dazro_trade.analytics.trade_linked_edge_report import (
+    TradeLinkedConfig,
     build_trade_linked_report,
     write_trade_linked_files,
 )
@@ -42,6 +43,19 @@ def _parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+
+
+def _parse_walk_forward_train_end(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = value.strip()
+    has_explicit_time = "T" in raw or " " in raw
+    parsed = datetime.fromisoformat(raw)
+    if not has_explicit_time:
+        parsed = datetime.combine(parsed.date(), time.max)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_lookback(value: str | None, defaults: dict[str, int]) -> dict[str, int]:
@@ -85,6 +99,11 @@ def main(argv: list[str] | None = None) -> int:
         default="M5",
         choices=("M1", "M5"),
         help="Timeframe to scan for the candle-behavior profile. Default M5.",
+    )
+    parser.add_argument(
+        "--profile-walk-forward-train-end",
+        default=None,
+        help="ISO date/datetime ending the IN-SAMPLE training window. Date-only values are inclusive to 23:59:59 UTC. Trades with signal_timestamp <= this cutoff are IS, the rest is OUT-OF-SAMPLE. When omitted, walk-forward is not applied.",
     )
     args = parser.parse_args(argv)
 
@@ -196,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
             csv_path = write_candle_behavior_records_csv(
                 output_dir=args.output_dir, records=records, trade_links=trade_links,
             )
-            edge_report = build_trade_linked_report(records, trade_links)
+            wf_train_end = _parse_walk_forward_train_end(args.profile_walk_forward_train_end)
+            edge_cfg = TradeLinkedConfig(walk_forward_train_end=wf_train_end) if wf_train_end is not None else TradeLinkedConfig()
+            edge_report = build_trade_linked_report(records, trade_links, config=edge_cfg)
             edge_paths = write_trade_linked_files(output_dir=args.output_dir, report=edge_report)
             log.info(
                 "profile_candle_behavior_written market=%s records_csv=%s edge=%s records=%s linked=%s",

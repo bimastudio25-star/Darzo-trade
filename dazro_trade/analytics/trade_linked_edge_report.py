@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 from statistics import fmean, median
@@ -44,6 +45,23 @@ class TradeLinkedConfig:
     # Soft warning thresholds
     confidence_warn_below: int = 30
     strong_warn_below: int = 50
+    # Walk-forward temporal split: trades up to (and including)
+    # `train_end` go to IN-SAMPLE, the rest goes to OUT-OF-SAMPLE.
+    # When None, the report falls back to single-period statistics.
+    walk_forward_train_end: datetime | None = None
+    # Minimum OOS trades required to attempt the IS/OOS comparison.
+    oos_min_trades: int = 1
+    # An OOS slice "holds" if PF >= oos_min_profit_factor OR
+    # avg_R >= oos_min_avg_r.
+    oos_min_profit_factor: float = 1.0
+    oos_min_avg_r: float = 0.0
+    # Guardrails for "absurd" OOS degradation in drawdown/loss streak.
+    # OOS may be noisier, but truly-robust candidates must not blow out
+    # relative to the in-sample slice.
+    oos_max_dd_worsening_factor: float = 2.0
+    oos_max_dd_worsening_abs_r: float = 3.0
+    oos_max_loss_streak_worsening_factor: float = 2.0
+    oos_max_loss_streak_worsening_abs: int = 3
     displacement_buckets: tuple[tuple[str, float, float], ...] = (
         ("d_lt_1.0", 0.0, 1.0),
         ("d_1.0_to_1.5", 1.0, 1.5),
@@ -82,6 +100,7 @@ class LinkedTrade:
     zone_type: str | None
     zone_side: str | None
     sl_distance: float | None
+    signal_timestamp: datetime | None = None
 
 
 # ----------------------------------------------------------------------
@@ -142,6 +161,7 @@ def build_linked_trades(
             zone_type=zone_type,
             zone_side=zone_side,
             sl_distance=link.nearest_signal_sl_distance,
+            signal_timestamp=link.nearest_signal_timestamp,
         ))
     return linked
 
@@ -307,12 +327,79 @@ def _matches_filter(t: LinkedTrade, filter_spec: tuple[tuple[str, bool], ...]) -
     return True
 
 
+def _ensure_utc(ts: datetime | None) -> datetime | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def _split_train_test(
+    trades: Sequence[LinkedTrade],
+    train_end: datetime | None,
+) -> tuple[list[LinkedTrade], list[LinkedTrade]]:
+    """Partition trades by signal_timestamp:
+    IS  -> signal_timestamp <= train_end
+    OOS -> signal_timestamp >  train_end
+    Trades with no signal_timestamp are kept in IS (no temporal info).
+    """
+    if train_end is None:
+        return list(trades), []
+    cutoff = _ensure_utc(train_end)
+    in_sample: list[LinkedTrade] = []
+    oos: list[LinkedTrade] = []
+    for t in trades:
+        ts = _ensure_utc(t.signal_timestamp)
+        if ts is None or cutoff is None or ts <= cutoff:
+            in_sample.append(t)
+        else:
+            oos.append(t)
+    return in_sample, oos
+
+
+def _oos_holds(stats: dict[str, Any], cfg: TradeLinkedConfig) -> bool:
+    if stats.get("n_trades", 0) < cfg.oos_min_trades:
+        return False
+    pf_ok = stats.get("profit_factor", 0.0) >= cfg.oos_min_profit_factor
+    avgr_ok = stats.get("avg_r", 0.0) >= cfg.oos_min_avg_r
+    return pf_ok or avgr_ok
+
+
+def _oos_degradation_warnings(
+    is_stats: dict[str, Any],
+    oos_stats: dict[str, Any],
+    cfg: TradeLinkedConfig,
+) -> list[str]:
+    warnings: list[str] = []
+    is_dd = float(is_stats.get("max_drawdown_r", 0.0) or 0.0)
+    oos_dd = float(oos_stats.get("max_drawdown_r", 0.0) or 0.0)
+    dd_limit = max(
+        is_dd * cfg.oos_max_dd_worsening_factor,
+        is_dd + cfg.oos_max_dd_worsening_abs_r,
+    )
+    if oos_dd > dd_limit:
+        warnings.append(f"oos_max_drawdown_r_degraded>{dd_limit:.2f}")
+
+    is_streak = int(is_stats.get("longest_loss_streak", 0) or 0)
+    oos_streak = int(oos_stats.get("longest_loss_streak", 0) or 0)
+    streak_limit = max(
+        int(is_streak * cfg.oos_max_loss_streak_worsening_factor),
+        is_streak + cfg.oos_max_loss_streak_worsening_abs,
+    )
+    if oos_streak > streak_limit:
+        warnings.append(f"oos_loss_streak_degraded>{streak_limit}")
+    return warnings
+
+
 def _score_candidate(
     combo: tuple[str, ...],
     subset_stats: dict[str, Any],
     baseline_stats: dict[str, Any],
     baseline_n: int,
     cfg: TradeLinkedConfig,
+    subset_in_sample: Sequence[LinkedTrade] | None = None,
+    subset_out_of_sample: Sequence[LinkedTrade] | None = None,
 ) -> dict[str, Any]:
     """Wrap subset_stats with anti-overfitting guardrails."""
     n = int(subset_stats.get("n_trades", 0))
@@ -342,6 +429,64 @@ def _score_candidate(
     is_robust = n >= cfg.robust_min_trades and valid_candidate
     is_exploratory = n >= cfg.exploratory_min_trades and not valid_candidate
 
+    # Walk-forward IS / OOS evaluation
+    is_stats: dict[str, Any] | None = None
+    oos_stats: dict[str, Any] | None = None
+    oos_holds = None
+    oos_collapsed = None
+    truly_valid = False
+    risk_label: str | None = None
+    oos_degradation: list[str] = []
+    walk_forward_status = "not_evaluated"
+    if cfg.walk_forward_train_end is not None and subset_in_sample is not None and subset_out_of_sample is not None:
+        is_stats = _trade_stats(subset_in_sample)
+        oos_stats = _trade_stats(subset_out_of_sample)
+        if oos_stats["n_trades"] < cfg.oos_min_trades:
+            walk_forward_status = "oos_insufficient_data"
+            oos_holds = False
+            oos_collapsed = False
+        else:
+            oos_holds = _oos_holds(oos_stats, cfg)
+            oos_degradation = _oos_degradation_warnings(is_stats, oos_stats, cfg)
+            is_positive = (
+                is_stats["n_trades"] > 0
+                and is_stats["profit_factor"] >= 1.0
+                and is_stats["avg_r"] >= 0.0
+            )
+            oos_collapsed = bool(is_positive and not oos_holds)
+            if oos_collapsed:
+                walk_forward_status = "OVERFIT_RISK"
+                risk_label = "OVERFIT_RISK"
+            elif not oos_holds:
+                walk_forward_status = "oos_fails"
+            elif oos_degradation:
+                walk_forward_status = "oos_degraded"
+            else:
+                walk_forward_status = "holds"
+        deployable_full = (
+            n >= cfg.valid_min_trades
+            and subset_stats["profit_factor"] >= cfg.valid_min_profit_factor
+            and subset_stats["avg_r"] > cfg.valid_min_avg_r
+        )
+        truly_valid = (
+            is_robust
+            and deployable_full
+            and walk_forward_status == "holds"
+            and oos_stats is not None
+            and oos_stats["n_trades"] >= cfg.oos_min_trades
+        )
+        if walk_forward_status == "oos_insufficient_data":
+            warnings.append("oos_insufficient_data")
+        elif walk_forward_status == "OVERFIT_RISK":
+            warnings.append("OVERFIT_RISK")
+            warnings.append("oos_did_not_hold")
+        elif walk_forward_status == "oos_fails":
+            warnings.append("oos_did_not_hold")
+        elif walk_forward_status == "oos_degraded":
+            warnings.extend(oos_degradation)
+    elif cfg.walk_forward_train_end is not None:
+        warnings.append("walk_forward_not_evaluated")
+
     return {
         "filter_rules_required": list(combo),
         "rules_excluded_from_baseline": [k for k in FILTER_KEYS_FOR_A_PLUS if k not in combo],
@@ -370,6 +515,15 @@ def _score_candidate(
         "valid_candidate": valid_candidate,
         "is_robust": is_robust,
         "is_exploratory_only": is_exploratory,
+        "in_sample": is_stats,
+        "out_of_sample": oos_stats,
+        "walk_forward_status": walk_forward_status,
+        "oos_holds": oos_holds,
+        "oos_collapsed": oos_collapsed,
+        "risk_label": risk_label,
+        "oos_degradation_warnings": oos_degradation,
+        "truly_valid": truly_valid,
+        "is_truly_valid": truly_valid,
     }
 
 
@@ -379,15 +533,16 @@ def find_a_plus_subsets(
     cfg: TradeLinkedConfig,
     keys: tuple[str, ...] = FILTER_KEYS_FOR_A_PLUS,
     max_combo_size: int = 3,
-) -> dict[str, list[dict[str, Any]]]:
+) -> dict[str, Any]:
     """Exhaustive scan of small filter combinations from `keys`.
 
-    Returns a dict with three separately ranked lists:
+    Returns a dict with four separately ranked lists:
         exploratory_candidates  n >= cfg.exploratory_min_trades
         valid_candidates        n >= cfg.valid_min_trades AND
                                 PF >= cfg.valid_min_profit_factor AND
                                 avg_r >= cfg.valid_min_avg_r
         robust_candidates       n >= cfg.robust_min_trades AND valid
+        truly_robust_candidates robust AND OOS holds under walk-forward
 
     Each candidate carries anti-overfitting metadata: trade_count,
     win_count/loss_count, sample_pct, WR/PF/AvgR/median_R/expectancy_R,
@@ -397,9 +552,20 @@ def find_a_plus_subsets(
     """
     baseline_stats = _trade_stats(trades)
     baseline_n = baseline_stats["n_trades"]
+    # Pre-compute IS / OOS split on the full trade list once
+    train_end = cfg.walk_forward_train_end
+    if train_end is not None:
+        is_all, oos_all = _split_train_test(trades, train_end)
+        baseline_is_stats = _trade_stats(is_all)
+        baseline_oos_stats = _trade_stats(oos_all)
+    else:
+        baseline_is_stats = None
+        baseline_oos_stats = None
+
     exploratory: list[dict[str, Any]] = []
     valid: list[dict[str, Any]] = []
     robust: list[dict[str, Any]] = []
+    truly_robust: list[dict[str, Any]] = []
 
     for size in range(1, max_combo_size + 1):
         for combo in combinations(keys, size):
@@ -408,10 +574,19 @@ def find_a_plus_subsets(
             if len(subset) < cfg.exploratory_min_trades:
                 continue
             stats = _trade_stats(subset)
-            scored = _score_candidate(combo, stats, baseline_stats, baseline_n, cfg)
+            if train_end is not None:
+                is_subset, oos_subset = _split_train_test(subset, train_end)
+            else:
+                is_subset, oos_subset = None, None
+            scored = _score_candidate(
+                combo, stats, baseline_stats, baseline_n, cfg,
+                subset_in_sample=is_subset, subset_out_of_sample=oos_subset,
+            )
             if scored["is_robust"]:
                 robust.append(scored)
                 valid.append(scored)
+                if scored["truly_valid"]:
+                    truly_robust.append(scored)
             elif scored["valid_candidate"]:
                 valid.append(scored)
             else:
@@ -423,12 +598,17 @@ def find_a_plus_subsets(
     exploratory.sort(key=_sort_key, reverse=True)
     valid.sort(key=_sort_key, reverse=True)
     robust.sort(key=_sort_key, reverse=True)
+    truly_robust.sort(key=_sort_key, reverse=True)
 
     return {
         "baseline": {**baseline_stats, "baseline_trade_count": baseline_n},
+        "baseline_in_sample": baseline_is_stats,
+        "baseline_out_of_sample": baseline_oos_stats,
+        "walk_forward_train_end": train_end.isoformat() if train_end is not None else None,
         "exploratory_candidates": exploratory,
         "valid_candidates": valid,
         "robust_candidates": robust,
+        "truly_robust_candidates": truly_robust,
     }
 
 
@@ -463,6 +643,14 @@ def build_trade_linked_report(
             "robust_min_trades": cfg.robust_min_trades,
             "valid_min_profit_factor": cfg.valid_min_profit_factor,
             "valid_min_avg_r": cfg.valid_min_avg_r,
+            "walk_forward_train_end": cfg.walk_forward_train_end.isoformat() if cfg.walk_forward_train_end else None,
+            "oos_min_trades": cfg.oos_min_trades,
+            "oos_min_profit_factor": cfg.oos_min_profit_factor,
+            "oos_min_avg_r": cfg.oos_min_avg_r,
+            "oos_max_dd_worsening_factor": cfg.oos_max_dd_worsening_factor,
+            "oos_max_dd_worsening_abs_r": cfg.oos_max_dd_worsening_abs_r,
+            "oos_max_loss_streak_worsening_factor": cfg.oos_max_loss_streak_worsening_factor,
+            "oos_max_loss_streak_worsening_abs": cfg.oos_max_loss_streak_worsening_abs,
             "displacement_buckets": [list(b) for b in cfg.displacement_buckets],
             "relative_volume_buckets": [list(b) for b in cfg.relative_volume_buckets],
         },
@@ -481,18 +669,37 @@ def build_trade_linked_report(
     }
 
 
-def _build_verdict(overall: dict[str, Any], a_plus: dict[str, list], cfg: TradeLinkedConfig) -> dict[str, Any]:
+def _build_verdict(overall: dict[str, Any], a_plus: dict[str, Any], cfg: TradeLinkedConfig) -> dict[str, Any]:
     robust = a_plus.get("robust_candidates", [])
+    truly_robust = a_plus.get("truly_robust_candidates", [])
     valid = a_plus.get("valid_candidates", [])
     exploratory = a_plus.get("exploratory_candidates", [])
+    baseline_oos = a_plus.get("baseline_out_of_sample")
+    baseline_is = a_plus.get("baseline_in_sample")
+    has_walk_forward = cfg.walk_forward_train_end is not None
     baseline_profitable = overall.get("profit_factor", 0.0) >= 1.0 and overall.get("avg_r", 0.0) >= 0.0
-    if robust:
-        decision = "PROFITABLE_SUBSET_FOUND_ROBUST"
+
+    if truly_robust:
+        decision = "PROFITABLE_SUBSET_FOUND_TRULY_ROBUST"
         rationale = (
-            f"At least {len(robust)} robust subset(s) found "
-            f"(n >= {cfg.robust_min_trades}, PF >= {cfg.valid_min_profit_factor}, avg_R >= {cfg.valid_min_avg_r}). "
-            "Strategy has actionable edge under those filters."
+            f"At least {len(truly_robust)} robust subset(s) hold in both in-sample and out-of-sample "
+            f"(n_total >= {cfg.robust_min_trades}, PF >= {cfg.valid_min_profit_factor}, "
+            f"OOS n >= {cfg.oos_min_trades} with PF >= {cfg.oos_min_profit_factor} or avg_R >= {cfg.oos_min_avg_r}). "
+            "Strategy has actionable, time-stable edge."
         )
+    elif robust:
+        if has_walk_forward:
+            decision = "PROFITABLE_SUBSET_FOUND_ROBUST_BUT_OOS_WEAK"
+            rationale = (
+                f"{len(robust)} robust full-period subset(s) found, but none is truly robust under the "
+                "walk-forward deployability checks. Treat deployable-looking filters as OOS-weak."
+            )
+        else:
+            decision = "PROFITABLE_SUBSET_FOUND_NEEDS_MORE_DATA"
+            rationale = (
+                f"{len(robust)} robust full-period subset(s) found, but walk-forward validation was "
+                "not applied. Keep this as profiling evidence, not deployable proof."
+            )
     elif valid:
         decision = "PROFITABLE_SUBSET_FOUND_NEEDS_MORE_DATA"
         rationale = (
@@ -518,19 +725,25 @@ def _build_verdict(overall: dict[str, Any], a_plus: dict[str, list], cfg: TradeL
     return {
         "decision": decision,
         "rationale": rationale,
+        "walk_forward_applied": has_walk_forward,
+        "truly_robust_count": len(truly_robust),
         "robust_count": len(robust),
         "valid_count": len(valid),
         "exploratory_count": len(exploratory),
         "baseline_profit_factor": overall.get("profit_factor", 0.0),
         "baseline_avg_r": overall.get("avg_r", 0.0),
         "baseline_max_drawdown_r": overall.get("max_drawdown_r", 0.0),
+        "baseline_in_sample_profit_factor": (baseline_is or {}).get("profit_factor"),
+        "baseline_out_of_sample_profit_factor": (baseline_oos or {}).get("profit_factor"),
+        "baseline_in_sample_n": (baseline_is or {}).get("n_trades"),
+        "baseline_out_of_sample_n": (baseline_oos or {}).get("n_trades"),
     }
 
 
 def render_trade_linked_markdown(report: dict[str, Any]) -> str:
     def _fmt(v: Any) -> str:
         if v is None:
-            return "—"
+            return "-"
         if isinstance(v, float):
             return f"{v:.4f}"
         return str(v)
@@ -586,12 +799,21 @@ def render_trade_linked_markdown(report: dict[str, Any]) -> str:
         lines.append("## Verdict\n")
         lines.append(f"- **decision**: `{verdict.get('decision')}`")
         lines.append(f"- rationale: {verdict.get('rationale')}")
+        lines.append(f"- walk_forward_applied: {verdict.get('walk_forward_applied')}")
+        lines.append(f"- truly_robust_count: {verdict.get('truly_robust_count')} (robust + OOS-holds)")
         lines.append(f"- robust_count: {verdict.get('robust_count')}")
         lines.append(f"- valid_count: {verdict.get('valid_count')}")
         lines.append(f"- exploratory_count: {verdict.get('exploratory_count')}")
         lines.append(f"- baseline_profit_factor: {_fmt(verdict.get('baseline_profit_factor'))}")
         lines.append(f"- baseline_avg_r: {_fmt(verdict.get('baseline_avg_r'))}")
-        lines.append(f"- baseline_max_drawdown_r: {_fmt(verdict.get('baseline_max_drawdown_r'))}\n")
+        lines.append(f"- baseline_max_drawdown_r: {_fmt(verdict.get('baseline_max_drawdown_r'))}")
+        if verdict.get("walk_forward_applied"):
+            lines.append(
+                f"- baseline IS PF / OOS PF: {_fmt(verdict.get('baseline_in_sample_profit_factor'))} / "
+                f"{_fmt(verdict.get('baseline_out_of_sample_profit_factor'))} "
+                f"(n IS / OOS: {verdict.get('baseline_in_sample_n')} / {verdict.get('baseline_out_of_sample_n')})"
+            )
+        lines.append("")
 
     a_plus = report.get("a_plus_subsets") or {}
     cfg = report.get("config") or {}
@@ -604,12 +826,15 @@ def render_trade_linked_markdown(report: dict[str, Any]) -> str:
         headers = [
             "filter", "n", "sample%", "wins", "loss", "WR", "PF", "avg_R",
             "median_R", "max_DD", "loss_streak",
-            "ΔPF", "Δavg_R", "ΔWR", "Δmax_DD",
+            "IS n", "IS PF", "IS avg_R", "OOS n", "OOS PF", "OOS avg_R", "OOS status",
+            "delta_PF", "delta_avg_R", "delta_WR", "delta_max_DD",
             "worse", "warnings",
         ]
         out_lines.append("| " + " | ".join(headers) + " |")
         out_lines.append("|" + "|".join(["---"] * len(headers)) + "|")
         for row in items[:30]:
+            is_s = row.get("in_sample") or {}
+            oos_s = row.get("out_of_sample") or {}
             cells = [
                 " + ".join(row.get("filter_rules_required", [])) or "(none)",
                 str(row.get("trade_count")),
@@ -622,17 +847,29 @@ def render_trade_linked_markdown(report: dict[str, Any]) -> str:
                 _fmt(row.get("median_r")),
                 _fmt(row.get("max_drawdown_r")),
                 str(row.get("longest_loss_streak")),
+                str(is_s.get("n_trades", "-")),
+                _fmt(is_s.get("profit_factor")) if is_s else "-",
+                _fmt(is_s.get("avg_r")) if is_s else "-",
+                str(oos_s.get("n_trades", "-")),
+                _fmt(oos_s.get("profit_factor")) if oos_s else "-",
+                _fmt(oos_s.get("avg_r")) if oos_s else "-",
+                str(row.get("walk_forward_status", "-")),
                 _fmt(row.get("delta_profit_factor_vs_baseline")),
                 _fmt(row.get("delta_avg_r_vs_baseline")),
                 _fmt(row.get("delta_win_rate_vs_baseline")),
                 _fmt(row.get("delta_max_drawdown_vs_baseline")),
-                "; ".join(row.get("worse_than_baseline") or []) or "—",
-                "; ".join(row.get("warnings") or []) or "—",
+                "; ".join(row.get("worse_than_baseline") or []) or "-",
+                "; ".join(row.get("warnings") or []) or "-",
             ]
             out_lines.append("| " + " | ".join(cells) + " |")
         out_lines.append("")
         return "\n".join(out_lines)
 
+    lines.append(_candidate_block(
+        "Truly-robust candidates (IS robust AND OOS holds)",
+        a_plus.get("truly_robust_candidates") or [],
+        f"robust subset AND OOS n >= {cfg.get('oos_min_trades')} with PF >= {cfg.get('oos_min_profit_factor')} or avg_R >= {cfg.get('oos_min_avg_r')}",
+    ))
     lines.append(_candidate_block(
         "Robust candidates",
         a_plus.get("robust_candidates") or [],
@@ -644,7 +881,7 @@ def render_trade_linked_markdown(report: dict[str, Any]) -> str:
         f"n >= {cfg.get('valid_min_trades')}, PF >= {cfg.get('valid_min_profit_factor')}, avg_R >= {cfg.get('valid_min_avg_r')}",
     ))
     lines.append(_candidate_block(
-        "Exploratory candidates (DO NOT DEPLOY — sample too small)",
+        "Exploratory candidates (DO NOT DEPLOY - sample too small)",
         a_plus.get("exploratory_candidates") or [],
         f"n >= {cfg.get('exploratory_min_trades')} but failed valid thresholds",
     ))

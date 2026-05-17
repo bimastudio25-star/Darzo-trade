@@ -14,6 +14,7 @@ from dazro_trade.analytics.candle_behavior_report import CandleBehaviorRecord
 from dazro_trade.analytics.trade_link import TradeLink, link_records_to_trades
 from dazro_trade.analytics.trade_linked_edge_report import (
     FILTER_KEYS_FOR_A_PLUS,
+    LinkedTrade,
     TradeLinkedConfig,
     build_linked_trades,
     build_trade_linked_report,
@@ -50,6 +51,43 @@ def _trade(sig: BacktestSignal, r: float) -> BacktestTrade:
     return BacktestTrade(signal=sig, outcome=outcome, exit_time=sig.timestamp,
                          exit_price=4706 if r > 0 else 4697, r_multiple=r,
                          mae=1.0, mfe=2.0, bars_held=10)
+
+
+def _linked_trade(ts: datetime, r: float, **flags) -> LinkedTrade:
+    defaults = {
+        "swept_high": True,
+        "swept_low": False,
+        "reclaim_after_sweep": False,
+        "fvg_created": False,
+        "ifvg_created": False,
+        "absorption": False,
+        "continuation": False,
+        "rejection": False,
+    }
+    defaults.update(flags)
+    return LinkedTrade(
+        trade_outcome="TP1" if r > 0 else "SL",
+        r_multiple=r,
+        score=80,
+        setup_mode="LIQ_VP_NT_FVG_SCALP",
+        direction="LONG",
+        session="London",
+        pattern_label="continuation" if defaults["continuation"] else "neutral",
+        swept_high=bool(defaults["swept_high"]),
+        swept_low=bool(defaults["swept_low"]),
+        reclaim_after_sweep=bool(defaults["reclaim_after_sweep"]),
+        fvg_created=bool(defaults["fvg_created"]),
+        ifvg_created=bool(defaults["ifvg_created"]),
+        absorption=bool(defaults["absorption"]),
+        continuation=bool(defaults["continuation"]),
+        rejection=bool(defaults["rejection"]),
+        displacement_score=1.0,
+        relative_volume_20=1.0,
+        zone_type="vpoc",
+        zone_side="support",
+        sl_distance=3.0,
+        signal_timestamp=ts,
+    )
 
 
 # ----------------------------------------------------------------------
@@ -274,6 +312,66 @@ def test_a_plus_guardrails_set_warnings_and_validity_flags():
     assert "longest_loss_streak" in found_subset
     assert "sample_pct" in found_subset
     assert "delta_profit_factor_vs_baseline" in found_subset
+
+
+def test_walk_forward_truly_robust_candidate_when_oos_holds():
+    base = datetime(2026, 1, 29, tzinfo=timezone.utc)
+    train_end = base + timedelta(hours=79, minutes=59)
+    trades = [
+        _linked_trade(base + timedelta(hours=i), 2.0 if i % 3 != 0 else -1.0)
+        for i in range(120)
+    ]
+    cfg = TradeLinkedConfig(walk_forward_train_end=train_end)
+    result = find_a_plus_subsets(trades, cfg=cfg)
+
+    assert result["baseline_in_sample"]["n_trades"] == 80
+    assert result["baseline_out_of_sample"]["n_trades"] == 40
+    assert result["truly_robust_candidates"]
+    top = result["truly_robust_candidates"][0]
+    assert top["filter_rules_required"] == ["swept_high"]
+    assert top["truly_valid"] is True
+    assert top["walk_forward_status"] == "holds"
+    assert top["out_of_sample"]["profit_factor"] >= 1.0 or top["out_of_sample"]["avg_r"] >= 0.0
+
+
+def test_walk_forward_marks_overfit_risk_when_oos_collapses():
+    base = datetime(2026, 1, 29, tzinfo=timezone.utc)
+    train_end = base + timedelta(hours=99, minutes=59)
+    trades = [
+        _linked_trade(base + timedelta(hours=i), 2.0 if i < 100 else -1.0)
+        for i in range(120)
+    ]
+    cfg = TradeLinkedConfig(walk_forward_train_end=train_end)
+    result = find_a_plus_subsets(trades, cfg=cfg)
+
+    assert result["truly_robust_candidates"] == []
+    assert result["robust_candidates"]
+    top = result["robust_candidates"][0]
+    assert top["valid_candidate"] is True
+    assert top["is_robust"] is True
+    assert top["walk_forward_status"] == "OVERFIT_RISK"
+    assert top["risk_label"] == "OVERFIT_RISK"
+    assert "OVERFIT_RISK" in top["warnings"]
+
+
+def test_walk_forward_report_uses_required_verdict_name_for_truly_robust():
+    base = datetime(2026, 1, 29, tzinfo=timezone.utc)
+    records = []
+    sigs = []
+    trades = []
+    for i in range(120):
+        rec = _record(base + timedelta(hours=i), swept_high=True)
+        records.append(rec)
+        sig = _signal(rec.timestamp, score=85)
+        sigs.append(sig)
+        trades.append(_trade(sig, 2.0 if i % 3 != 0 else -1.0))
+
+    links = link_records_to_trades(records, sigs, trades, timeframe_minutes=60)
+    cfg = TradeLinkedConfig(walk_forward_train_end=base + timedelta(hours=79, minutes=59))
+    report = build_trade_linked_report(records, links, config=cfg)
+
+    assert report["verdict"]["decision"] == "PROFITABLE_SUBSET_FOUND_TRULY_ROBUST"
+    assert report["verdict"]["truly_robust_count"] > 0
 
 
 def test_verdict_no_edge_when_baseline_unprofitable():
