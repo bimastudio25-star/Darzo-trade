@@ -342,6 +342,11 @@ def _evaluate_adelin(
             "setup_mode": signal_data.get("setup_mode"),
             "sl_pips": signal_data.get("sl_pips"),
             "sl_dollars": signal_data.get("sl_dollars"),
+            "micro_confluence": signal_data.get("micro_confluence"),
+            "has_sweep": signal_data.get("sweep") is not None,
+            "has_fvg": bool(signal_data.get("fvg")) and (signal_data.get("fvg") or {}).get("top") is not None,
+            "has_volume_confluence": bool(signal_data.get("volume_confluence")),
+            "has_number_theory": bool((signal_data.get("number_theory") or {}).get("confluence")),
         },
     )
     if diagnostics is not None:
