@@ -19,6 +19,8 @@ from dazro_trade.backtest import (
     run_backtest,
     validate_csv_timeframes,
 )
+from dazro_trade.backtest.adelin_profile_report import build_recommendations, write_profile_files
+from dazro_trade.backtest.adelin_profiler import profile_adelin
 from dazro_trade.backtest.runner import build_equity_curve
 from dazro_trade.core.config import Settings
 
@@ -63,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lookback", default=None, help="Comma-separated fast lookbacks, e.g. M1=2000,M5=2000,H1=1000")
     parser.add_argument("--liquidity-map-lookback", default=None, help="Comma-separated Adelin liquidity map lookbacks, e.g. H4=300,H1=500,M15=1000,M5=1500")
     parser.add_argument("--validate-only", action="store_true", help="Validate CSVs and exit without running backtest")
+    parser.add_argument(
+        "--profile-adelin",
+        action="store_true",
+        help="After the backtest, generate profile_adelin.json + profile_adelin.md with bucket breakdowns and auto recommendations.",
+    )
     args = parser.parse_args(argv)
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
@@ -151,6 +158,17 @@ def main(argv: list[str] | None = None) -> int:
         d = diag.to_dict() if hasattr(diag, "to_dict") else dict(diag) if isinstance(diag, dict) else {}
         log.info("diagnostics strategy=%s data=%s", name, d)
     log.info("backtest_reports paths=%s", paths)
+
+    if args.profile_adelin:
+        profile = profile_adelin(signals, trades)
+        recommendations = build_recommendations(profile)
+        profile_paths = write_profile_files(
+            output_dir=args.output_dir,
+            profile=profile,
+            recommendations=recommendations,
+        )
+        log.info("adelin_profile_written paths=%s", profile_paths)
+
     if partial:
         log.warning("backtest_partial_output_saved paths=%s", paths)
         return 130
