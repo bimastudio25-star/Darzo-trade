@@ -200,6 +200,8 @@ class Settings:
     liquidity_expansion_m15_reference_timezone: str = "broker"
     liquidity_expansion_require_risk_ok: bool = True
 
+    strategy_3_cooldown_minutes: int = 60
+
     enable_reentry_analysis: bool = True
     reentry_max_wait_minutes: int = 30
     reentry_require_new_entry: bool = True
@@ -377,6 +379,7 @@ class Settings:
             liquidity_expansion_max_spread_pips=_float("LIQUIDITY_EXPANSION_MAX_SPREAD_PIPS", 3.0),
             liquidity_expansion_m15_reference_timezone=os.getenv("LIQUIDITY_EXPANSION_M15_REFERENCE_TIMEZONE", "broker"),
             liquidity_expansion_require_risk_ok=_bool(os.getenv("LIQUIDITY_EXPANSION_REQUIRE_RISK_OK"), True),
+            strategy_3_cooldown_minutes=_int("STRATEGY_3_COOLDOWN_MINUTES", 60),
             enable_reentry_analysis=_bool(os.getenv("ENABLE_REENTRY_ANALYSIS"), True),
             reentry_max_wait_minutes=_int("REENTRY_MAX_WAIT_MINUTES", 30),
             reentry_require_new_entry=_bool(os.getenv("REENTRY_REQUIRE_NEW_ENTRY"), True),

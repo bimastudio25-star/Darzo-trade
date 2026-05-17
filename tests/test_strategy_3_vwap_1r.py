@@ -18,6 +18,7 @@ from dazro_trade.backtest.runner import (
     run_backtest,
 )
 from dazro_trade.backtest.simulator import BacktestSignal, simulate_trade_outcome
+from dazro_trade.core.config import Settings
 
 
 def _frame(base: datetime, minutes: int, step: int = 1, price: float = 100.0) -> pd.DataFrame:
@@ -134,6 +135,126 @@ def test_strategy_3_backtest_signal_has_required_metadata(monkeypatch):
     assert "vwap" in sig.metadata
     assert "vwap_distance" in sig.metadata
     assert sig.metadata["band_touched"] == "sigma_1_lower"
+
+
+def _fake_strategy_3_signal(when: datetime, direction: str = "LONG") -> Strategy3Signal:
+    entry = 100.0 + when.hour + (when.minute / 100.0)
+    stop = entry - 1.0 if direction == "LONG" else entry + 1.0
+    tp1 = entry + 1.0 if direction == "LONG" else entry - 1.0
+    return Strategy3Signal(
+        symbol="XAUUSD",
+        direction=direction,  # type: ignore[arg-type]
+        setup_mode="reversal",
+        entry=entry,
+        stop=stop,
+        tp1=tp1,
+        rr_tp1=1.0,
+        timestamp_utc=when,
+        reason_codes=["liquidity_sweep", "vwap_band_sigma_1_lower", "target_1r"],
+        confluences={"vwap": {}},
+        vwap_distance_pips=0.0,
+        band_touched="sigma_1_lower",
+        liquidity_context={"level": stop, "distance_pips": 10.0},
+        fvg_ifvg_context={"has_fvg": False},
+        number_theory_context={"confluence": False},
+    )
+
+
+def test_strategy_3_cooldown_blocks_same_symbol_direction_within_60m(monkeypatch):
+    import dazro_trade.backtest.runner as runner
+
+    monkeypatch.setattr(runner, "evaluate_strategy_3_vwap_1r", lambda *args, **kwargs: _fake_strategy_3_signal(kwargs["now_utc"], "LONG"))
+    cfg = BacktestConfig(
+        strategies=["strategy_3_vwap_1r"],
+        settings=Settings(strategy_3_cooldown_minutes=60),
+        performance=BacktestPerformanceConfig(max_candles=4, fast_mode=True),
+    )
+    signals, _ = run_backtest(_market(), config=cfg)
+    accepted = [signal for signal in signals if signal.accepted]
+    blocked = [signal for signal in signals if "STRATEGY_3_COOLDOWN_BLOCKED" in signal.rejection_reasons]
+    diag = cfg.strategy_diagnostics[STRATEGY_3_NAME]
+    assert len(accepted) == 1
+    assert len(blocked) == 3
+    assert diag.cooldown_enabled is True
+    assert diag.strategy_3_cooldown_minutes == 60
+    assert diag.cooldown_accepted_count == 1
+    assert diag.cooldown_blocked_count == 3
+
+
+def test_strategy_3_cooldown_allows_same_direction_after_60m(monkeypatch):
+    import dazro_trade.backtest.runner as runner
+
+    monkeypatch.setattr(runner, "evaluate_strategy_3_vwap_1r", lambda *args, **kwargs: _fake_strategy_3_signal(kwargs["now_utc"], "LONG"))
+    cfg = BacktestConfig(
+        strategies=["strategy_3_vwap_1r"],
+        settings=Settings(strategy_3_cooldown_minutes=60),
+        performance=BacktestPerformanceConfig(max_candles=5, fast_mode=True),
+    )
+    signals, _ = run_backtest(_market(), config=cfg)
+    assert sum(1 for signal in signals if signal.accepted) == 2
+
+
+def test_strategy_3_cooldown_allows_opposite_direction_within_60m(monkeypatch):
+    import dazro_trade.backtest.runner as runner
+
+    def fake_eval(*args, **kwargs):
+        when = kwargs["now_utc"]
+        return _fake_strategy_3_signal(when, "LONG" if when.minute == 0 else "SHORT")
+
+    monkeypatch.setattr(runner, "evaluate_strategy_3_vwap_1r", fake_eval)
+    cfg = BacktestConfig(
+        strategies=["strategy_3_vwap_1r"],
+        settings=Settings(strategy_3_cooldown_minutes=60),
+        performance=BacktestPerformanceConfig(max_candles=2, fast_mode=True),
+    )
+    signals, _ = run_backtest(_market(), config=cfg)
+    assert all(signal.accepted for signal in signals)
+
+
+def test_strategy_3_cooldown_override_values(monkeypatch):
+    import dazro_trade.backtest.runner as runner
+
+    monkeypatch.setattr(runner, "evaluate_strategy_3_vwap_1r", lambda *args, **kwargs: _fake_strategy_3_signal(kwargs["now_utc"], "LONG"))
+    for minutes in (30, 60, 120):
+        cfg = BacktestConfig(
+            strategies=["strategy_3_vwap_1r"],
+            settings=Settings(strategy_3_cooldown_minutes=minutes),
+            performance=BacktestPerformanceConfig(max_candles=1, fast_mode=True),
+        )
+        run_backtest(_market(), config=cfg)
+        diag = cfg.strategy_diagnostics[STRATEGY_3_NAME]
+        assert diag.strategy_3_cooldown_minutes == minutes
+
+
+def test_strategy_3_cooldown_env_override(monkeypatch):
+    monkeypatch.setenv("STRATEGY_3_COOLDOWN_MINUTES", "120")
+    assert Settings.from_env(env_file=None).strategy_3_cooldown_minutes == 120
+
+
+def test_strategy_3_cooldown_keeps_1r_risk_model(monkeypatch):
+    import dazro_trade.backtest.runner as runner
+
+    monkeypatch.setattr(runner, "evaluate_strategy_3_vwap_1r", lambda *args, **kwargs: _fake_strategy_3_signal(kwargs["now_utc"], "LONG"))
+    cfg = BacktestConfig(
+        strategies=["strategy_3_vwap_1r"],
+        settings=Settings(strategy_3_cooldown_minutes=60),
+        performance=BacktestPerformanceConfig(max_candles=1, fast_mode=True),
+    )
+    signals, _ = run_backtest(_market(), config=cfg)
+    sig = signals[0]
+    assert sig.tp1 == sig.entry + (sig.entry - sig.stop)
+    assert sig.rr_tp1 == 1.0
+    assert sig.tp2 is None and sig.tp3 is None and sig.tp4 is None
+
+
+def test_strategy_3_cooldown_is_strategy_3_only():
+    cfg = BacktestConfig(
+        strategies=["strategy_2_0"],
+        settings=Settings(strategy_3_cooldown_minutes=120),
+        performance=BacktestPerformanceConfig(max_candles=1, fast_mode=True),
+    )
+    run_backtest(_market(), config=cfg)
+    assert STRATEGY_3_NAME not in cfg.strategy_diagnostics
 
 
 def test_strategy_3_only_does_not_run_strategy_1_or_2():

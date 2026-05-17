@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Callable, Iterable
 
@@ -268,6 +268,16 @@ def _strategy_3_to_signal(signal: Strategy3Signal, session: str) -> BacktestSign
     )
 
 
+def _record_strategy_3_cooldown_block(diagnostics: Strategy3Diagnostics, signal: BacktestSignal) -> None:
+    diagnostics.cooldown_blocked_count += 1
+    direction = str(signal.direction or "UNKNOWN")
+    setup_mode = str(signal.metadata.get("setup_mode") or "UNKNOWN")
+    band_touched = str(signal.metadata.get("band_touched") or "UNKNOWN")
+    diagnostics.cooldown_blocked_by_direction[direction] = diagnostics.cooldown_blocked_by_direction.get(direction, 0) + 1
+    diagnostics.cooldown_blocked_by_setup_mode[setup_mode] = diagnostics.cooldown_blocked_by_setup_mode.get(setup_mode, 0) + 1
+    diagnostics.cooldown_blocked_by_band_touched[band_touched] = diagnostics.cooldown_blocked_by_band_touched.get(band_touched, 0) + 1
+
+
 def _evaluate_strategy_3(
     market_data: dict[str, pd.DataFrame],
     when: datetime,
@@ -286,9 +296,34 @@ def _evaluate_strategy_3(
     return [_strategy_3_to_signal(signal, session)]
 
 
-def _build_strategy_3_evaluator(diagnostics: Strategy3Diagnostics) -> "SignalEvaluator":
+def _build_strategy_3_evaluator(diagnostics: Strategy3Diagnostics, cooldown_minutes: int = 60) -> "SignalEvaluator":
+    last_accepted_by_key: dict[tuple[str, str], datetime] = {}
+    cooldown = max(0, int(cooldown_minutes))
+    diagnostics.cooldown_enabled = cooldown > 0
+    diagnostics.strategy_3_cooldown_minutes = cooldown
+
     def _wrapped(market_data, when, session, settings):
-        return _evaluate_strategy_3(market_data, when, session, settings, diagnostics=diagnostics)
+        signals = _evaluate_strategy_3(market_data, when, session, settings, diagnostics=diagnostics)
+        if not signals:
+            return []
+        if cooldown <= 0:
+            diagnostics.cooldown_accepted_count += len(signals)
+            return signals
+        out: list[BacktestSignal] = []
+        for signal in signals:
+            key = (str(signal.symbol), str(signal.direction))
+            last_ts = last_accepted_by_key.get(key)
+            if last_ts is not None and when - last_ts < timedelta(minutes=cooldown):
+                signal.accepted = False
+                signal.rejection_reasons.append("STRATEGY_3_COOLDOWN_BLOCKED")
+                _record_strategy_3_cooldown_block(diagnostics, signal)
+                out.append(signal)
+                continue
+            last_accepted_by_key[key] = when
+            diagnostics.cooldown_accepted_count += 1
+            out.append(signal)
+        return out
+
     return _wrapped
 
 
@@ -527,7 +562,7 @@ def _default_evaluators_with_diagnostics(cfg: BacktestConfig) -> dict[str, Signa
         elif name == STRATEGY_1_NAME and isinstance(diag, AdelinDiagnostics):
             wired[name] = _build_adelin_evaluator(diag, cfg)
         elif name == STRATEGY_3_NAME and isinstance(diag, Strategy3Diagnostics):
-            wired[name] = _build_strategy_3_evaluator(diag)
+            wired[name] = _build_strategy_3_evaluator(diag, cfg.settings.strategy_3_cooldown_minutes)
         else:
             wired[name] = DEFAULT_EVALUATORS[name]
     return wired

@@ -57,6 +57,13 @@ class Strategy3Diagnostics:
     rejected_reasons: dict[str, int] = field(default_factory=dict)
     long_signals: int = 0
     short_signals: int = 0
+    cooldown_enabled: bool = False
+    strategy_3_cooldown_minutes: int = 60
+    cooldown_blocked_count: int = 0
+    cooldown_accepted_count: int = 0
+    cooldown_blocked_by_direction: dict[str, int] = field(default_factory=dict)
+    cooldown_blocked_by_setup_mode: dict[str, int] = field(default_factory=dict)
+    cooldown_blocked_by_band_touched: dict[str, int] = field(default_factory=dict)
     driver_timeframe: str = "M15"
     setup_timeframe: str = "M15"
     refinement_timeframe: str = "M5"
@@ -88,6 +95,13 @@ class Strategy3Diagnostics:
             "rejected_reasons": dict(self.rejected_reasons),
             "long_signals": self.long_signals,
             "short_signals": self.short_signals,
+            "cooldown_enabled": self.cooldown_enabled,
+            "strategy_3_cooldown_minutes": self.strategy_3_cooldown_minutes,
+            "cooldown_blocked_count": self.cooldown_blocked_count,
+            "cooldown_accepted_count": self.cooldown_accepted_count,
+            "cooldown_blocked_by_direction": dict(self.cooldown_blocked_by_direction),
+            "cooldown_blocked_by_setup_mode": dict(self.cooldown_blocked_by_setup_mode),
+            "cooldown_blocked_by_band_touched": dict(self.cooldown_blocked_by_band_touched),
             "first_eval_time": self.first_eval_time.isoformat() if self.first_eval_time else None,
             "last_eval_time": self.last_eval_time.isoformat() if self.last_eval_time else None,
         }
