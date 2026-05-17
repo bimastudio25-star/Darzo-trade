@@ -14,6 +14,11 @@ from dazro_trade.analysis.liquidity_expansion import (
     LiquidityExpansionSignal,
     evaluate_liquidity_expansion,
 )
+from dazro_trade.analysis.strategy_3_vwap_1r import (
+    Strategy3Diagnostics,
+    Strategy3Signal,
+    evaluate_strategy_3_vwap_1r,
+)
 from dazro_trade.backtest.data_loader import BacktestDataSlicer
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade, simulate_trade_outcome
 from dazro_trade.core.config import Settings
@@ -24,6 +29,7 @@ log = logging.getLogger(__name__)
 SignalEvaluator = Callable[[dict[str, pd.DataFrame], datetime, str, Settings], list[BacktestSignal]]
 STRATEGY_1_NAME = "strategy_1_adelin_scalp"
 STRATEGY_2_NAME = "strategy_2_liquidity_expansion"
+STRATEGY_3_NAME = "strategy_3_vwap_1r"
 ALL_STRATEGY_NAMES = (STRATEGY_2_NAME, STRATEGY_1_NAME)
 STRATEGY_ALIASES = {
     "adelin": STRATEGY_1_NAME,
@@ -31,6 +37,9 @@ STRATEGY_ALIASES = {
     "strategy_2_0": STRATEGY_2_NAME,
     "liquidity_expansion": STRATEGY_2_NAME,
     STRATEGY_2_NAME: STRATEGY_2_NAME,
+    "strategy_3_vwap_1r": STRATEGY_3_NAME,
+    "vwap_1r": STRATEGY_3_NAME,
+    STRATEGY_3_NAME: STRATEGY_3_NAME,
 }
 
 
@@ -98,6 +107,7 @@ class BacktestConfig:
     evaluator_drivers: dict[str, str] = field(default_factory=lambda: {
         STRATEGY_2_NAME: "M15",
         STRATEGY_1_NAME: "M5",
+        STRATEGY_3_NAME: "M15",
     })
     strategies: list[str] = field(default_factory=lambda: ["all"])
     performance: BacktestPerformanceConfig = field(default_factory=BacktestPerformanceConfig)
@@ -110,6 +120,11 @@ class BacktestConfig:
     adelin_scalp_refinement_tf: str = "M5"
     adelin_scalp_trigger_tf: str = "M1"
     adelin_scalp_htf_context: list[str] = field(default_factory=lambda: ["D1", "H4", "H1"])
+    strategy_3_driver: str = "M15"
+    strategy_3_setup_tf: str = "M15"
+    strategy_3_refinement_tf: str = "M5"
+    strategy_3_trigger_tf: str = "M1"
+    strategy_3_htf_context: list[str] = field(default_factory=lambda: ["D1", "H4", "H1"])
 
 
 def _classify_adelin_rejection_layer(reason: str) -> str:
@@ -219,6 +234,59 @@ def _evaluate_strategy_2(
 def _build_strategy_2_evaluator(diagnostics: LiquidityExpansionDiagnostics) -> "SignalEvaluator":
     def _wrapped(market_data, when, session, settings):
         return _evaluate_strategy_2(market_data, when, session, settings, diagnostics=diagnostics)
+    return _wrapped
+
+
+def _strategy_3_to_signal(signal: Strategy3Signal, session: str) -> BacktestSignal:
+    return BacktestSignal(
+        timestamp=signal.timestamp_utc,
+        symbol=signal.symbol,
+        strategy=STRATEGY_3_NAME,
+        direction=signal.direction,
+        entry=float(signal.entry),
+        stop=float(signal.stop),
+        tp1=float(signal.tp1),
+        rr_tp1=1.0,
+        score=None,
+        session=session,
+        accepted=True,
+        rejection_reasons=[],
+        metadata={
+            "setup_mode": signal.setup_mode,
+            "reason_codes": list(signal.reason_codes),
+            "confluences": signal.confluences,
+            "vwap_distance_pips": signal.vwap_distance_pips,
+            "band_touched": signal.band_touched,
+            "liquidity_context": signal.liquidity_context,
+            "fvg_ifvg_context": signal.fvg_ifvg_context,
+            "number_theory_context": signal.number_theory_context,
+            "target_model": "1R",
+            "research_only": True,
+        },
+    )
+
+
+def _evaluate_strategy_3(
+    market_data: dict[str, pd.DataFrame],
+    when: datetime,
+    session: str,
+    settings: Settings,
+    diagnostics: Strategy3Diagnostics | None = None,
+) -> list[BacktestSignal]:
+    signal = evaluate_strategy_3_vwap_1r(
+        market_data,
+        symbol=settings.mt5_symbol or "XAUUSD",
+        now_utc=when,
+        diagnostics=diagnostics,
+    )
+    if signal is None:
+        return []
+    return [_strategy_3_to_signal(signal, session)]
+
+
+def _build_strategy_3_evaluator(diagnostics: Strategy3Diagnostics) -> "SignalEvaluator":
+    def _wrapped(market_data, when, session, settings):
+        return _evaluate_strategy_3(market_data, when, session, settings, diagnostics=diagnostics)
     return _wrapped
 
 
@@ -383,6 +451,7 @@ def _build_adelin_evaluator(diagnostics: AdelinDiagnostics, cfg: BacktestConfig)
 DEFAULT_EVALUATORS: dict[str, SignalEvaluator] = {
     STRATEGY_2_NAME: _evaluate_strategy_2,
     STRATEGY_1_NAME: _evaluate_adelin,
+    STRATEGY_3_NAME: _evaluate_strategy_3,
 }
 
 
@@ -431,6 +500,16 @@ def _ensure_default_diagnostics(cfg: BacktestConfig, name: str) -> object | None
             diag.htf_context_timeframes = list(cfg.adelin_scalp_htf_context)
             cfg.strategy_diagnostics[name] = diag
         return cfg.strategy_diagnostics[name]
+    if name == STRATEGY_3_NAME:
+        if name not in cfg.strategy_diagnostics:
+            diag = Strategy3Diagnostics()
+            diag.driver_timeframe = cfg.evaluator_drivers.get(name, cfg.strategy_3_driver)
+            diag.setup_timeframe = cfg.strategy_3_setup_tf
+            diag.refinement_timeframe = cfg.strategy_3_refinement_tf
+            diag.trigger_timeframe = cfg.strategy_3_trigger_tf
+            diag.htf_context_timeframes = list(cfg.strategy_3_htf_context)
+            cfg.strategy_diagnostics[name] = diag
+        return cfg.strategy_diagnostics[name]
     return None
 
 
@@ -445,6 +524,8 @@ def _default_evaluators_with_diagnostics(cfg: BacktestConfig) -> dict[str, Signa
             wired[name] = _build_strategy_2_evaluator(diag)
         elif name == STRATEGY_1_NAME and isinstance(diag, AdelinDiagnostics):
             wired[name] = _build_adelin_evaluator(diag, cfg)
+        elif name == STRATEGY_3_NAME and isinstance(diag, Strategy3Diagnostics):
+            wired[name] = _build_strategy_3_evaluator(diag)
         else:
             wired[name] = DEFAULT_EVALUATORS[name]
     return wired
@@ -455,6 +536,8 @@ def _display_strategy_name(name: str) -> str:
         return "Adelin"
     if name == STRATEGY_2_NAME:
         return "Strategy 2.0"
+    if name == STRATEGY_3_NAME:
+        return "Strategy 3 VWAP 1R"
     return name
 
 
@@ -608,6 +691,7 @@ __all__ = [
     "BacktestInterrupted",
     "BacktestPerformanceConfig",
     "DEFAULT_EVALUATORS",
+    "STRATEGY_3_NAME",
     "build_equity_curve",
     "resolve_strategy_selection",
     "run_backtest",

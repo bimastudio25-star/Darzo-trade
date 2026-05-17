@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", default="backtests/reports")
     parser.add_argument("--driver-timeframe", default="M15")
     parser.add_argument("--max-sim-bars", type=int, default=480)
-    parser.add_argument("--strategies", default="all", help="Strategy aliases: adelin, strategy_2_0, liquidity_expansion, all")
+    parser.add_argument("--strategies", default="all", help="Strategy aliases: adelin, strategy_2_0, liquidity_expansion, strategy_3_vwap_1r, vwap_1r, all")
     parser.add_argument("--fast", action="store_true", help="Use precomputed no-lookahead slicing with bounded lookback windows")
     parser.add_argument("--max-candles", type=int, default=None, help="Debug cap per evaluator driver")
     parser.add_argument("--progress-every-candles", type=int, default=500)
