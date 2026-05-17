@@ -92,6 +92,87 @@ def _max_drawdown(r_series: list[float]) -> float:
     return max_dd
 
 
+ADELIN_SL_BUCKETS: tuple[tuple[str, float, float], ...] = (
+    ("le_4.00", 0.0, 4.00),
+    ("4.01_to_5.00", 4.00, 5.00),
+    ("5.01_to_6.50", 5.00, 6.50),
+    ("6.51_to_7.00", 6.50, 7.00),
+    ("gt_7.00", 7.00, float("inf")),
+)
+
+LEGACY_ADELIN_MAX_SL_USD = 5.0
+
+
+def _bucket_for_sl(sl_distance: float) -> str:
+    for label, low, high in ADELIN_SL_BUCKETS:
+        if low < sl_distance <= high or (label == "le_4.00" and sl_distance <= high):
+            return label
+    return "gt_7.00"
+
+
+def compute_adelin_sl_bucket_performance(
+    signals: Iterable[BacktestSignal],
+    trades: Iterable[BacktestTrade],
+) -> dict[str, dict]:
+    """SL-distance bucket breakdown for Adelin signals/trades.
+
+    For each bucket returns total/accepted/rejected counts, wins/losses,
+    win_rate, avg_r, profit_factor and ex_rejected_recovered_count
+    (signals that would have been rejected by the legacy cap of
+    LEGACY_ADELIN_MAX_SL_USD but are accepted under the dynamic policy).
+    """
+    signals = [s for s in signals if s.strategy == "strategy_1_adelin_scalp"]
+    trades_by_sig_id = {id(t.signal): t for t in trades if t.signal.strategy == "strategy_1_adelin_scalp"}
+    out: dict[str, dict] = {}
+    for label, _, _ in ADELIN_SL_BUCKETS:
+        out[label] = {
+            "total_signals": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "avg_r": 0.0,
+            "profit_factor": 0.0,
+            "ex_rejected_recovered_count": 0,
+        }
+    for sig in signals:
+        bucket = _bucket_for_sl(sig.sl_distance)
+        b = out[bucket]
+        b["total_signals"] += 1
+        if sig.accepted:
+            b["accepted"] += 1
+            if sig.sl_distance > LEGACY_ADELIN_MAX_SL_USD:
+                b["ex_rejected_recovered_count"] += 1
+            trade = trades_by_sig_id.get(id(sig))
+            if trade is not None and trade.outcome != "NO_DATA":
+                if trade.r_multiple > 0:
+                    b["wins"] += 1
+                elif trade.r_multiple < 0:
+                    b["losses"] += 1
+        else:
+            b["rejected"] += 1
+    for label, _, _ in ADELIN_SL_BUCKETS:
+        b = out[label]
+        rs = [
+            trade.r_multiple
+            for sig in signals
+            if sig.accepted and _bucket_for_sl(sig.sl_distance) == label
+            for trade in [trades_by_sig_id.get(id(sig))]
+            if trade is not None and trade.outcome != "NO_DATA"
+        ]
+        if rs:
+            wins_r = sum(r for r in rs if r > 0)
+            loss_r = sum(-r for r in rs if r < 0)
+            b["avg_r"] = round(fmean(rs), 4)
+            b["profit_factor"] = round(wins_r / loss_r, 4) if loss_r > 0 else (float("inf") if wins_r > 0 else 0.0)
+            denom = b["wins"] + b["losses"]
+            b["win_rate"] = round(b["wins"] / denom, 4) if denom > 0 else 0.0
+            if b["profit_factor"] == float("inf"):
+                b["profit_factor"] = 0.0
+    return out
+
+
 def compute_per_strategy_metrics(signals: Iterable[BacktestSignal], trades: Iterable[BacktestTrade]) -> dict[str, dict]:
     signals = list(signals)
     trades = list(trades)
@@ -104,11 +185,14 @@ def compute_per_strategy_metrics(signals: Iterable[BacktestSignal], trades: Iter
         timestamps = sorted({s.timestamp for s in s_sub if s.timestamp is not None})
         days_span = max((timestamps[-1] - timestamps[0]).days if len(timestamps) >= 2 else 1, 1)
         signals_per_day = len(s_sub) / days_span if days_span > 0 else 0.0
-        out[name] = {
+        entry = {
             **metrics.to_dict(),
             "days_observed": days_span,
             "signals_per_day": round(signals_per_day, 3),
         }
+        if name == "strategy_1_adelin_scalp":
+            entry["sl_bucket_performance"] = compute_adelin_sl_bucket_performance(s_sub, t_sub)
+        out[name] = entry
     return out
 
 
