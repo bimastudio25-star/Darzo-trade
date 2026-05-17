@@ -174,6 +174,10 @@ class Settings:
     adelin_news_gate_enabled: bool = True
     adelin_send_rejection_debug: bool = False
     adelin_send_vwap_research: bool = True
+    # Research-only live lock: score audit found no predictive signal and toxic continuation.
+    adelin_live_enabled: bool = False
+    adelin_disabled_reason: str = "score_not_predictive_low_score_variance_continuation_toxic_rejection_oos_break_even"
+    adelin_block_continuation_entries: bool = True
 
     auto_signal_old_scalping: bool = False
     show_old_scalping_in_analisi: bool = True
@@ -348,6 +352,12 @@ class Settings:
             adelin_news_gate_enabled=_bool(os.getenv("ADELIN_NEWS_GATE_ENABLED"), True),
             adelin_send_rejection_debug=_bool(os.getenv("ADELIN_SEND_REJECTION_DEBUG"), False),
             adelin_send_vwap_research=_bool(os.getenv("ADELIN_SEND_VWAP_RESEARCH"), True),
+            adelin_live_enabled=_bool(os.getenv("ADELIN_LIVE_ENABLED"), False),
+            adelin_disabled_reason=os.getenv(
+                "ADELIN_DISABLED_REASON",
+                "score_not_predictive_low_score_variance_continuation_toxic_rejection_oos_break_even",
+            ),
+            adelin_block_continuation_entries=_bool(os.getenv("ADELIN_BLOCK_CONTINUATION_ENTRIES"), True),
             auto_signal_old_scalping=_bool(os.getenv("AUTO_SIGNAL_OLD_SCALPING"), False),
             show_old_scalping_in_analisi=_bool(os.getenv("SHOW_OLD_SCALPING_IN_ANALISI"), True),
             strategy_coordinator_enabled=_bool(os.getenv("STRATEGY_COORDINATOR_ENABLED"), True),

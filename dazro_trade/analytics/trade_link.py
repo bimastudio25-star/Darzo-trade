@@ -46,6 +46,14 @@ class TradeLink:
     nearest_signal_stop: float | None = None
     nearest_signal_tp1: float | None = None
     nearest_signal_sl_distance: float | None = None
+    nearest_signal_symbol: str | None = None
+    nearest_signal_current_price: float | None = None
+    nearest_signal_liquidity_price: float | None = None
+    nearest_signal_liquidity_timeframe: str | None = None
+    nearest_signal_liquidity_type: str | None = None
+    nearest_signal_distance_to_liquidity_pips: float | None = None
+    nearest_signal_score_components: dict[str, Any] = field(default_factory=dict)
+    nearest_signal_score_reason_codes: list[str] = field(default_factory=list)
     nearest_signal_rejection_reasons: list[str] = field(default_factory=list)
     distance_to_signal_bars: int | None = None
     trade_outcome: str | None = None
@@ -68,6 +76,14 @@ class TradeLink:
             "nearest_signal_stop": self.nearest_signal_stop,
             "nearest_signal_tp1": self.nearest_signal_tp1,
             "nearest_signal_sl_distance": self.nearest_signal_sl_distance,
+            "nearest_signal_symbol": self.nearest_signal_symbol,
+            "nearest_signal_current_price": self.nearest_signal_current_price,
+            "nearest_signal_liquidity_price": self.nearest_signal_liquidity_price,
+            "nearest_signal_liquidity_timeframe": self.nearest_signal_liquidity_timeframe,
+            "nearest_signal_liquidity_type": self.nearest_signal_liquidity_type,
+            "nearest_signal_distance_to_liquidity_pips": self.nearest_signal_distance_to_liquidity_pips,
+            "nearest_signal_score_components": dict(self.nearest_signal_score_components),
+            "nearest_signal_score_reason_codes": list(self.nearest_signal_score_reason_codes),
             "nearest_signal_rejection_reasons": list(self.nearest_signal_rejection_reasons),
             "distance_to_signal_bars": self.distance_to_signal_bars,
             "trade_outcome": self.trade_outcome,
@@ -136,6 +152,7 @@ def link_records_to_trades(
             continue
         distance_bars = int(round(best_delta_seconds / (timeframe_minutes * 60)))
         trade = trades_by_sig_id.get(id(best_sig))
+        metadata = best_sig.metadata or {}
         out[idx] = TradeLink(
             nearest_signal_timestamp=_as_dt(best_sig.timestamp),
             nearest_signal_strategy=best_sig.strategy,
@@ -148,6 +165,14 @@ def link_records_to_trades(
             nearest_signal_stop=float(best_sig.stop),
             nearest_signal_tp1=float(best_sig.tp1) if best_sig.tp1 is not None else None,
             nearest_signal_sl_distance=float(best_sig.sl_distance),
+            nearest_signal_symbol=metadata.get("symbol") or best_sig.symbol,
+            nearest_signal_current_price=metadata.get("current_price"),
+            nearest_signal_liquidity_price=metadata.get("liquidity_price"),
+            nearest_signal_liquidity_timeframe=metadata.get("liquidity_timeframe"),
+            nearest_signal_liquidity_type=metadata.get("liquidity_type"),
+            nearest_signal_distance_to_liquidity_pips=metadata.get("distance_to_liquidity_pips"),
+            nearest_signal_score_components=dict(metadata.get("score_components") or {}),
+            nearest_signal_score_reason_codes=list(metadata.get("score_reason_codes") or []),
             nearest_signal_rejection_reasons=list(best_sig.rejection_reasons or []),
             distance_to_signal_bars=distance_bars,
             trade_outcome=trade.outcome if trade else None,

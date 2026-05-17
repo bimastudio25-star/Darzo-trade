@@ -53,6 +53,41 @@ def _trade(sig: BacktestSignal, r: float) -> BacktestTrade:
                          mae=1.0, mfe=2.0, bars_held=10)
 
 
+def test_trade_link_preserves_optional_future_telemetry():
+    ts = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+    rec = _record(ts)
+    sig = _signal(
+        ts,
+        metadata={
+            "setup_mode": "LIQ_VP_NT_FVG_SCALP",
+            "symbol": "XAUUSD",
+            "current_price": 4703.0,
+            "liquidity_price": 4700.0,
+            "liquidity_timeframe": "H1",
+            "liquidity_type": "swing_high",
+            "distance_to_liquidity_pips": 30.0,
+            "score_components": {"liquidity_swept": 25},
+            "score_reason_codes": ["liquidity_swept"],
+        },
+    )
+    linked = link_records_to_trades([rec], [sig], [_trade(sig, 2.0)])
+    payload = linked[0].to_dict()
+    assert payload["nearest_signal_symbol"] == "XAUUSD"
+    assert payload["nearest_signal_distance_to_liquidity_pips"] == 30.0
+    assert payload["nearest_signal_score_components"] == {"liquidity_swept": 25}
+    assert payload["nearest_signal_score_reason_codes"] == ["liquidity_swept"]
+
+
+def test_trade_link_old_signals_without_future_telemetry_do_not_crash():
+    ts = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+    rec = _record(ts)
+    sig = _signal(ts, metadata={"setup_mode": "LIQ_VP_NT_FVG_SCALP"})
+    payload = link_records_to_trades([rec], [sig], [_trade(sig, -1.0)])[0].to_dict()
+    assert payload["nearest_signal_symbol"] == "XAUUSD"
+    assert payload["nearest_signal_distance_to_liquidity_pips"] is None
+    assert payload["nearest_signal_score_components"] == {}
+
+
 def _linked_trade(ts: datetime, r: float, **flags) -> LinkedTrade:
     defaults = {
         "swept_high": True,

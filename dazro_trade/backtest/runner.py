@@ -324,6 +324,7 @@ def _evaluate_adelin(
     tp1_payload = signal_data.get("tp1") or {}
     tp2_payload = signal_data.get("tp2") or {}
     direction = "LONG" if str(signal_data.get("direction", "")).upper() in {"LONG", "BUY"} else "SHORT"
+    telemetry = signal_data.get("telemetry") if isinstance(signal_data.get("telemetry"), dict) else {}
     backtest_signal = BacktestSignal(
         timestamp=when,
         symbol=str(signal_data.get("symbol", "XAUUSD")),
@@ -342,6 +343,16 @@ def _evaluate_adelin(
             "setup_mode": signal_data.get("setup_mode"),
             "sl_pips": signal_data.get("sl_pips"),
             "sl_dollars": signal_data.get("sl_dollars"),
+            "symbol": telemetry.get("symbol") or signal_data.get("symbol"),
+            "current_price": telemetry.get("current_price"),
+            "liquidity_price": telemetry.get("liquidity_price"),
+            "liquidity_timeframe": telemetry.get("liquidity_timeframe"),
+            "liquidity_type": telemetry.get("liquidity_type"),
+            "distance_to_liquidity_pips": telemetry.get("distance_to_liquidity_pips"),
+            "distance_to_liquidity_bucket": telemetry.get("distance_to_liquidity_bucket"),
+            "score_components": telemetry.get("score_components") or {},
+            "score_reason_codes": telemetry.get("score_reason_codes") or [],
+            "continuation_candidate": telemetry.get("continuation_candidate"),
         },
     )
     if diagnostics is not None:
