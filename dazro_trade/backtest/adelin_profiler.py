@@ -103,7 +103,9 @@ def _aggregate_bucket(
     if loss_r > 0:
         pf: float = round(win_r / loss_r, 4)
     elif win_r > 0:
-        pf = float("inf")
+        # No losses observed but at least one win -> use a sentinel
+        # ("very-good", treated as qualifying by downstream recommendations)
+        pf = 999.0
     else:
         pf = 0.0
     return {
@@ -116,7 +118,7 @@ def _aggregate_bucket(
         "be": bes,
         "win_rate": round(wins / win_loss_denom, 4) if win_loss_denom > 0 else 0.0,
         "avg_r": round(fmean(rs), 4) if rs else 0.0,
-        "profit_factor": pf if pf != float("inf") else 0.0,
+        "profit_factor": pf,
         "max_drawdown_r": _max_drawdown_r(rs),
         "statistically_significant": valid_trades >= 30,
     }
