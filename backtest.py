@@ -19,6 +19,7 @@ from dazro_trade.backtest import (
     run_backtest,
     validate_csv_timeframes,
 )
+from dazro_trade.backtest.adelin_sl_policy import AdelinSLPolicy
 from dazro_trade.backtest.runner import build_equity_curve
 from dazro_trade.core.config import Settings
 
@@ -63,6 +64,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lookback", default=None, help="Comma-separated fast lookbacks, e.g. M1=2000,M5=2000,H1=1000")
     parser.add_argument("--liquidity-map-lookback", default=None, help="Comma-separated Adelin liquidity map lookbacks, e.g. H4=300,H1=500,M15=1000,M5=1500")
     parser.add_argument("--validate-only", action="store_true", help="Validate CSVs and exit without running backtest")
+    parser.add_argument(
+        "--adelin-sl-dynamic",
+        action="store_true",
+        help="Enable Adelin 4-tier dynamic SL policy (2-7 USD) instead of fixed cap 5 USD",
+    )
+    parser.add_argument(
+        "--adelin-sl-tier-4-disabled",
+        action="store_true",
+        help="When --adelin-sl-dynamic is set, disable Tier 4 (6.5-7 USD) acceptance",
+    )
     args = parser.parse_args(argv)
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
@@ -110,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
         log.error("backtest_no_market_data: nothing to do")
         return 2
 
+    adelin_sl_policy = (
+        AdelinSLPolicy(tier_4_enabled=not args.adelin_sl_tier_4_disabled)
+        if args.adelin_sl_dynamic
+        else None
+    )
     cfg = BacktestConfig(
         symbol=args.symbol,
         timeframes=tfs,
@@ -124,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
             lookback_by_timeframe=lookback_by_timeframe,
             liquidity_map_lookback_by_timeframe=liquidity_map_lookback,
         ),
+        adelin_sl_policy=adelin_sl_policy,
     )
     partial = False
     try:
