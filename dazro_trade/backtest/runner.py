@@ -255,6 +255,8 @@ def _strategy_3_to_signal(signal: Strategy3Signal, session: str) -> BacktestSign
             "setup_mode": signal.setup_mode,
             "reason_codes": list(signal.reason_codes),
             "confluences": signal.confluences,
+            "vwap": signal.confluences.get("vwap"),
+            "vwap_distance": signal.vwap_distance_pips,
             "vwap_distance_pips": signal.vwap_distance_pips,
             "band_touched": signal.band_touched,
             "liquidity_context": signal.liquidity_context,

@@ -10,7 +10,7 @@ from dazro_trade.adelin.liquidity_map import build_liquidity_map, find_swept_lev
 from dazro_trade.adelin.number_theory import nearest_number_theory
 from dazro_trade.adelin.sweep_detector import find_liquidity_sweep
 from dazro_trade.adelin.volume_profile import build_multi_anchor_volume_profiles, find_best_volume_crack_confluence
-from dazro_trade.analysis.vwap import VwapSnapshot, vwap_snapshot
+from dazro_trade.analysis.vwap import VwapSnapshot, session_vwap_snapshot
 from dazro_trade.core.symbols import get_symbol_spec, normalize_price, price_to_pips, pips_to_price
 
 Strategy3SetupMode = Literal["trend_following", "reversal", "no_trade"]
@@ -118,10 +118,10 @@ def _latest_price(frame: pd.DataFrame) -> float:
 def _band_touch(snapshot: VwapSnapshot, price: float, pip_size: float, tolerance_pips: float) -> tuple[str, float]:
     bands = {
         "vwap": snapshot.vwap,
-        "upper_1": snapshot.upper_1,
-        "upper_2": snapshot.upper_2,
-        "lower_1": snapshot.lower_1,
-        "lower_2": snapshot.lower_2,
+        "sigma_1_upper": snapshot.upper_1,
+        "sigma_2_upper": snapshot.upper_2,
+        "sigma_1_lower": snapshot.lower_1,
+        "sigma_2_lower": snapshot.lower_2,
     }
     closest = min(bands.items(), key=lambda item: abs(float(item[1]) - float(price)))
     distance_pips = abs(float(closest[1]) - float(price)) / pip_size
@@ -131,13 +131,13 @@ def _band_touch(snapshot: VwapSnapshot, price: float, pip_size: float, tolerance
 
 
 def _classify_setup(direction: str, snapshot: VwapSnapshot, band_touched: str) -> Strategy3SetupMode:
-    if direction == "LONG" and snapshot.z_score <= -1.0 and band_touched.startswith("lower"):
+    if direction == "LONG" and snapshot.z_score <= -1.0 and band_touched.endswith("lower"):
         return "reversal"
-    if direction == "SHORT" and snapshot.z_score >= 1.0 and band_touched.startswith("upper"):
+    if direction == "SHORT" and snapshot.z_score >= 1.0 and band_touched.endswith("upper"):
         return "reversal"
-    if direction == "LONG" and snapshot.slope > 0 and band_touched in {"vwap", "upper_1"}:
+    if direction == "LONG" and snapshot.slope > 0 and band_touched in {"vwap", "sigma_1_upper"}:
         return "trend_following"
-    if direction == "SHORT" and snapshot.slope < 0 and band_touched in {"vwap", "lower_1"}:
+    if direction == "SHORT" and snapshot.slope < 0 and band_touched in {"vwap", "sigma_1_lower"}:
         return "trend_following"
     return "no_trade"
 
@@ -198,7 +198,7 @@ def evaluate_strategy_3_vwap_1r(
         return None
 
     price = _latest_price(m1)
-    snapshot = vwap_snapshot(m15, price)
+    snapshot = session_vwap_snapshot(m15, price)
     if snapshot is None or snapshot.std <= 0:
         if diagnostics is not None:
             diagnostics.no_trade_count += 1

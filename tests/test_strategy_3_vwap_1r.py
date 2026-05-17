@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from dazro_trade.analysis.strategy_3_vwap_1r import Strategy3Diagnostics, Strategy3Signal, evaluate_strategy_3_vwap_1r
-from dazro_trade.analysis.vwap import VwapSnapshot
+from dazro_trade.analysis.vwap import VwapSnapshot, session_vwap_snapshot
 from dazro_trade.backtest.runner import (
     DEFAULT_EVALUATORS,
     STRATEGY_1_NAME,
@@ -60,7 +60,7 @@ def test_strategy_3_generates_expected_research_signal(monkeypatch):
 
     monkeypatch.setattr(
         module,
-        "vwap_snapshot",
+        "session_vwap_snapshot",
         lambda df, price=None: VwapSnapshot(
             vwap=100.0,
             std=2.0,
@@ -86,7 +86,7 @@ def test_strategy_3_generates_expected_research_signal(monkeypatch):
     assert signal.rr_tp1 == 1.0
     assert signal.stop < signal.entry < signal.tp1
     assert signal.reason_codes
-    assert signal.band_touched == "lower_1"
+    assert signal.band_touched == "sigma_1_lower"
     assert signal.liquidity_context["distance_pips"] <= 120
     assert diagnostics.signals_emitted == 1
 
@@ -107,10 +107,10 @@ def test_strategy_3_backtest_signal_has_required_metadata(monkeypatch):
             tp1=101.0,
             rr_tp1=1.0,
             timestamp_utc=datetime(2026, 5, 10, tzinfo=timezone.utc),
-            reason_codes=["liquidity_sweep", "vwap_band_lower_1", "target_1r"],
+            reason_codes=["liquidity_sweep", "vwap_band_sigma_1_lower", "target_1r"],
             confluences={"vwap": {}},
             vwap_distance_pips=0.0,
-            band_touched="lower_1",
+            band_touched="sigma_1_lower",
             liquidity_context={"level": 99.0, "distance_pips": 10.0},
             fvg_ifvg_context={"has_fvg": True},
             number_theory_context={"confluence": False},
@@ -131,6 +131,9 @@ def test_strategy_3_backtest_signal_has_required_metadata(monkeypatch):
     assert sig.metadata["target_model"] == "1R"
     assert sig.metadata["research_only"] is True
     assert "reason_codes" in sig.metadata
+    assert "vwap" in sig.metadata
+    assert "vwap_distance" in sig.metadata
+    assert sig.metadata["band_touched"] == "sigma_1_lower"
 
 
 def test_strategy_3_only_does_not_run_strategy_1_or_2():
@@ -171,3 +174,32 @@ def test_simulator_still_closes_timeout_post_strategy_3_registration():
     trade = simulate_trade_outcome(signal, future, max_bars=3)
     assert trade.outcome == "TIMEOUT_CLOSE"
     assert trade.r_multiple == 0.1
+
+
+def test_session_vwap_resets_by_session_and_uses_no_future_rows():
+    base = datetime(2026, 5, 10, 1, 0, tzinfo=timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {"time": base, "open": 100, "high": 100, "low": 100, "close": 100, "tick_volume": 10},
+            {"time": base + timedelta(hours=1), "open": 110, "high": 110, "low": 110, "close": 110, "tick_volume": 10},
+            {"time": base + timedelta(hours=9), "open": 130, "high": 130, "low": 130, "close": 130, "tick_volume": 10},
+        ]
+    )
+    first_two = session_vwap_snapshot(frame.iloc[:2], price=110)
+    all_rows = session_vwap_snapshot(frame, price=130)
+    assert first_two is not None
+    assert all_rows is not None
+    assert first_two.vwap == 105.0
+    assert all_rows.vwap == 130.0
+
+
+def test_session_vwap_equal_weight_fallback_and_small_sample():
+    base = datetime(2026, 5, 10, 9, 0, tzinfo=timezone.utc)
+    frame = pd.DataFrame(
+        [{"time": base, "open": 100, "high": 101, "low": 99, "close": 100, "tick_volume": 0}]
+    )
+    snapshot = session_vwap_snapshot(frame, price=100)
+    assert snapshot is not None
+    assert snapshot.vwap == 100.0
+    assert snapshot.std == 0.0
+    assert snapshot.equal_weight_fallback is True
