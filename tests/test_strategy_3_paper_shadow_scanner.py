@@ -157,3 +157,89 @@ def test_parse_args_defaults_to_safe_dry_run_and_strategy_3_constants():
     assert args.symbol == "XAUUSD"
     assert args.cooldown_minutes == 120
     assert module.STRATEGY_NAME == "strategy_3_vwap_1r"
+
+
+def test_incremental_mode_creates_state_and_processes_after_from_timestamp(monkeypatch, tmp_path):
+    module = _scanner_module()
+    market = _market()
+    monkeypatch.setattr(module, "load_csv_timeframes", lambda *a, **kw: market)
+    monkeypatch.setattr(module, "evaluate_strategy_3_vwap_1r", lambda market, *, now_utc, **kw: _signal(now_utc, "LONG"))
+    cfg = module.ShadowScannerConfig(
+        **{
+            **_config(module, tmp_path).__dict__,
+            "incremental": True,
+            "from_timestamp": "2026-05-14T22:00:00+00:00",
+            "max_candles_per_run": 2,
+        }
+    )
+
+    summary = module.run_scanner(cfg)
+    state = json.loads((tmp_path / "scanner_state.json").read_text(encoding="utf-8"))
+
+    assert summary["incremental"] is True
+    assert summary["driver_candles_processed"] == 2
+    assert summary["previous_last_processed_timestamp"] == "2026-05-14T22:00:00+00:00"
+    assert state["last_processed_timestamp"] == summary["new_last_processed_timestamp"]
+    assert state["total_incremental_runs"] == 1
+
+
+def test_incremental_mode_uses_state_to_skip_old_candles(monkeypatch, tmp_path):
+    module = _scanner_module()
+    monkeypatch.setattr(module, "load_csv_timeframes", lambda *a, **kw: _market())
+    monkeypatch.setattr(module, "evaluate_strategy_3_vwap_1r", lambda market, *, now_utc, **kw: None)
+    (tmp_path / "scanner_state.json").write_text(
+        json.dumps({"last_processed_timestamp": "2026-05-14T22:30:00+00:00", "total_incremental_runs": 4}),
+        encoding="utf-8",
+    )
+    cfg = module.ShadowScannerConfig(**{**_config(module, tmp_path).__dict__, "incremental": True})
+
+    summary = module.run_scanner(cfg)
+
+    assert summary["previous_last_processed_timestamp"] == "2026-05-14T22:30:00+00:00"
+    assert summary["driver_candles_processed"] == 1
+    assert json.loads((tmp_path / "scanner_state.json").read_text(encoding="utf-8"))["total_incremental_runs"] == 5
+
+
+def test_incremental_mode_appends_and_deduplicates_signals(monkeypatch, tmp_path):
+    module = _scanner_module()
+    monkeypatch.setattr(module, "load_csv_timeframes", lambda *a, **kw: _market())
+    monkeypatch.setattr(module, "evaluate_strategy_3_vwap_1r", lambda market, *, now_utc, **kw: _signal(now_utc, "SHORT"))
+    cfg = module.ShadowScannerConfig(**{**_config(module, tmp_path).__dict__, "incremental": True, "from_timestamp": "2026-05-14T22:30:00+00:00"})
+
+    first = module.run_scanner(cfg)
+    second = module.run_scanner(cfg)
+    rows = list(csv.DictReader((tmp_path / "paper_signals.csv").open(newline="", encoding="utf-8")))
+
+    assert first["paper_signals_total_after_run"] == 1
+    assert second["duplicates_skipped"] == 1
+    assert len(rows) == 1
+
+
+def test_incremental_no_signal_writes_summary_and_state(monkeypatch, tmp_path):
+    module = _scanner_module()
+    monkeypatch.setattr(module, "load_csv_timeframes", lambda *a, **kw: _market())
+    monkeypatch.setattr(module, "evaluate_strategy_3_vwap_1r", lambda *a, **kw: None)
+    cfg = module.ShadowScannerConfig(**{**_config(module, tmp_path).__dict__, "incremental": True, "from_timestamp": "2026-05-14T22:45:00+00:00"})
+
+    summary = module.run_scanner(cfg)
+
+    assert summary["driver_candles_processed"] == 0
+    assert summary["no_signal_reason"] == "no_new_driver_candles_to_process"
+    assert (tmp_path / "scanner_state.json").exists()
+
+
+def test_incremental_scanner_slices_without_future_candles(monkeypatch, tmp_path):
+    module = _scanner_module()
+    monkeypatch.setattr(module, "load_csv_timeframes", lambda *a, **kw: _market())
+
+    def evaluator(market, *, now_utc, **kwargs):
+        latest_m15 = pd.to_datetime(market["M15"]["time"], utc=True).max().to_pydatetime()
+        assert latest_m15 <= now_utc
+        return None
+
+    monkeypatch.setattr(module, "evaluate_strategy_3_vwap_1r", evaluator)
+    cfg = module.ShadowScannerConfig(**{**_config(module, tmp_path).__dict__, "incremental": True, "from_timestamp": "2026-05-14T22:00:00+00:00"})
+
+    summary = module.run_scanner(cfg)
+
+    assert summary["driver_candles_processed"] == 3

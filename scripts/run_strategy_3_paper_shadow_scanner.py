@@ -87,6 +87,12 @@ class ShadowScannerConfig:
     cooldown_minutes: int
     dry_run: bool
     scan_driver_bars: int = 1
+    incremental: bool = False
+    state_file: Path | None = None
+    from_timestamp: str | None = None
+    reset_state: bool = False
+    append: bool = True
+    max_candles_per_run: int | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -97,6 +103,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", default="backtests/reports/strategy_3_paper_shadow_scanner")
     parser.add_argument("--cooldown-minutes", type=int, default=120)
     parser.add_argument("--dry-run", action="store_true", default=True)
+    parser.add_argument("--incremental", action="store_true", default=False)
+    parser.add_argument("--state-file", default=None)
+    parser.add_argument("--from-timestamp", default=None)
+    parser.add_argument("--reset-state", action="store_true", default=False)
+    parser.add_argument("--append", action="store_true", default=True)
+    parser.add_argument("--max-candles-per-run", type=int, default=None)
     parser.add_argument(
         "--scan-driver-bars",
         type=int,
@@ -138,6 +150,35 @@ def _frame_bounds(market_data: dict[str, pd.DataFrame]) -> tuple[dict[str, str |
 
 def _json_dump(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
+
+
+def _parse_utc(value: Any) -> datetime:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.to_pydatetime()
+
+
+def _signal_key(row: dict[str, Any]) -> str:
+    return "|".join(
+        str(row.get(field) or "")
+        for field in ("symbol", "strategy", "signal_timestamp", "direction", "setup_mode", "band_touched")
+    )
+
+
+def _load_existing_signal_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as f:
+        return [dict(row) for row in csv.DictReader(f)]
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _signal_to_row(
@@ -258,6 +299,11 @@ def _write_outputs(
     )
 
 
+def _write_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True, default=str), encoding="utf-8")
+
+
 def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
     if not config.dry_run:
         raise ValueError("paper_shadow_scanner_requires_dry_run")
@@ -283,12 +329,37 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
     driver = slicer.frame("M15")
     if driver.empty:
         raise ValueError("missing_m15_driver_data")
-    driver_times = pd.to_datetime(driver["time"], utc=True).tail(max(1, config.scan_driver_bars)).tolist()
+    driver_series = pd.to_datetime(driver["time"], utc=True).dropna()
+    state_path = config.state_file or (config.output_dir / "scanner_state.json")
+    previous_state = {} if config.reset_state else _read_json(state_path)
+    previous_last_processed: str | None = None
+    if config.incremental:
+        if config.from_timestamp:
+            previous_last_processed = _parse_utc(config.from_timestamp).isoformat()
+        elif previous_state.get("last_processed_timestamp"):
+            previous_last_processed = str(previous_state["last_processed_timestamp"])
+        else:
+            prior_summary = _read_json(config.output_dir / "scanner_summary.json")
+            if prior_summary.get("latest_data_timestamp"):
+                previous_last_processed = str(prior_summary["latest_data_timestamp"])
+            else:
+                raise ValueError("incremental_scanner_requires_state_or_from_timestamp")
+        cutoff = _parse_utc(previous_last_processed)
+        driver_times = [ts.to_pydatetime() for ts in driver_series[driver_series > pd.Timestamp(cutoff)]]
+        if config.max_candles_per_run is not None:
+            driver_times = driver_times[: max(0, int(config.max_candles_per_run))]
+    else:
+        driver_times = [ts.to_pydatetime() for ts in driver_series.tail(max(1, config.scan_driver_bars))]
 
     diagnostics = Strategy3Diagnostics()
     diagnostics.cooldown_enabled = config.cooldown_minutes > 0
     diagnostics.strategy_3_cooldown_minutes = config.cooldown_minutes
     last_accepted_by_key: dict[tuple[str, str], datetime] = {}
+    if config.incremental and isinstance(previous_state.get("cooldown_state"), dict):
+        for raw_key, raw_ts in previous_state["cooldown_state"].items():
+            parts = str(raw_key).split("|", 1)
+            if len(parts) == 2:
+                last_accepted_by_key[(parts[0], parts[1])] = _parse_utc(raw_ts)
     rows: list[dict[str, Any]] = []
     setup_mode_counts: dict[str, int] = {}
     band_touched_counts: dict[str, int] = {}
@@ -298,7 +369,7 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
     accepted = 0
 
     for ts in driver_times:
-        when = ts.to_pydatetime()
+        when = _parse_utc(ts)
         market_slice = slicer.slice_up_to(when)
         session = current_session_name(when)
         signal = evaluate_strategy_3_vwap_1r(
@@ -346,8 +417,27 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
 
     runtime_seconds = round(perf_counter() - started_perf, 4)
     run_finished_at = _utc_now_iso()
+    existing_rows = _load_existing_signal_rows(config.output_dir / "paper_signals.csv") if config.incremental and config.append else []
+    existing_keys = {_signal_key(row) for row in existing_rows}
+    new_rows: list[dict[str, Any]] = []
+    duplicates_skipped = 0
+    for row in rows:
+        key = _signal_key(row)
+        if key in existing_keys:
+            duplicates_skipped += 1
+            continue
+        existing_keys.add(key)
+        new_rows.append(row)
+    output_rows = existing_rows + new_rows if config.incremental and config.append else rows
+    latest_processed = _parse_utc(driver_times[-1]).isoformat() if driver_times else previous_last_processed
+    mode = "paper_shadow_incremental" if config.incremental else MODE
     summary = {
         "scanner_run_id": scanner_run_id,
+        "mode": mode,
+        "incremental": config.incremental,
+        "state_file": str(state_path) if config.incremental else None,
+        "previous_last_processed_timestamp": previous_last_processed,
+        "new_last_processed_timestamp": latest_processed,
         "run_started_at": run_started_at,
         "run_finished_at": run_finished_at,
         "runtime_seconds": runtime_seconds,
@@ -361,18 +451,47 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
         "latest_available_timestamp_by_timeframe": latest_by_tf,
         "earliest_available_timestamp_by_timeframe": earliest_by_tf,
         "latest_data_timestamp": latest_by_tf.get("M15"),
+        "driver_timeframe": "M15",
+        "driver_candles_seen": int(len(driver_times)),
+        "driver_candles_processed": int(len(driver_times)),
         "signals_detected": len(rows),
         "signals_accepted": accepted,
         "signals_blocked_by_cooldown": blocked,
+        "paper_signals_total_after_run": len(output_rows),
+        "new_paper_signals_this_run": len(new_rows) if config.incremental else len(rows),
+        "duplicates_skipped": duplicates_skipped,
         "long_signals": long_signals,
         "short_signals": short_signals,
         "setup_mode_counts": setup_mode_counts,
         "band_touched_counts": band_touched_counts,
-        "no_signal_reason": None if rows else "no_strategy_3_signal_on_latest_driver_candle",
+        "no_signal_reason": None if rows else ("no_new_driver_candles_to_process" if config.incremental and not driver_times else "no_strategy_3_signal_on_latest_driver_candle"),
         "strategy_diagnostics": diagnostics.to_dict(),
         "safety": dict(SAFETY_FLAGS),
     }
-    _write_outputs(output_dir=config.output_dir, rows=rows, summary=summary)
+    _write_outputs(output_dir=config.output_dir, rows=output_rows, summary=summary)
+    if config.incremental:
+        prior_runs = int(previous_state.get("total_incremental_runs", 0) or 0)
+        state = {
+            "symbol": config.symbol,
+            "strategy": STRATEGY_NAME,
+            "cooldown_minutes": config.cooldown_minutes,
+            "last_processed_timestamp": latest_processed,
+            "last_run_started_at": run_started_at,
+            "last_run_finished_at": run_finished_at,
+            "latest_available_timestamp": latest_by_tf.get("M15"),
+            "total_incremental_runs": prior_runs + 1,
+            "total_driver_candles_processed": int(previous_state.get("total_driver_candles_processed", 0) or 0) + len(driver_times),
+            "total_signals_detected": int(previous_state.get("total_signals_detected", 0) or 0) + len(rows),
+            "total_signals_accepted": int(previous_state.get("total_signals_accepted", 0) or 0) + accepted,
+            "total_signals_blocked": int(previous_state.get("total_signals_blocked", 0) or 0) + blocked,
+            "cooldown_state": {f"{symbol}|{direction}": ts.isoformat() for (symbol, direction), ts in last_accepted_by_key.items()},
+            "safety": {
+                "live_trading_enabled": False,
+                "telegram_enabled": False,
+                "order_execution_enabled": False,
+            },
+        }
+        _write_state(state_path, state)
     return summary
 
 
@@ -387,6 +506,12 @@ def main(argv: list[str] | None = None) -> int:
         cooldown_minutes=int(args.cooldown_minutes),
         dry_run=bool(args.dry_run),
         scan_driver_bars=int(args.scan_driver_bars),
+        incremental=bool(args.incremental),
+        state_file=Path(args.state_file) if args.state_file else None,
+        from_timestamp=args.from_timestamp,
+        reset_state=bool(args.reset_state),
+        append=bool(args.append),
+        max_candles_per_run=args.max_candles_per_run,
     )
     summary = run_scanner(config)
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))

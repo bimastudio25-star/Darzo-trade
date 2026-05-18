@@ -46,6 +46,20 @@ python scripts/run_strategy_3_paper_shadow_scanner.py --symbol XAUUSD --timefram
 
 Default behavior evaluates only the latest M15 driver candle. This keeps the scanner runtime-like instead of turning it into another backtest.
 
+Incremental paper accumulation mode:
+
+```powershell
+python scripts/run_strategy_3_paper_shadow_scanner.py --symbol XAUUSD --timeframes M1,M5,M15,H1,H4,D1 --data-dir data --output-dir backtests/reports/strategy_3_paper_shadow_scanner --cooldown-minutes 120 --dry-run --incremental
+```
+
+If no state file exists, initialize explicitly from the last known processed timestamp:
+
+```powershell
+python scripts/run_strategy_3_paper_shadow_scanner.py --symbol XAUUSD --timeframes M1,M5,M15,H1,H4,D1 --data-dir data --output-dir backtests/reports/strategy_3_paper_shadow_scanner --cooldown-minutes 120 --dry-run --incremental --from-timestamp 2026-05-14T22:45:00+00:00
+```
+
+Incremental mode writes `scanner_state.json`, processes only new M15 driver candles, appends new paper signals, and deduplicates by `symbol + strategy + signal_timestamp + direction + setup_mode + band_touched`.
+
 ## Output Files
 
 The scanner writes to:
@@ -58,6 +72,7 @@ Files:
 - `paper_signals.jsonl`
 - `scanner_summary.json`
 - `scanner_run.md`
+- `scanner_state.json` in incremental mode
 
 If no signal is detected, this is not a failure. The scanner still writes all output files, with CSV headers and a summary explaining the no-signal reason.
 
