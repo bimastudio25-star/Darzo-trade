@@ -40,6 +40,28 @@ MT5 server timestamps can differ from UTC. The collector converts MT5 epoch time
 
 This protects the later shadow-vs-backtest comparison from shifted candles.
 
+## Closed-Candle Import
+
+The MT5 collector imports closed candles only by default. A candle is considered closed when:
+
+`candle_open_time + timeframe_duration <= now_utc - grace_seconds`
+
+The default grace is five seconds. Current forming candles are skipped before overlap validation and before writing incoming CSVs.
+
+This matters especially for higher timeframes:
+
+- the current H4 candle can change for up to four hours;
+- the current D1 candle can change all day;
+- comparing those forming OHLC values against local historical CSVs can produce false overlap failures.
+
+When a mismatch exists only on skipped forming candles, the collector records it as non-blocking:
+
+- `FORMING_CANDLES_SKIPPED`
+- `OVERLAP_MATCH_100_CLOSED_CANDLES`
+- `HTF_FORMING_CANDLE_MISMATCH_IGNORED`
+
+Use `--include-forming-candles` only for manual debugging. It should not be used for paper accumulation.
+
 ## Overlap Validation
 
 Fetched MT5 candles are compared against the existing local `data/XAUUSD/<TF>.csv` files over the last 24 hours before the existing latest timestamp.
@@ -50,6 +72,8 @@ Fetched MT5 candles are compared against the existing local `data/XAUUSD/<TF>.cs
 - no overlap: warning only, useful for first fetches or data gaps.
 
 Default OHLC tolerance is `0.10` USD.
+
+Overlap validation is based on closed candles only by default. Current H4/D1 candles are intentionally ignored until they close, so lower-timeframe closed candles can continue advancing the paper scanner.
 
 ## Days-Back Safety
 

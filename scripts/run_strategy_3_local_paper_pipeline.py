@@ -79,6 +79,9 @@ def _write_event(path: Path, event: dict[str, Any]) -> None:
 
 
 def _has_blocker(flags: list[str]) -> bool:
+    effective_flags = set(flags)
+    if "HTF_OVERLAP_MISMATCH_QUARANTINED" in effective_flags:
+        effective_flags.discard("OVERLAP_MATCH_LT_95")
     blockers = {
         "MT5_TIMEZONE_MISMATCH_DETECTED",
         "OVERLAP_MATCH_LT_95",
@@ -95,7 +98,7 @@ def _has_blocker(flags: list[str]) -> bool:
         "INVALID_OHLC_DETECTED",
         "MISSING_OHLC_VALUES_DETECTED",
     }
-    return bool(blockers & set(flags))
+    return bool(blockers & effective_flags)
 
 
 def _audit_structurally_clean(audit: dict[str, Any]) -> bool:
@@ -125,6 +128,8 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
             allow_large_fetch=cfg.allow_large_fetch,
             allow_timezone_warning=False,
             allow_overlap_mismatch=cfg.allow_overlap_mismatch,
+            include_forming_candles=False,
+            closed_candle_grace_seconds=5,
             overlap_price_tolerance_usd=0.10,
             report_dir=Path("backtests/reports/strategy_3_mt5_data_collector"),
         )
@@ -238,6 +243,8 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         "symbol_broker": cfg.symbol_broker,
         "apply_enabled": cfg.apply,
         "fetch_status": fetch_flags,
+        "fetch_blocking_error": bool(fetch.get("blocking_fetch_error")),
+        "forming_candles_skipped_by_timeframe": fetch.get("forming_candles_skipped_by_timeframe"),
         "import_dry_run_status": dry_summary.get("verdict_flags") if dry_summary else None,
         "import_apply_status": apply_summary.get("verdict_flags") if apply_summary else None,
         "audit_status": audit.get("verdict_flags"),

@@ -65,6 +65,10 @@ def _rates(base: datetime, count: int = 3):
     return rows
 
 
+def _rate_at(when: datetime, close: float = 100.5):
+    return {"time": int(when.timestamp()), "open": 100.0, "high": 101.0, "low": 99.0, "close": close, "tick_volume": 10, "spread": 1}
+
+
 def _cfg(module, tmp_path: Path, *, dry_run=True, write=False, overwrite=False, days_back=7, allow_large_fetch=False):
     return module.CollectorConfig(
         symbol="XAUUSD",
@@ -81,6 +85,8 @@ def _cfg(module, tmp_path: Path, *, dry_run=True, write=False, overwrite=False, 
         allow_large_fetch=allow_large_fetch,
         allow_timezone_warning=False,
         allow_overlap_mismatch=False,
+        include_forming_candles=False,
+        closed_candle_grace_seconds=5,
         overlap_price_tolerance_usd=0.10,
         report_dir=tmp_path / "reports",
     )
@@ -201,3 +207,102 @@ def test_overlap_validation_verdicts():
     fetched_bad.loc[:20, "close"] = 110.0
     assert module._existing_overlap(existing, fetched_bad, "M1", 0.10)["verdict"] == "OVERLAP_MATCH_LT_95"
     assert module._existing_overlap(existing.iloc[0:0], fetched, "M1", 0.10)["verdict"] == "OVERLAP_NO_DATA"
+
+
+def test_closed_candle_filter_excludes_forming_candles():
+    module = _collector()
+    now = datetime(2026, 5, 19, 19, 28, tzinfo=timezone.utc)
+    frames = {
+        "M15": pd.DataFrame([{"time": pd.Timestamp("2026-05-19T19:00:00Z")}, {"time": pd.Timestamp("2026-05-19T19:15:00Z")}]),
+        "H4": pd.DataFrame([{"time": pd.Timestamp("2026-05-19T12:00:00Z")}, {"time": pd.Timestamp("2026-05-19T16:00:00Z")}]),
+        "D1": pd.DataFrame([{"time": pd.Timestamp("2026-05-18T00:00:00Z")}, {"time": pd.Timestamp("2026-05-19T00:00:00Z")}]),
+    }
+
+    filtered, skipped, latest = module.filter_closed_candles(frames, now_utc=now, include_forming_candles=False, grace_seconds=5)
+
+    assert filtered["M15"]["time"].tolist() == [pd.Timestamp("2026-05-19T19:00:00Z")]
+    assert filtered["H4"]["time"].tolist() == [pd.Timestamp("2026-05-19T12:00:00Z")]
+    assert filtered["D1"]["time"].tolist() == [pd.Timestamp("2026-05-18T00:00:00Z")]
+    assert skipped == {"M15": 1, "H4": 1, "D1": 1}
+    assert latest["M15"] == "2026-05-19T19:00:00+00:00"
+
+
+def test_forming_htf_mismatch_does_not_block_when_closed_overlap_matches(tmp_path):
+    module = _collector()
+    data_dir = tmp_path / "data" / "XAUUSD"
+    data_dir.mkdir(parents=True)
+    (data_dir / "H4.csv").write_text(
+        "time,open,high,low,close,tick_volume,spread\n"
+        "2026.05.19 12:00,100,101,99,100.5,10,1\n"
+        "2026.05.19 16:00,100,101,99,100.5,10,1\n",
+        encoding="utf-8",
+    )
+    fake = FakeMT5(rates={240: [_rate_at(datetime(2026, 5, 19, 12, tzinfo=timezone.utc), 100.5), _rate_at(datetime(2026, 5, 19, 16, tzinfo=timezone.utc), 120.0)]})
+    cfg = module.CollectorConfig(
+        symbol="XAUUSD",
+        symbol_broker="XAUUSD",
+        timeframes=["H4"],
+        output_dir=tmp_path / "incoming",
+        data_dir=tmp_path / "data",
+        days_back=1,
+        date_from=None,
+        date_to=datetime(2026, 5, 19, 19, 28, tzinfo=timezone.utc),
+        dry_run=False,
+        write=True,
+        overwrite=True,
+        allow_large_fetch=False,
+        allow_timezone_warning=False,
+        allow_overlap_mismatch=False,
+        include_forming_candles=False,
+        closed_candle_grace_seconds=5,
+        overlap_price_tolerance_usd=0.10,
+        report_dir=tmp_path / "reports",
+    )
+
+    summary = module.run_collector(cfg, mt5_module=fake)
+
+    assert "MT5_INCOMING_CSVS_WRITTEN" in summary["verdict_flags"]
+    assert "HTF_FORMING_CANDLE_MISMATCH_IGNORED" in summary["verdict_flags"]
+    assert summary["overlap_validation"]["verdict_by_timeframe"]["H4"] == "OVERLAP_MATCH_100_CLOSED_CANDLES"
+    assert summary["raw_overlap_validation"]["verdict_by_timeframe"]["H4"] == "OVERLAP_MATCH_LT_95"
+    assert summary["forming_candles_skipped_by_timeframe"]["H4"] == 1
+    assert summary["blocking_fetch_error"] is False
+
+
+def test_true_closed_candle_mismatch_still_blocks_write(tmp_path):
+    module = _collector()
+    data_dir = tmp_path / "data" / "XAUUSD"
+    data_dir.mkdir(parents=True)
+    (data_dir / "M15.csv").write_text(
+        "time,open,high,low,close,tick_volume,spread\n"
+        "2026.05.19 19:00,100,101,99,100.5,10,1\n",
+        encoding="utf-8",
+    )
+    fake = FakeMT5(rates={15: [_rate_at(datetime(2026, 5, 19, 19, tzinfo=timezone.utc), 120.0)]})
+    cfg = module.CollectorConfig(
+        symbol="XAUUSD",
+        symbol_broker="XAUUSD",
+        timeframes=["M15"],
+        output_dir=tmp_path / "incoming",
+        data_dir=tmp_path / "data",
+        days_back=1,
+        date_from=None,
+        date_to=datetime(2026, 5, 19, 19, 28, tzinfo=timezone.utc),
+        dry_run=False,
+        write=True,
+        overwrite=True,
+        allow_large_fetch=False,
+        allow_timezone_warning=False,
+        allow_overlap_mismatch=False,
+        include_forming_candles=False,
+        closed_candle_grace_seconds=5,
+        overlap_price_tolerance_usd=0.10,
+        report_dir=tmp_path / "reports",
+    )
+
+    summary = module.run_collector(cfg, mt5_module=fake)
+
+    assert summary["overlap_validation"]["verdict_by_timeframe"]["M15"] == "OVERLAP_MATCH_LT_95"
+    assert summary["blocking_fetch_error"] is True
+    assert "MT5_INCOMING_CSVS_WRITTEN" not in summary["verdict_flags"]
+    assert not (tmp_path / "incoming" / "M15.csv").exists()

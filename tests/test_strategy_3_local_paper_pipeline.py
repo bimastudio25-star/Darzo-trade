@@ -142,6 +142,37 @@ def test_overlap_and_timezone_block_apply(monkeypatch, tmp_path):
     assert "LOCAL_PIPELINE_FETCH_FAILED" in summary["verdict_flags"]
 
 
+def test_forming_htf_mismatch_warning_does_not_block_pipeline(monkeypatch, tmp_path):
+    module = _pipeline()
+    _patch_reports(monkeypatch, module)
+    calls = []
+    monkeypatch.setattr(
+        module,
+        "run_collector",
+        lambda *a, **kw: _fetch(["MT5_INCOMING_CSVS_WRITTEN", "FORMING_CANDLES_SKIPPED", "HTF_FORMING_CANDLE_MISMATCH_IGNORED", "OVERLAP_MATCH_100_CLOSED_CANDLES", "MT5_FETCH_OK"]),
+    )
+
+    def fake_ingestion(**kwargs):
+        calls.append(kwargs)
+        return _dry(new_rows=1) if kwargs["dry_run"] else _applied()
+
+    seen_scanner = {}
+    monkeypatch.setattr(module, "build_ingestion", fake_ingestion)
+    monkeypatch.setattr(module, "build_audit", lambda *a, **kw: _audit())
+    def fake_scanner(cfg):
+        seen_scanner["incremental"] = cfg.incremental
+        return _scanner()
+
+    monkeypatch.setattr(module, "run_scanner", fake_scanner)
+
+    summary = module.run_pipeline_once(_cfg(module, tmp_path, apply=True))
+
+    assert [call["apply"] for call in calls] == [False, True]
+    assert "LOCAL_PIPELINE_FETCH_FAILED" not in summary["verdict_flags"]
+    assert summary["import_apply_status"] == ["INGESTION_APPLIED", "DATA_UPDATED", "BACKUP_CREATED"]
+    assert seen_scanner["incremental"] is True
+
+
 def test_audit_structural_failure_blocks_scanner_but_gaps_do_not(monkeypatch, tmp_path):
     module = _pipeline()
     _patch_reports(monkeypatch, module)

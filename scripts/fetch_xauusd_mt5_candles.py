@@ -18,6 +18,14 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.audit_xauusd_data import read_candle_csv
 
 TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4", "D1"]
+TIMEFRAME_DURATIONS = {
+    "M1": pd.Timedelta(minutes=1),
+    "M5": pd.Timedelta(minutes=5),
+    "M15": pd.Timedelta(minutes=15),
+    "H1": pd.Timedelta(hours=1),
+    "H4": pd.Timedelta(hours=4),
+    "D1": pd.Timedelta(days=1),
+}
 SAFETY = {
     "live_trading_enabled": False,
     "order_execution_enabled": False,
@@ -43,6 +51,8 @@ class CollectorConfig:
     allow_large_fetch: bool
     allow_timezone_warning: bool
     allow_overlap_mismatch: bool
+    include_forming_candles: bool
+    closed_candle_grace_seconds: int
     overlap_price_tolerance_usd: float
     report_dir: Path
 
@@ -63,6 +73,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--allow-large-fetch", action="store_true", default=False)
     parser.add_argument("--allow-timezone-warning", action="store_true", default=False)
     parser.add_argument("--allow-overlap-mismatch", action="store_true", default=False)
+    parser.add_argument("--include-forming-candles", action="store_true", default=False)
+    parser.add_argument("--closed-candle-grace-seconds", type=int, default=5)
     parser.add_argument("--overlap-price-tolerance-usd", type=float, default=0.10)
     parser.add_argument("--report-dir", default="backtests/reports/strategy_3_mt5_data_collector")
     return parser.parse_args(argv)
@@ -134,6 +146,41 @@ def _format_for_incoming(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def filter_closed_candles(
+    frames: dict[str, pd.DataFrame],
+    *,
+    now_utc: datetime,
+    include_forming_candles: bool,
+    grace_seconds: int,
+) -> tuple[dict[str, pd.DataFrame], dict[str, int], dict[str, str | None]]:
+    if include_forming_candles:
+        latest = {
+            tf: (pd.to_datetime(df["time"], utc=True).max().isoformat() if not df.empty else None)
+            for tf, df in frames.items()
+        }
+        return {tf: df.copy() for tf, df in frames.items()}, {tf: 0 for tf in frames}, latest
+
+    threshold = pd.Timestamp(now_utc) - pd.Timedelta(seconds=max(0, grace_seconds))
+    filtered: dict[str, pd.DataFrame] = {}
+    skipped: dict[str, int] = {}
+    latest_closed: dict[str, str | None] = {}
+    for tf, df in frames.items():
+        if df.empty:
+            filtered[tf] = df.copy()
+            skipped[tf] = 0
+            latest_closed[tf] = None
+            continue
+        duration = TIMEFRAME_DURATIONS[tf]
+        out = df.copy()
+        times = pd.to_datetime(out["time"], utc=True)
+        closed_mask = times + duration <= threshold
+        filtered_df = out.loc[closed_mask].reset_index(drop=True)
+        filtered[tf] = filtered_df
+        skipped[tf] = int((~closed_mask).sum())
+        latest_closed[tf] = pd.to_datetime(filtered_df["time"], utc=True).max().isoformat() if not filtered_df.empty else None
+    return filtered, skipped, latest_closed
+
+
 def validate_timezone(frames: dict[str, pd.DataFrame], now_utc: datetime, tolerance_minutes: int = 5) -> tuple[list[str], dict[str, str | None]]:
     warnings: list[str] = []
     latest: dict[str, str | None] = {}
@@ -151,9 +198,9 @@ def validate_timezone(frames: dict[str, pd.DataFrame], now_utc: datetime, tolera
     return warnings, latest
 
 
-def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, tolerance: float) -> dict[str, Any]:
+def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, tolerance: float, *, closed_only: bool = False) -> dict[str, Any]:
     if existing.empty or fetched.empty:
-        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": 0, "overlap_rows_fetched": 0, "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None}
+        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": 0, "overlap_rows_fetched": 0, "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None, "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
     existing = existing.copy()
     fetched = fetched.copy()
     existing["time"] = pd.to_datetime(existing["time"], utc=True)
@@ -164,7 +211,7 @@ def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, to
     f = fetched[(fetched["time"] >= start) & (fetched["time"] <= last)]
     merged = e.merge(f, on="time", suffixes=("_existing", "_fetched"))
     if merged.empty:
-        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": int(len(e)), "overlap_rows_fetched": int(len(f)), "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None}
+        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": int(len(e)), "overlap_rows_fetched": int(len(f)), "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None, "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
     diffs = []
     for col in ("open", "high", "low", "close"):
         diffs.append((merged[f"{col}_existing"].astype(float) - merged[f"{col}_fetched"].astype(float)).abs())
@@ -172,7 +219,7 @@ def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, to
     matched = max_diff <= tolerance
     match_rate = float(matched.mean())
     if match_rate == 1.0:
-        verdict = "OVERLAP_MATCH_100"
+        verdict = "OVERLAP_MATCH_100_CLOSED_CANDLES" if closed_only else "OVERLAP_MATCH_100"
     elif match_rate >= 0.95:
         verdict = "OVERLAP_MATCH_GT_95"
     else:
@@ -187,18 +234,19 @@ def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, to
         "overlap_match_rate": round(match_rate, 4),
         "worst_ohlc_diff": round(float(max_diff.max()), 5),
         "first_mismatch_timestamp": first_mismatch,
+        "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles",
     }
 
 
-def validate_overlap(frames: dict[str, pd.DataFrame], data_dir: Path, symbol: str, tolerance: float) -> dict[str, Any]:
+def validate_overlap(frames: dict[str, pd.DataFrame], data_dir: Path, symbol: str, tolerance: float, *, closed_only: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for tf, fetched in frames.items():
         path = data_dir / symbol / f"{tf}.csv"
         if not path.exists():
-            out[tf] = {"verdict": "OVERLAP_NO_DATA"}
+            out[tf] = {"verdict": "OVERLAP_NO_DATA", "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
             continue
         existing = read_candle_csv(path).frame
-        out[tf] = _existing_overlap(existing, fetched, tf, tolerance)
+        out[tf] = _existing_overlap(existing, fetched, tf, tolerance, closed_only=closed_only)
     return out
 
 
@@ -250,13 +298,20 @@ def run_collector(cfg: CollectorConfig, mt5_module: Any | None = None) -> dict[s
         "dry_run": cfg.dry_run or not cfg.write,
         "write_enabled": cfg.write,
         "overwrite_enabled": cfg.overwrite,
+        "closed_candle_only": not cfg.include_forming_candles,
+        "include_forming_candles": cfg.include_forming_candles,
+        "closed_candle_grace_seconds": cfg.closed_candle_grace_seconds,
         "mt5_initialize_ok": False,
         "symbol_select_ok": False,
         "suggested_symbols": [],
         "rows_fetched_by_timeframe": {},
+        "rows_after_closed_filter_by_timeframe": {},
         "rows_written_by_timeframe": {},
         "first_timestamp_by_timeframe": {},
         "last_timestamp_by_timeframe": {},
+        "latest_fetched_timestamp_by_timeframe": {},
+        "latest_closed_timestamp_by_timeframe": {},
+        "forming_candles_skipped_by_timeframe": {},
         "files_written": [],
         "timezone": {
             "now_utc": datetime.now(timezone.utc).isoformat(),
@@ -269,7 +324,14 @@ def run_collector(cfg: CollectorConfig, mt5_module: Any | None = None) -> dict[s
             "overlap_match_rate_by_timeframe": {},
             "worst_ohlc_diff_by_timeframe": {},
             "verdict_by_timeframe": {},
+            "overlap_validation_basis": "closed_candles_only",
         },
+        "raw_overlap_validation": {
+            "verdict_by_timeframe": {},
+        },
+        "timeframes_quarantined_by_overlap": [],
+        "blocking_fetch_error": False,
+        "non_blocking_warnings": [],
         "days_back_safety": {
             "requested_days_back": cfg.days_back,
             "allow_large_fetch": cfg.allow_large_fetch,
@@ -321,8 +383,7 @@ def run_collector(cfg: CollectorConfig, mt5_module: Any | None = None) -> dict[s
             frame = normalize_rates(rates)
             frames[tf] = frame
             summary["rows_fetched_by_timeframe"][tf] = int(len(frame))
-            summary["first_timestamp_by_timeframe"][tf] = frame["time"].min().isoformat() if not frame.empty else None
-            summary["last_timestamp_by_timeframe"][tf] = frame["time"].max().isoformat() if not frame.empty else None
+            summary["latest_fetched_timestamp_by_timeframe"][tf] = frame["time"].max().isoformat() if not frame.empty else None
         if not any(summary["rows_fetched_by_timeframe"].values()):
             summary["verdict_flags"].append("MT5_NO_RATES_RETURNED")
         if any(v == 0 for v in summary["rows_fetched_by_timeframe"].values()):
@@ -331,18 +392,58 @@ def run_collector(cfg: CollectorConfig, mt5_module: Any | None = None) -> dict[s
         summary["timezone"]["timezone_warnings"] = tz_warnings
         if tz_warnings:
             summary["verdict_flags"].append("MT5_TIMEZONE_MISMATCH_DETECTED")
-        overlap = validate_overlap(frames, cfg.data_dir, cfg.symbol, cfg.overlap_price_tolerance_usd)
+        raw_overlap = validate_overlap(frames, cfg.data_dir, cfg.symbol, cfg.overlap_price_tolerance_usd, closed_only=False)
+        closed_frames, skipped_forming, latest_closed = filter_closed_candles(
+            frames,
+            now_utc=cfg.date_to,
+            include_forming_candles=cfg.include_forming_candles,
+            grace_seconds=cfg.closed_candle_grace_seconds,
+        )
+        summary["forming_candles_skipped_by_timeframe"] = skipped_forming
+        summary["latest_closed_timestamp_by_timeframe"] = latest_closed
+        for tf, frame in closed_frames.items():
+            summary["rows_after_closed_filter_by_timeframe"][tf] = int(len(frame))
+            summary["first_timestamp_by_timeframe"][tf] = frame["time"].min().isoformat() if not frame.empty else None
+            summary["last_timestamp_by_timeframe"][tf] = frame["time"].max().isoformat() if not frame.empty else None
+        if any(skipped_forming.values()):
+            summary["verdict_flags"].append("FORMING_CANDLES_SKIPPED")
+        overlap = validate_overlap(closed_frames, cfg.data_dir, cfg.symbol, cfg.overlap_price_tolerance_usd, closed_only=not cfg.include_forming_candles)
+        for tf, item in raw_overlap.items():
+            summary["raw_overlap_validation"]["verdict_by_timeframe"][tf] = item.get("verdict")
         for tf, item in overlap.items():
             summary["overlap_validation"]["overlap_match_rate_by_timeframe"][tf] = item.get("overlap_match_rate")
             summary["overlap_validation"]["worst_ohlc_diff_by_timeframe"][tf] = item.get("worst_ohlc_diff")
             summary["overlap_validation"]["verdict_by_timeframe"][tf] = item.get("verdict")
             if item.get("verdict"):
                 summary["verdict_flags"].append(str(item["verdict"]))
-        overlap_block = any(item.get("verdict") == "OVERLAP_MATCH_LT_95" for item in overlap.values()) and not cfg.allow_overlap_mismatch
+            raw_verdict = raw_overlap.get(tf, {}).get("verdict")
+            if raw_verdict == "OVERLAP_MATCH_LT_95" and item.get("verdict") != "OVERLAP_MATCH_LT_95" and skipped_forming.get(tf, 0) > 0:
+                warning = f"{tf}:forming_candle_overlap_mismatch_ignored"
+                summary["non_blocking_warnings"].append(warning)
+                summary["verdict_flags"].append("HTF_FORMING_CANDLE_MISMATCH_IGNORED")
+        overlap_blocked_timeframes = [
+            tf for tf, item in overlap.items() if item.get("verdict") == "OVERLAP_MATCH_LT_95"
+        ]
+        htf_quarantine_timeframes: list[str] = []
+        lower_timeframe_block = False
+        if overlap_blocked_timeframes and not cfg.allow_overlap_mismatch:
+            lower_timeframe_block = any(tf not in {"H4", "D1"} for tf in overlap_blocked_timeframes)
+            if not lower_timeframe_block:
+                htf_quarantine_timeframes = overlap_blocked_timeframes
+                summary["timeframes_quarantined_by_overlap"] = list(htf_quarantine_timeframes)
+                summary["non_blocking_warnings"].extend(
+                    f"{tf}:htf_overlap_mismatch_quarantined" for tf in htf_quarantine_timeframes
+                )
+                summary["verdict_flags"].append("HTF_OVERLAP_MISMATCH_QUARANTINED")
+        overlap_block = bool(overlap_blocked_timeframes) and lower_timeframe_block and not cfg.allow_overlap_mismatch
         timezone_block = bool(tz_warnings) and not cfg.allow_timezone_warning
+        summary["blocking_fetch_error"] = bool(overlap_block or timezone_block)
         if cfg.write and not cfg.dry_run and not overlap_block and not timezone_block:
             cfg.output_dir.mkdir(parents=True, exist_ok=True)
-            for tf, frame in frames.items():
+            for tf, frame in closed_frames.items():
+                if tf in htf_quarantine_timeframes:
+                    summary["rows_written_by_timeframe"][tf] = 0
+                    continue
                 out_path = cfg.output_dir / f"{tf}.csv"
                 if out_path.exists() and not cfg.overwrite:
                     summary["verdict_flags"].append("MT5_OUTPUT_EXISTS_OVERWRITE_REQUIRED")
@@ -399,6 +500,8 @@ def main(argv: list[str] | None = None) -> int:
         allow_timezone_warning=bool(args.allow_timezone_warning),
         allow_overlap_mismatch=bool(args.allow_overlap_mismatch),
         overlap_price_tolerance_usd=float(args.overlap_price_tolerance_usd),
+        include_forming_candles=bool(args.include_forming_candles),
+        closed_candle_grace_seconds=int(args.closed_candle_grace_seconds),
         report_dir=Path(args.report_dir),
     )
     summary = run_collector(cfg)
