@@ -4,6 +4,7 @@ param(
     [int]$IntervalMinutes = 15,
     [switch]$Loop,
     [switch]$Apply,
+    [switch]$ForcePipelineLock,
     [string]$FromTimestamp = "",
     [int]$DaysBack = 7
 )
@@ -37,6 +38,10 @@ if ($Apply) {
 
 if ($FromTimestamp -ne "") {
     $argsList += @("--from-timestamp", $FromTimestamp)
+}
+
+if ($ForcePipelineLock) {
+    $argsList += "--force-pipeline-lock"
 }
 
 python @argsList
