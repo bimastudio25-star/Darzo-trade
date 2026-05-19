@@ -56,6 +56,7 @@ SAFETY = {
     "order_sent": False,
 }
 MATCH_COLUMNS = [
+    "comparison_scope",
     "paper_signal_timestamp",
     "backtest_signal_timestamp",
     "direction",
@@ -131,17 +132,29 @@ def load_paper_signals(paper_dir: Path) -> tuple[list[dict[str, Any]], list[str]
     return rows, missing, scanner_summary
 
 
-def paper_window(rows: list[dict[str, Any]], cfg: CompareConfig) -> dict[str, str] | None:
+def paper_window(rows: list[dict[str, Any]], cfg: CompareConfig, scanner_summary: dict[str, Any] | None = None) -> dict[str, str] | None:
     if not rows:
         return None
+    scanner_summary = scanner_summary or {}
     times = [_parse_ts(row["signal_timestamp"]) for row in rows]
     earliest = min(times)
     latest = max(times)
+    previous_processed = scanner_summary.get("previous_last_processed_timestamp")
+    new_processed = scanner_summary.get("new_last_processed_timestamp") or scanner_summary.get("latest_data_timestamp")
+    if previous_processed and new_processed:
+        backtest_from = _parse_ts(previous_processed)
+        backtest_to = _parse_ts(new_processed)
+        source = "scanner_incremental_state"
+    else:
+        backtest_from = earliest - timedelta(hours=cfg.warmup_buffer_hours)
+        backtest_to = latest + timedelta(minutes=cfg.post_signal_buffer_minutes)
+        source = "paper_signal_bounds_with_buffers"
     return {
-        "backtest_from": (earliest - timedelta(hours=cfg.warmup_buffer_hours)).isoformat(),
-        "backtest_to": (latest + timedelta(minutes=cfg.post_signal_buffer_minutes)).isoformat(),
+        "backtest_from": backtest_from.isoformat(),
+        "backtest_to": backtest_to.isoformat(),
         "earliest_paper_signal_timestamp": earliest.isoformat(),
         "latest_paper_signal_timestamp": latest.isoformat(),
+        "window_source": source,
     }
 
 
@@ -179,7 +192,6 @@ def build_backtest_comparable_signals(cfg: CompareConfig, window: dict[str, str]
         cfg.symbol,
         ["M1", "M5", "M15", "H1", "H4", "D1"],
         data_dir=cfg.data_dir,
-        date_from=_parse_ts(window["backtest_from"]),
         date_to=_parse_ts(window["backtest_to"]),
     )
     slicer = BacktestDataSlicer(
@@ -193,7 +205,7 @@ def build_backtest_comparable_signals(cfg: CompareConfig, window: dict[str, str]
     start = _parse_ts(window["backtest_from"])
     end = _parse_ts(window["backtest_to"])
     times = pd.to_datetime(driver["time"], utc=True)
-    driver_times = [ts.to_pydatetime() for ts in times[(times >= pd.Timestamp(start)) & (times <= pd.Timestamp(end))]]
+    driver_times = [ts.to_pydatetime() for ts in times[(times > pd.Timestamp(start)) & (times <= pd.Timestamp(end))]]
     diagnostics = Strategy3Diagnostics()
     last_by_key: dict[tuple[str, str], datetime] = {}
     out: list[dict[str, Any]] = []
@@ -289,6 +301,7 @@ def compare_signals(
                     mismatch("VWAP_CONTEXT_MISMATCH", paper.get(key), backtest.get(key))
                     break
         base = {
+            "comparison_scope": "",
             "paper_signal_timestamp": paper.get("signal_timestamp"),
             "backtest_signal_timestamp": backtest.get("signal_timestamp"),
             "direction": paper.get("direction"),
@@ -316,6 +329,39 @@ def compare_signals(
         "extra": extra,
         "mismatch_categories": categories,
         "match_rate": match_rate,
+    }
+
+
+def _with_scope(rows: list[dict[str, Any]], scope: str) -> list[dict[str, Any]]:
+    return [{**row, "comparison_scope": scope} for row in rows]
+
+
+def compare_all_and_accepted(
+    paper_rows: list[dict[str, Any]],
+    backtest_rows: list[dict[str, Any]],
+    *,
+    price_tolerance_usd: float,
+    timestamp_tolerance_seconds: int,
+) -> dict[str, Any]:
+    all_detected = compare_signals(
+        paper_rows,
+        backtest_rows,
+        price_tolerance_usd=price_tolerance_usd,
+        timestamp_tolerance_seconds=timestamp_tolerance_seconds,
+    )
+    accepted_paper = [row for row in paper_rows if _bool(row.get("cooldown_accepted"))]
+    accepted_backtest = [row for row in backtest_rows if bool(row.get("cooldown_accepted"))]
+    accepted_only = compare_signals(
+        accepted_paper,
+        accepted_backtest,
+        price_tolerance_usd=price_tolerance_usd,
+        timestamp_tolerance_seconds=timestamp_tolerance_seconds,
+    )
+    return {
+        "all_detected": all_detected,
+        "accepted_only": accepted_only,
+        "accepted_paper_count": len(accepted_paper),
+        "accepted_backtest_count": len(accepted_backtest),
     }
 
 
@@ -347,6 +393,36 @@ def verdict_flags(
     return flags
 
 
+def post_fix_verdict_flags(
+    *,
+    accepted_match_rate: float | None,
+    accepted_mismatch_categories: dict[str, int],
+    htf_caveat_present: bool,
+) -> list[str]:
+    flags: list[str] = []
+    critical = any(
+        accepted_mismatch_categories.get(name, 0) > 0
+        for name in (
+            "TIMESTAMP_MISMATCH",
+            "ENTRY_PRICE_MISMATCH",
+            "STOP_LOSS_MISMATCH",
+            "TAKE_PROFIT_MISMATCH",
+            "COOLDOWN_STATUS_MISMATCH",
+            "MISSING_IN_BACKTEST",
+            "EXTRA_IN_BACKTEST",
+        )
+    )
+    if accepted_match_rate is not None and accepted_match_rate >= 0.95 and not critical:
+        flags.append("SHADOW_BACKTEST_ACCEPTED_MATCH_OK")
+    elif accepted_match_rate is not None and accepted_match_rate >= 0.80:
+        flags.append("SHADOW_BACKTEST_MINOR_MISMATCHES")
+    else:
+        flags.append("SHADOW_BACKTEST_RUNTIME_MISMATCH")
+    if htf_caveat_present:
+        flags.append("HTF_CONTEXT_CAVEAT_PRESENT")
+    return flags
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -359,10 +435,16 @@ def _write_outputs(output_dir: Path, summary: dict[str, Any], comparison: dict[s
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "comparison_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
     if comparison is not None:
-        _write_csv(output_dir / "matched_signals.csv", comparison["matched"], MATCH_COLUMNS)
-        _write_csv(output_dir / "mismatched_signals.csv", comparison["mismatched"], MISMATCH_COLUMNS)
-        _write_csv(output_dir / "missing_in_backtest.csv", comparison["missing"], list(comparison["missing"][0].keys()) if comparison["missing"] else REQUIRED_PAPER_FIELDS)
-        _write_csv(output_dir / "extra_in_backtest.csv", comparison["extra"], list(comparison["extra"][0].keys()) if comparison["extra"] else MATCH_COLUMNS)
+        all_detected = comparison.get("all_detected", comparison)
+        accepted_only = comparison.get("accepted_only", {"matched": [], "mismatched": [], "missing": [], "extra": []})
+        matched_rows = _with_scope(all_detected["matched"], "all_detected") + _with_scope(accepted_only["matched"], "accepted_only")
+        mismatched_rows = _with_scope(all_detected["mismatched"], "all_detected") + _with_scope(accepted_only["mismatched"], "accepted_only")
+        _write_csv(output_dir / "comparison_matches.csv", matched_rows, MATCH_COLUMNS)
+        _write_csv(output_dir / "comparison_mismatches.csv", mismatched_rows, MISMATCH_COLUMNS)
+        _write_csv(output_dir / "matched_signals.csv", all_detected["matched"], MATCH_COLUMNS)
+        _write_csv(output_dir / "mismatched_signals.csv", all_detected["mismatched"], MISMATCH_COLUMNS)
+        _write_csv(output_dir / "missing_in_backtest.csv", all_detected["missing"], list(all_detected["missing"][0].keys()) if all_detected["missing"] else REQUIRED_PAPER_FIELDS)
+        _write_csv(output_dir / "extra_in_backtest.csv", all_detected["extra"], list(all_detected["extra"][0].keys()) if all_detected["extra"] else MATCH_COLUMNS)
     flags = ", ".join(summary["verdict_flags"])
     window = summary.get("comparison_window")
     report = [
@@ -371,11 +453,14 @@ def _write_outputs(output_dir: Path, summary: dict[str, Any], comparison: dict[s
         "This is a paper/research comparison only. No live trading, Telegram, broker, or order path was used.",
         "",
         f"- paper_signals_count: `{summary['paper_signals_count']}`",
+        f"- paper_accepted_count: `{summary.get('paper_accepted_count')}`",
         f"- backtest_signals_count: `{summary['backtest_signals_count']}`",
-        f"- matched_count: `{summary['matched_count']}`",
-        f"- match_rate: `{summary['match_rate']}`",
+        f"- backtest_accepted_count: `{summary.get('backtest_accepted_count')}`",
+        f"- match_rate_all_detected: `{summary.get('match_rate_all_detected')}`",
+        f"- match_rate_accepted_only: `{summary.get('match_rate_accepted_only')}`",
         f"- verdict_flags: `{flags}`",
         f"- comparison_window: `{window}`",
+        f"- htf_caveat: `{summary.get('htf_caveat')}`",
         "",
     ]
     if summary["paper_signals_count"] == 0:
@@ -391,13 +476,13 @@ def run_comparison(cfg: CompareConfig) -> dict[str, Any]:
     run_started_at = _utc_now()
     paper_rows, missing_schema, scanner_summary = load_paper_signals(cfg.paper_dir)
     safety_regression = any(_bool(row.get(field)) for row in paper_rows for field in ("order_sent", "telegram_sent", "broker_called"))
-    comparison_window = paper_window(paper_rows, cfg) if not missing_schema else None
+    comparison_window = paper_window(paper_rows, cfg, scanner_summary) if not missing_schema else None
     backtest_rows: list[dict[str, Any]] | None = None
     comparison: dict[str, Any] | None = None
 
     if paper_rows and comparison_window and not missing_schema:
         backtest_rows = build_backtest_comparable_signals(cfg, comparison_window)
-        comparison = compare_signals(
+        comparison = compare_all_and_accepted(
             paper_rows,
             backtest_rows,
             price_tolerance_usd=cfg.price_tolerance_usd,
@@ -415,11 +500,16 @@ def run_comparison(cfg: CompareConfig) -> dict[str, Any]:
 
     paper_count = len(paper_rows)
     backtest_count = len(backtest_rows) if backtest_rows is not None else (0 if paper_count == 0 else None)
-    matched_count = len(comparison["matched"]) if comparison else 0
-    missing_count = len(comparison["missing"]) if comparison else 0
-    extra_count = len(comparison["extra"]) if comparison else 0
-    mismatched_count = len(comparison["mismatched"]) if comparison else 0
-    match_rate = comparison["match_rate"] if comparison else None
+    all_detected = comparison.get("all_detected", comparison) if comparison else None
+    accepted_only = comparison.get("accepted_only", {}) if comparison else {}
+    matched_count = len(all_detected["matched"]) if all_detected else 0
+    missing_count = len(all_detected["missing"]) if all_detected else 0
+    extra_count = len(all_detected["extra"]) if all_detected else 0
+    mismatched_count = len(all_detected["mismatched"]) if all_detected else 0
+    match_rate = all_detected["match_rate"] if all_detected else None
+    accepted_match_rate = accepted_only.get("match_rate") if accepted_only else None
+    accepted_paper_count = comparison.get("accepted_paper_count") if comparison else 0
+    accepted_backtest_count = comparison.get("accepted_backtest_count") if comparison else 0
     flags = verdict_flags(
         paper_count=paper_count,
         backtest_count=backtest_count,
@@ -427,6 +517,20 @@ def run_comparison(cfg: CompareConfig) -> dict[str, Any]:
         missing_schema=missing_schema,
         safety_regression=safety_regression,
     )
+    htf_caveat = {
+        "h4_quarantined_unchanged": True,
+        "d1_forming_skipped": True,
+        "m1_m5_m15_h1_updated": True,
+        "interpretation": "Comparison is valid for the runtime data state that produced the paper signals, but HTF freshness should be monitored because H4 was quarantined and D1 current forming candle was skipped.",
+    }
+    if paper_count:
+        flags.extend(
+            post_fix_verdict_flags(
+                accepted_match_rate=accepted_match_rate,
+                accepted_mismatch_categories=accepted_only.get("mismatch_categories", {}) if accepted_only else {},
+                htf_caveat_present=True,
+            )
+        )
     summary = {
         "run_started_at": run_started_at,
         "run_finished_at": _utc_now(),
@@ -441,16 +545,39 @@ def run_comparison(cfg: CompareConfig) -> dict[str, Any]:
         "price_tolerance_usd": cfg.price_tolerance_usd,
         "timestamp_tolerance_seconds": cfg.timestamp_tolerance_seconds,
         "paper_signals_count": paper_count,
+        "paper_accepted_count": accepted_paper_count,
         "backtest_signals_count": backtest_count,
+        "backtest_accepted_count": accepted_backtest_count,
         "matched_count": matched_count,
         "mismatched_count": mismatched_count,
         "missing_in_backtest_count": missing_count,
         "extra_in_backtest_count": extra_count,
         "match_rate": match_rate,
-        "mismatch_categories": comparison["mismatch_categories"] if comparison else {},
+        "match_rate_all_detected": match_rate,
+        "match_rate_accepted_only": accepted_match_rate,
+        "all_detected": {
+            "matched_count": matched_count,
+            "mismatched_count": mismatched_count,
+            "missing_in_backtest_count": missing_count,
+            "extra_in_backtest_count": extra_count,
+            "match_rate": match_rate,
+            "mismatch_categories": all_detected["mismatch_categories"] if all_detected else {},
+        },
+        "accepted_only": {
+            "paper_signals_count": accepted_paper_count,
+            "backtest_signals_count": accepted_backtest_count,
+            "matched_count": len(accepted_only.get("matched", [])) if accepted_only else 0,
+            "mismatched_count": len(accepted_only.get("mismatched", [])) if accepted_only else 0,
+            "missing_in_backtest_count": len(accepted_only.get("missing", [])) if accepted_only else 0,
+            "extra_in_backtest_count": len(accepted_only.get("extra", [])) if accepted_only else 0,
+            "match_rate": accepted_match_rate,
+            "mismatch_categories": accepted_only.get("mismatch_categories", {}) if accepted_only else {},
+        },
+        "mismatch_categories": all_detected["mismatch_categories"] if all_detected else {},
         "missing_schema_fields": missing_schema,
         "verdict_flags": flags,
         "comparison_window": comparison_window,
+        "htf_caveat": htf_caveat,
         "scanner_summary_run_id": scanner_summary.get("scanner_run_id"),
         "safety": dict(SAFETY),
     }
