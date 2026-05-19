@@ -1199,7 +1199,8 @@ def build_trade_management_record(
     risk = trade.stop_distance_usd
     m5_sequence = _m5_quality_sequence(m5_candles, side, entry_price=trade.entry_price, stop_loss=trade.stop_loss)
     reaction = evaluate_reaction_state(m5_candles, side, trade.entry_price, stop_loss=trade.stop_loss)
-    retest = evaluate_retest_quality(m5_candles or m1_candles, side, trade.entry_price, stop_loss=trade.stop_loss, be_trigger_usd=config.be_trigger_usd)
+    retest_context = m5_candles if _clean_candles(m5_candles) else m1_candles
+    retest = evaluate_retest_quality(retest_context, side, trade.entry_price, stop_loss=trade.stop_loss, be_trigger_usd=config.be_trigger_usd)
     runner = detect_runner_opportunity(
         side,
         trade.entry_price,

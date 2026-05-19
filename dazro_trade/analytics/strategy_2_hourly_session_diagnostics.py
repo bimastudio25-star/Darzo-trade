@@ -72,6 +72,26 @@ def _trade_timestamp(row: dict[str, Any]) -> datetime | None:
     return None
 
 
+def sample_size_label(n: int) -> str:
+    if n < 10:
+        return "insufficient"
+    if n < 30:
+        return "weak"
+    if n < 100:
+        return "moderate"
+    return "significant"
+
+
+def sample_size_interpretation(n: int) -> str:
+    if n < 10:
+        return "do not interpret; no conclusions"
+    if n < 30:
+        return "show metrics, but no conclusions"
+    if n < 100:
+        return "interpretable, but not validated"
+    return "stronger, still not live validation"
+
+
 def extract_trade_hour(row: dict[str, Any]) -> int | None:
     ts = _trade_timestamp(row)
     return ts.hour if ts is not None else None
@@ -116,11 +136,17 @@ def _r_value(row: dict[str, Any], field: str | None = None) -> float | None:
 def _metric_block(rows: list[dict[str, Any]], *, r_field: str | None = None) -> dict[str, Any]:
     values = [value for row in rows if (value := _r_value(row, r_field)) is not None]
     metrics = metric_block_from_r(values)
+    metrics["statistical_label"] = sample_size_label(metrics["trades"])
+    metrics["interpretation"] = sample_size_interpretation(metrics["trades"])
     metrics["TP_count"] = _count_outcomes(rows, {"TP", "TP1", "TP2", "TP3", "TP4"})
     metrics["SL_count"] = _count_outcomes(rows, {"SL"})
     metrics["BE_count"] = _count_outcomes(rows, {"BE"})
+    metrics["BE_hit_rate"] = _rate(rows, "hit_be_10")
+    metrics["BE_stopout_rate"] = _be_stopout_rate(rows, r_field)
     metrics["partial_hit_count"] = sum(1 for row in rows if _truthy(row.get("hit_partial_15")) or _truthy(row.get("hit_partial_20")))
+    metrics["partial_hit_rate"] = round(metrics["partial_hit_count"] / len(rows), 4) if rows else 0.0
     metrics["runner_hit_count"] = sum(1 for row in rows if str(row.get("runner_opportunity") or "") != "STANDARD_TP" and row.get("runner_opportunity") not in (None, ""))
+    metrics["runner_hit_rate"] = _runner_hit_rate(rows, r_field)
     metrics["TIMEOUT_END_OF_DATA_count"] = _count_outcomes(rows, {"TIMEOUT_CLOSE", "END_OF_DATA_CLOSE", "STILL_OPEN"})
     mfe_values = [value for row in rows if (value := _to_float(row.get("mfe_R") or row.get("mfe"))) is not None]
     mae_values = [value for row in rows if (value := _to_float(row.get("mae_R") or row.get("mae"))) is not None]
@@ -131,6 +157,36 @@ def _metric_block(rows: list[dict[str, Any]], *, r_field: str | None = None) -> 
 
 def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _rate(rows: list[dict[str, Any]], field: str) -> float:
+    return round(sum(1 for row in rows if _truthy(row.get(field))) / len(rows), 4) if rows else 0.0
+
+
+def _be_stopout_rate(rows: list[dict[str, Any]], r_field: str | None) -> float:
+    if not rows or r_field is None:
+        return 0.0
+    stopped = 0
+    for row in rows:
+        value = _to_float(row.get(r_field))
+        if _truthy(row.get("hit_be_10")) and value is not None and abs(value) < 0.0001:
+            stopped += 1
+    return round(stopped / len(rows), 4)
+
+
+def _runner_hit_rate(rows: list[dict[str, Any]], r_field: str | None) -> float | None:
+    if r_field is None:
+        return None
+    runner_rows = [row for row in rows if str(row.get("runner_opportunity") or "") not in {"", "STANDARD_TP"}]
+    if not runner_rows:
+        return None
+    hits = 0
+    for row in runner_rows:
+        result_r = _to_float(row.get(r_field))
+        target_r = _to_float(row.get("dynamic_target_R"))
+        if result_r is not None and target_r is not None and result_r >= target_r:
+            hits += 1
+    return round(hits / len(runner_rows), 4)
 
 
 def _count_outcomes(rows: list[dict[str, Any]], names: set[str]) -> int:
@@ -292,5 +348,7 @@ __all__ = [
     "in_14_16_window",
     "outcome_distribution",
     "render_14_16_report",
+    "sample_size_interpretation",
+    "sample_size_label",
     "write_strategy_2_hourly_session_outputs",
 ]

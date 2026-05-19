@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from dazro_trade.analysis.human_trade_management import (
     HumanManagementConfig,
     TradeInput,
+    build_trade_management_record,
     collect_path_event_state,
     evaluate_entry_quality,
     simulate_trade_path_variant,
@@ -149,3 +152,21 @@ def test_entry_quality_marks_price_escaped_after_be_threshold():
     result = evaluate_entry_quality("LONG", 2400.0, 2412.0, stop_loss=2395.0, target_price=2425.0)
     assert result["entry_quality"] == "NO_TRADE_PRICE_ESCAPED"
     assert "price_already_beyond_be_trigger" in result["reason_codes"]
+
+
+def test_trade_record_accepts_pandas_dataframes_for_real_overlay_paths():
+    trade = _trade("LONG", entry=100, stop=95, tp=112)
+    m1 = pd.DataFrame(
+        [
+            {"time": "2026-05-19T14:01:00+00:00", "open": 100, "high": 111, "low": 99, "close": 110},
+            {"time": "2026-05-19T14:02:00+00:00", "open": 110, "high": 112, "low": 101, "close": 112},
+        ]
+    )
+    m5 = pd.DataFrame(
+        [
+            {"time": "2026-05-19T14:05:00+00:00", "open": 100, "high": 112, "low": 99, "close": 111},
+        ]
+    )
+    row = build_trade_management_record(trade, m1_candles=m1, m5_candles=m5)
+    assert row["trade_id"] == "long-1"
+    assert row["result_baseline_R"] > 0

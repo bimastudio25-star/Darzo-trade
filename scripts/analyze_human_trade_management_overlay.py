@@ -26,6 +26,8 @@ from dazro_trade.analysis.local_ai_trade_judge import LocalAITradeJudge
 from dazro_trade.analytics.strategy_2_hourly_session_diagnostics import (
     VARIANT_RESULT_FIELDS,
     build_strategy_2_hourly_session_diagnostics,
+    sample_size_interpretation,
+    sample_size_label,
     write_strategy_2_hourly_session_outputs,
 )
 from dazro_trade.backtest.data_loader import load_csv_timeframes
@@ -176,11 +178,15 @@ def _variant_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for variant, field in VARIANT_RESULT_FIELDS.items():
         values = [value for row in rows if (value := _to_float(row.get(field))) is not None]
         block = metric_block_from_r(values)
+        block["statistical_label"] = sample_size_label(block["trades"])
+        block["interpretation"] = sample_size_interpretation(block["trades"])
         block.update(
             {
                 "BE_hit_rate": _rate(rows, "hit_be_10"),
+                "BE_stopout_rate": _be_stopout_rate(rows, field),
                 "partial_hit_rate": _rate(rows, "hit_partial_15") if variant == "partial_15" else _rate(rows, "hit_partial_20") if variant == "partial_20" else _rate_any(rows, ("hit_partial_15", "hit_partial_20")),
                 "runner_opportunity_count": sum(1 for row in rows if row.get("runner_opportunity") not in (None, "", "STANDARD_TP")),
+                "runner_hit_rate": _runner_hit_rate(rows, field),
             }
         )
         out[variant] = block
@@ -203,6 +209,32 @@ def _rate_any(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> float:
     if not rows:
         return 0.0
     return round(sum(1 for row in rows if any(str(row.get(field)).lower() == "true" for field in fields)) / len(rows), 4)
+
+
+def _be_stopout_rate(rows: list[dict[str, Any]], r_field: str) -> float:
+    if not rows:
+        return 0.0
+    stopped = 0
+    for row in rows:
+        if str(row.get("hit_be_10")).lower() != "true":
+            continue
+        value = _to_float(row.get(r_field))
+        if value is not None and abs(value) < 0.0001:
+            stopped += 1
+    return round(stopped / len(rows), 4)
+
+
+def _runner_hit_rate(rows: list[dict[str, Any]], r_field: str) -> float | None:
+    runner_rows = [row for row in rows if row.get("runner_opportunity") not in (None, "", "STANDARD_TP")]
+    if not runner_rows:
+        return None
+    hits = 0
+    for row in runner_rows:
+        result_r = _to_float(row.get(r_field))
+        target_r = _to_float(row.get("dynamic_target_R"))
+        if result_r is not None and target_r is not None and result_r >= target_r:
+            hits += 1
+    return round(hits / len(runner_rows), 4)
 
 
 def render_report(summary: dict[str, Any]) -> str:
@@ -313,15 +345,17 @@ def run_overlay(args: argparse.Namespace) -> dict[str, str]:
                 "m5_context_rows": 0 if m5_path is None else len(m5_path),
             }
             ai_result = local_ai.judge(ai_payload).to_dict()
-            analyzed_rows.append(
-                build_trade_management_record(
-                    trade,
-                    m1_candles=m1_path,
-                    m5_candles=m5_path,
-                    config=config,
-                    ai_judge_result=ai_result,
-                )
+            record = build_trade_management_record(
+                trade,
+                m1_candles=m1_path,
+                m5_candles=m5_path,
+                config=config,
+                ai_judge_result=ai_result,
             )
+            exported_baseline_r = _to_float(row.get("r_multiple"))
+            if exported_baseline_r is not None:
+                record["result_baseline_R"] = round(exported_baseline_r, 4)
+            analyzed_rows.append(record)
         if not analyzed_rows:
             synthetic = True
             limitations.append("NO_ROWS_ANALYZED_FROM_TRADES_FILE_SYNTHETIC_EXAMPLES_USED")

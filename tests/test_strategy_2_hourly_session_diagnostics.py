@@ -6,6 +6,8 @@ from dazro_trade.analytics.strategy_2_hourly_session_diagnostics import (
     build_strategy_2_hourly_session_diagnostics,
     extract_trade_hour,
     in_14_16_window,
+    sample_size_interpretation,
+    sample_size_label,
     write_strategy_2_hourly_session_outputs,
 )
 
@@ -44,6 +46,17 @@ def test_hour_extraction_and_14_16_filter_work():
     assert in_14_16_window(_row(2, hour=16, r=1)) is False
 
 
+def test_sample_size_labels_follow_statistical_floor_rules():
+    assert sample_size_label(9) == "insufficient"
+    assert sample_size_interpretation(9) == "do not interpret; no conclusions"
+    assert sample_size_label(10) == "weak"
+    assert sample_size_interpretation(10) == "show metrics, but no conclusions"
+    assert sample_size_label(30) == "moderate"
+    assert sample_size_interpretation(30) == "interpretable, but not validated"
+    assert sample_size_label(100) == "significant"
+    assert sample_size_interpretation(100) == "stronger, still not live validation"
+
+
 def test_hourly_session_aggregation_computes_core_metrics():
     rows = [_row(1, hour=14, r=1), _row(2, hour=15, r=-1, outcome="SL"), _row(3, hour=9, r=2)]
     report = build_strategy_2_hourly_session_diagnostics(rows, rows[0].keys(), source_path="x.csv")
@@ -53,6 +66,7 @@ def test_hourly_session_aggregation_computes_core_metrics():
     assert summary["full_day"]["WR"] == 0.6667
     assert summary["full_day"]["AvgR"] == 0.6667
     assert summary["full_day"]["total_R"] == 2.0
+    assert summary["full_day"]["statistical_label"] == "insufficient"
     assert summary["window_14_16"]["trades"] == 2
     assert summary["live_filter_activated"] is False
 
