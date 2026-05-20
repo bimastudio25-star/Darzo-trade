@@ -8,8 +8,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dazro_trade.analytics.adelin_v2_visual_review_pack import (
+    INSUFFICIENT_EXECUTION_DATA,
     MANUAL_LABEL_COLUMNS,
     RESEARCH_WARNING,
+    REVIEWABLE_M1_M5,
     VisualReviewPackConfig,
     create_visual_review_pack,
     is_near_number_theory_level,
@@ -44,8 +46,16 @@ def _write_frame(path: Path, start: datetime, rows: int, minutes: int) -> None:
 def _make_data_dir(tmp_path: Path) -> Path:
     data_dir = tmp_path / "data"
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    _write_frame(data_dir / "XAUUSD" / "M1.csv", start, 900, 1)
-    _write_frame(data_dir / "XAUUSD" / "M5.csv", start, 220, 5)
+    _write_frame(data_dir / "XAUUSD" / "M1.csv", start, 1800, 1)
+    _write_frame(data_dir / "XAUUSD" / "M5.csv", start, 400, 5)
+    _write_frame(data_dir / "XAUUSD" / "M15.csv", start, 96, 15)
+    _write_frame(data_dir / "XAUUSD" / "H1.csv", start, 80, 60)
+    return data_dir
+
+
+def _make_m15_only_data_dir(tmp_path: Path) -> Path:
+    data_dir = tmp_path / "m15_only_data"
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     _write_frame(data_dir / "XAUUSD" / "M15.csv", start, 96, 15)
     _write_frame(data_dir / "XAUUSD" / "H1.csv", start, 80, 60)
     return data_dir
@@ -84,6 +94,7 @@ def test_visual_pack_creates_output_files_and_respects_sample_cap(tmp_path: Path
     assert (output_dir / "README_manual_review.md").exists()
     assert summary["charts_generated"] == summary["total_samples"]
     assert summary["html_pages_generated"] == summary["total_samples"]
+    assert summary["reviewable_samples"] == summary["total_samples"]
 
 
 def test_empty_missing_trades_file_does_not_crash(tmp_path: Path):
@@ -114,6 +125,7 @@ def test_missing_candle_data_gives_valid_summary_with_limitations(tmp_path: Path
     )
     assert summary["total_samples"] == 0
     assert "NO_CANDLE_DATA_LOADED" in summary["limitations"]
+    assert summary["reviewable_samples"] == 0
     assert (output_dir / "index.html").exists()
     assert (output_dir / "manual_labels_template.csv").exists()
 
@@ -128,6 +140,11 @@ def test_manual_label_template_contains_required_columns(tmp_path: Path):
         reader = csv.reader(f)
         header = next(reader)
     assert header == MANUAL_LABEL_COLUMNS
+    assert "execution_data_status" in header
+    assert "m1_candles_count" in header
+    assert "m5_candles_count" in header
+    assert "m15_candles_count" in header
+    assert "reviewer_should_skip_due_to_missing_ltf_data_manual" in header
 
 
 def test_index_html_contains_research_only_no_signal_warning(tmp_path: Path):
@@ -139,6 +156,8 @@ def test_index_html_contains_research_only_no_signal_warning(tmp_path: Path):
     html = (output_dir / "index.html").read_text(encoding="utf-8")
     assert "Research-only" in html
     assert RESEARCH_WARNING in html
+    assert "execution_data_status" in html
+    assert "M1 count" in html
 
 
 def test_summary_json_includes_safety_flags_all_false(tmp_path: Path):
@@ -149,6 +168,9 @@ def test_summary_json_includes_safety_flags_all_false(tmp_path: Path):
     )
     summary = json.loads((output_dir / "review_pack_summary.json").read_text(encoding="utf-8"))
     assert all(value is False for value in summary["safety"].values())
+    assert "reviewable_samples" in summary
+    assert "reviewable_m1_m5_count" in summary
+    assert "insufficient_execution_data_count" in summary
 
 
 def test_no_live_notification_or_execution_imports_are_used():
@@ -190,6 +212,46 @@ def test_candidate_window_mode_marks_samples_as_visual_candidates_not_signals(tm
     with (output_dir / "manual_labels_template.csv").open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert all(row["source_mode"] == "CANDIDATE_WINDOW_MODE" for row in rows)
+    assert all(row["execution_data_status"] == REVIEWABLE_M1_M5 for row in rows)
+
+
+def test_m15_without_m1_m5_is_marked_insufficient_execution_data(tmp_path: Path):
+    data_dir = _make_m15_only_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    summary = create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=2,
+        )
+    )
+    assert summary["total_samples"] > 0
+    assert summary["reviewable_samples"] == 0
+    assert summary["insufficient_execution_data_count"] == summary["total_samples"]
+    with (output_dir / "manual_labels_template.csv").open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert all(row["execution_data_status"] == INSUFFICIENT_EXECUTION_DATA for row in rows)
+    sample_page = (output_dir / rows[0]["html_path"]).read_text(encoding="utf-8")
+    assert "INSUFFICIENT EXECUTION DATA - do not label as A+." in sample_page
+
+
+def test_generator_prefers_samples_with_m1_m5_coverage(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    summary = create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=5,
+        )
+    )
+    assert summary["total_samples"] == 5
+    assert summary["reviewable_m1_m5_count"] == 5
+    assert summary["insufficient_execution_data_count"] == 0
 
 
 def test_number_theory_helper_detects_prices_near_levels_ending_in_zero():
@@ -236,7 +298,14 @@ def test_trade_review_mode_uses_audit_rows_when_available(tmp_path: Path):
         )
     output_dir = tmp_path / "pack"
     summary = create_visual_review_pack(
-        VisualReviewPackConfig(data_dir=data_dir, output_dir=output_dir, trades_path=tmp_path / "missing.csv", audit_path=audit_path, max_samples=1)
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=audit_path,
+            max_samples=1,
+            include_candidate_windows=False,
+        )
     )
     assert summary["audit_rows_loaded"] == 1
     assert summary["source_modes_used"] == ["TRADE_REVIEW_MODE"]

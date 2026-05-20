@@ -7,15 +7,20 @@
   "dry_run": true,
   "html_pages_generated": 40,
   "index_path": "backtests\\reports\\adelin_v2_visual_review_pack\\index.html",
+  "insufficient_execution_data_count": 0,
   "limitations": [
     "MATPLOTLIB_UNAVAILABLE_USING_SVG_CHARTS",
     "NO_TRADES_PATH_AVAILABLE"
   ],
   "manual_label_template_path": "backtests\\reports\\adelin_v2_visual_review_pack\\manual_labels_template.csv",
   "output_dir": "backtests\\reports\\adelin_v2_visual_review_pack",
+  "raw_samples_considered": 4000,
   "readme_path": "backtests\\reports\\adelin_v2_visual_review_pack\\README_manual_review.md",
-  "run_finished_at": "2026-05-20T22:18:56.882963+00:00",
-  "run_started_at": "2026-05-20T22:18:52.498069+00:00",
+  "reviewable_m1_m5_count": 40,
+  "reviewable_m5_only_count": 0,
+  "reviewable_samples": 40,
+  "run_finished_at": "2026-05-20T22:35:05.089478+00:00",
+  "run_started_at": "2026-05-20T22:34:59.483210+00:00",
   "safety": {
     "broker_execution_enabled": false,
     "data_modified": false,
@@ -25,6 +30,7 @@
     "strategy_3_touched": false,
     "telegram_enabled": false
   },
+  "samples_skipped_due_to_missing_ltf_data": 0,
   "source_modes_used": [
     "CANDIDATE_WINDOW_MODE"
   ],
@@ -32,5 +38,6 @@
   "total_samples": 40,
   "trades_loaded": 0,
   "trades_path": null,
-  "warning": "Candidate windows are for visual labeling only and are not trade signals."
+  "warning": "Candidate windows are for visual labeling only and are not trade signals.",
+  "weak_m1_only_count": 0
 }

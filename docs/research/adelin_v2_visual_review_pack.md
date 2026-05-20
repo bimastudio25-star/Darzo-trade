@@ -75,11 +75,22 @@ It contains:
 - `review_pack_summary.json`: machine-readable run summary,
 - `README_manual_review.md`: reviewer instructions and allowed-value guidance.
 
+The pack now records lower-timeframe execution coverage for every sample:
+
+- `REVIEWABLE_M1_M5`: M15 context plus M1 and M5 execution/reaction candles are present.
+- `REVIEWABLE_M5_ONLY`: M15 context plus M5 candles are present, but M1 is missing.
+- `WEAK_M1_ONLY`: M15 context plus M1 candles are present, but M5 is missing.
+- `INSUFFICIENT_EXECUTION_DATA`: M15 context is missing, or both M1 and M5 are missing.
+
+Default sample selection prefers `REVIEWABLE_M1_M5`, then `REVIEWABLE_M5_ONLY`, then `WEAK_M1_ONLY`. Insufficient samples are included only if needed to fill the pack and are clearly marked.
+
 ## 6. How The User Should Label
 
 Open `index.html`, inspect each sample, then fill `manual_labels_template.csv`.
 
 Use `YES`, `NO`, `MAYBE`, or `UNKNOWN` for manual context fields.
+
+Check `execution_data_status` first. Do not label `INSUFFICIENT_EXECUTION_DATA` samples as A+; if both M1 and M5 are absent, the setup is not reviewable enough for Adelin v2 execution/reaction quality.
 
 Focus on:
 

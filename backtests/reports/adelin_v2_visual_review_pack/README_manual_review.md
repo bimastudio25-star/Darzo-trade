@@ -25,9 +25,13 @@ Status: research-only. Candidate windows are for visual labeling only and are no
 - Is there a target liquidity pool or likely reaction target?
 - Would a 20 pip normal / 40 pip max stop fit behind local structure?
 - Did price react quickly, accumulate, or engulf against the setup?
+- Check `execution_data_status` first. Skip or down-rank samples with insufficient M1/M5 execution data.
 
 ## Summary
 
 - total_samples: `40`
+- reviewable_samples: `40`
+- reviewable_m1_m5_count: `40`
+- insufficient_execution_data_count: `0`
 - source_modes_used: `CANDIDATE_WINDOW_MODE`
 - limitations: `MATPLOTLIB_UNAVAILABLE_USING_SVG_CHARTS, NO_TRADES_PATH_AVAILABLE`

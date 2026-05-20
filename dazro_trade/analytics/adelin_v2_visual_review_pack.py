@@ -35,6 +35,10 @@ DEFAULT_OUTPUT_DIR = Path("backtests/reports/adelin_v2_visual_review_pack")
 DEFAULT_AUDIT_PATH = Path("backtests/reports/adelin_v2_operational_audit/adelin_v2_trade_audit.csv")
 DEFAULT_TRADES_PATH = Path("backtests/reports/final/executed_trades.csv")
 SUPPORTED_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4", "D1"]
+REVIEWABLE_M1_M5 = "REVIEWABLE_M1_M5"
+REVIEWABLE_M5_ONLY = "REVIEWABLE_M5_ONLY"
+WEAK_M1_ONLY = "WEAK_M1_ONLY"
+INSUFFICIENT_EXECUTION_DATA = "INSUFFICIENT_EXECUTION_DATA"
 
 MANUAL_LABEL_COLUMNS = [
     "sample_id",
@@ -47,6 +51,13 @@ MANUAL_LABEL_COLUMNS = [
     "anchor_timeframe",
     "chart_path",
     "html_path",
+    "execution_data_status",
+    "m1_candles_count",
+    "m5_candles_count",
+    "m15_candles_count",
+    "execution_window_start",
+    "execution_window_end",
+    "reviewer_should_skip_due_to_missing_ltf_data_manual",
     "htf_liquidity_class_manual",
     "ltf_liquidity_class_manual",
     "multi_tf_alignment_manual",
@@ -124,6 +135,12 @@ class VisualReviewSample:
     old_take_profit: float | None = None
     chart_path: str = ""
     html_path: str = ""
+    execution_data_status: str = INSUFFICIENT_EXECUTION_DATA
+    m1_candles_count: int = 0
+    m5_candles_count: int = 0
+    m15_candles_count: int = 0
+    execution_window_start: datetime | None = None
+    execution_window_end: datetime | None = None
     notes: str = ""
     raw_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -141,6 +158,12 @@ class VisualReviewSample:
                 "anchor_timeframe": self.anchor_timeframe,
                 "chart_path": self.chart_path,
                 "html_path": self.html_path,
+                "execution_data_status": self.execution_data_status,
+                "m1_candles_count": self.m1_candles_count,
+                "m5_candles_count": self.m5_candles_count,
+                "m15_candles_count": self.m15_candles_count,
+                "execution_window_start": self.execution_window_start.isoformat() if self.execution_window_start else "",
+                "execution_window_end": self.execution_window_end.isoformat() if self.execution_window_end else "",
             }
         )
         return row
@@ -208,6 +231,71 @@ def _parse_float(value: Any) -> float | None:
     if math.isnan(out) or math.isinf(out):
         return None
     return out
+
+
+def _time_index(frame: pd.DataFrame) -> pd.DatetimeIndex:
+    if frame is None or frame.empty or "time" not in frame.columns:
+        return pd.DatetimeIndex([], tz="UTC")
+    times = pd.to_datetime(frame["time"], utc=True, errors="coerce")
+    return pd.DatetimeIndex(times.dropna().sort_values())
+
+
+def _count_time_window(times: pd.DatetimeIndex, start: datetime, end: datetime) -> int:
+    if len(times) == 0:
+        return 0
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    left = int(times.searchsorted(start_ts, side="left"))
+    right = int(times.searchsorted(end_ts, side="right"))
+    return max(0, right - left)
+
+
+def _set_execution_coverage(sample: VisualReviewSample, time_indexes: Mapping[str, pd.DatetimeIndex]) -> None:
+    start = sample.execution_window_start or sample.window_start
+    end = sample.execution_window_end or sample.window_end
+    sample.execution_window_start = start
+    sample.execution_window_end = end
+    sample.m1_candles_count = _count_time_window(time_indexes.get("M1", pd.DatetimeIndex([], tz="UTC")), start, end)
+    sample.m5_candles_count = _count_time_window(time_indexes.get("M5", pd.DatetimeIndex([], tz="UTC")), start, end)
+    sample.m15_candles_count = _count_time_window(time_indexes.get("M15", pd.DatetimeIndex([], tz="UTC")), start, end)
+    if sample.m15_candles_count <= 0 or (sample.m1_candles_count <= 0 and sample.m5_candles_count <= 0):
+        sample.execution_data_status = INSUFFICIENT_EXECUTION_DATA
+    elif sample.m1_candles_count > 0 and sample.m5_candles_count > 0:
+        sample.execution_data_status = REVIEWABLE_M1_M5
+    elif sample.m5_candles_count > 0:
+        sample.execution_data_status = REVIEWABLE_M5_ONLY
+    else:
+        sample.execution_data_status = WEAK_M1_ONLY
+
+
+def _set_all_execution_coverage(samples: Iterable[VisualReviewSample], frames: dict[str, pd.DataFrame]) -> None:
+    time_indexes = {tf: _time_index(frame) for tf, frame in frames.items() if tf in {"M1", "M5", "M15"}}
+    for sample in samples:
+        _set_execution_coverage(sample, time_indexes)
+
+
+def _coverage_rank(status: str) -> int:
+    return {
+        REVIEWABLE_M1_M5: 0,
+        REVIEWABLE_M5_ONLY: 1,
+        WEAK_M1_ONLY: 2,
+        INSUFFICIENT_EXECUTION_DATA: 3,
+    }.get(status, 4)
+
+
+def _prefer_reviewable_samples(samples: list[VisualReviewSample], max_samples: int) -> tuple[list[VisualReviewSample], int]:
+    ordered: list[VisualReviewSample] = []
+    for status in (REVIEWABLE_M1_M5, REVIEWABLE_M5_ONLY, WEAK_M1_ONLY, INSUFFICIENT_EXECUTION_DATA):
+        group = [sample for sample in samples if sample.execution_data_status == status]
+        ordered.extend(_dedupe_round_robin(group, max_samples))
+    selected = ordered[:max_samples]
+    selected_ids = {id(sample) for sample in selected}
+    skipped_insufficient = sum(
+        1
+        for sample in samples
+        if sample.execution_data_status == INSUFFICIENT_EXECUTION_DATA and id(sample) not in selected_ids
+    )
+    return selected, skipped_insufficient
 
 
 def _first(row: Mapping[str, Any], names: Sequence[str]) -> Any:
@@ -365,7 +453,7 @@ def _candidate_bucket(reason_codes: Sequence[str]) -> str:
 
 def _dedupe_round_robin(candidates: list[VisualReviewSample], max_samples: int) -> list[VisualReviewSample]:
     buckets: dict[str, list[VisualReviewSample]] = {}
-    for sample in candidates:
+    for sample in sorted(candidates, key=lambda item: item.anchor_timestamp, reverse=True):
         buckets.setdefault(_candidate_bucket(sample.candidate_reason_codes), []).append(sample)
     ordered_keys = sorted(buckets, key=lambda key: len(buckets[key]), reverse=True)
     selected: list[VisualReviewSample] = []
@@ -498,7 +586,9 @@ def _candidate_window_samples(
         )
     if not candidates:
         limitations.append("NO_CANDIDATE_WINDOWS_FOUND")
-    return _dedupe_round_robin(candidates, cfg.max_samples)
+    candidates = sorted(candidates, key=lambda item: item.anchor_timestamp, reverse=True)
+    pool_limit = max(cfg.max_samples * 100, cfg.max_samples)
+    return candidates[:pool_limit] if pool_limit > 0 else []
 
 
 def _slice_frame(frame: pd.DataFrame, start: datetime, end: datetime, max_rows: int) -> pd.DataFrame:
@@ -601,16 +691,13 @@ def _panel_svg(
 def _render_svg_chart(sample: VisualReviewSample, frames: dict[str, pd.DataFrame], chart_path: Path) -> None:
     width = 1120
     panel_h = 250
-    height = panel_h * 3 + 54
+    height = panel_h * 4 + 54
+    execution_start = sample.execution_window_start or sample.window_start
+    execution_end = sample.execution_window_end or sample.window_end
     h1 = _slice_frame(frames.get("H1", pd.DataFrame()), sample.anchor_timestamp - timedelta(days=3), sample.anchor_timestamp + timedelta(days=1), 96)
     m15 = _slice_frame(frames.get("M15", pd.DataFrame()), sample.anchor_timestamp - timedelta(hours=12), sample.anchor_timestamp + timedelta(hours=6), 96)
-    execution_tf = "M1" if "M1" in frames else "M5"
-    execution = _slice_frame(
-        frames.get(execution_tf, pd.DataFrame()),
-        sample.anchor_timestamp - timedelta(minutes=90),
-        sample.anchor_timestamp + timedelta(minutes=180),
-        220,
-    )
+    m5 = _slice_frame(frames.get("M5", pd.DataFrame()), execution_start, execution_end, 220)
+    m1 = _slice_frame(frames.get("M1", pd.DataFrame()), execution_start, execution_end, 220)
     subtitle = html.escape(" | ".join(sample.candidate_reason_codes))
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
@@ -622,7 +709,8 @@ def _render_svg_chart(sample: VisualReviewSample, frames: dict[str, pd.DataFrame
         f'<text x="560" y="48" class="subtitle" text-anchor="middle">{subtitle}</text>',
         _panel_svg(title="H1 liquidity context", df=h1, y_offset=62, width=width, height=panel_h, sample=sample),
         _panel_svg(title="M15 liquidity / reaction context", df=m15, y_offset=62 + panel_h, width=width, height=panel_h, sample=sample),
-        _panel_svg(title=f"{execution_tf} execution window", df=execution, y_offset=62 + panel_h * 2, width=width, height=panel_h, sample=sample),
+        _panel_svg(title="M5 reaction / execution context", df=m5, y_offset=62 + panel_h * 2, width=width, height=panel_h, sample=sample),
+        _panel_svg(title="M1 execution window", df=m1, y_offset=62 + panel_h * 3, width=width, height=panel_h, sample=sample),
         "</svg>",
     ]
     chart_path.write_text("\n".join(svg), encoding="utf-8")
@@ -636,6 +724,12 @@ def _metadata_table(sample: VisualReviewSample) -> str:
         "direction_guess": sample.direction_guess,
         "anchor_timestamp": sample.anchor_timestamp.isoformat(),
         "anchor_timeframe": sample.anchor_timeframe,
+        "execution_data_status": sample.execution_data_status,
+        "m1_candles_count": sample.m1_candles_count,
+        "m5_candles_count": sample.m5_candles_count,
+        "m15_candles_count": sample.m15_candles_count,
+        "execution_window_start": sample.execution_window_start.isoformat() if sample.execution_window_start else "",
+        "execution_window_end": sample.execution_window_end.isoformat() if sample.execution_window_end else "",
         "candidate_reason_codes": ", ".join(sample.candidate_reason_codes),
         "sweep_level": sample.sweep_level,
         "number_theory_level": sample.number_theory_level,
@@ -653,6 +747,19 @@ def _metadata_table(sample: VisualReviewSample) -> str:
         for key, value in rows.items()
     )
     return f"<table class=\"metadata\">{body}</table>"
+
+
+def _execution_warning_html(sample: VisualReviewSample) -> str:
+    if sample.execution_data_status == INSUFFICIENT_EXECUTION_DATA:
+        return (
+            '<p class="warning">INSUFFICIENT EXECUTION DATA - do not label as A+. '
+            "Both M1 and M5 execution/reaction data are missing or M15 context is absent.</p>"
+        )
+    if sample.m1_candles_count <= 0:
+        return '<p class="warning">M1 execution data missing: this sample is weak for Adelin v2 labeling.</p>'
+    if sample.m5_candles_count <= 0:
+        return '<p class="warning">M5 reaction context missing: review is possible but weaker for Adelin v2 labeling.</p>'
+    return ""
 
 
 def _html_shell(title: str, body: str) -> str:
@@ -688,8 +795,10 @@ def _html_shell(title: str, body: str) -> str:
 
 def _write_sample_page(sample: VisualReviewSample, output_dir: Path) -> None:
     chart_src = "../" + sample.chart_path if sample.chart_path else ""
+    coverage_warning = _execution_warning_html(sample)
     body = f"""
 <p class="warning">{html.escape(RESEARCH_WARNING)} No live deployment, Telegram alert, broker call, or order path is involved.</p>
+{coverage_warning}
 <p><a href="../index.html">Back to index</a></p>
 <img class="chart" src="{html.escape(chart_src)}" alt="Chart for {html.escape(sample.sample_id)}">
 <h2>Metadata</h2>
@@ -710,30 +819,44 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
             f"<td>{html.escape(sample.source_mode)}</td>"
             f"<td>{html.escape(sample.anchor_timestamp.isoformat())}</td>"
             f"<td>{html.escape(sample.direction_guess)}</td>"
+            f"<td>{html.escape(sample.execution_data_status)}</td>"
+            f"<td>{sample.m1_candles_count}</td>"
+            f"<td>{sample.m5_candles_count}</td>"
+            f"<td>{sample.m15_candles_count}</td>"
             f"<td>{html.escape(', '.join(sample.candidate_reason_codes))}</td>"
             f"<td><a href=\"{html.escape(sample.chart_path)}\">chart</a></td>"
             f"<td><a href=\"{html.escape(sample.html_path)}\">page</a></td>"
             "<td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td>"
             "</tr>"
         )
-    table_body = "\n".join(rows) if rows else "<tr><td colspan=\"8\">No samples generated.</td></tr>"
+    table_body = "\n".join(rows) if rows else "<tr><td colspan=\"12\">No samples generated.</td></tr>"
     summary_boxes = "\n".join(
         f"<div><strong>{html.escape(key)}</strong><br>{html.escape(str(value))}</div>"
         for key, value in {
             "total_samples": summary.get("total_samples"),
+            "reviewable_samples": summary.get("reviewable_samples"),
+            "reviewable_m1_m5_count": summary.get("reviewable_m1_m5_count"),
+            "insufficient_execution_data_count": summary.get("insufficient_execution_data_count"),
             "source_modes_used": ", ".join(summary.get("source_modes_used", [])),
             "candidate_windows_generated": summary.get("candidate_windows_generated"),
             "charts_generated": summary.get("charts_generated"),
             "html_pages_generated": summary.get("html_pages_generated"),
         }.items()
     )
+    coverage_warning = ""
+    if summary.get("reviewable_m1_m5_count", 0) != summary.get("total_samples", 0):
+        coverage_warning = (
+            '<p class="warning">Some samples do not have full M1/M5 execution coverage. '
+            "Use the execution_data_status column before labeling.</p>"
+        )
     body = f"""
 <p class="warning">Research-only. {html.escape(RESEARCH_WARNING)} Adelin live remains disabled.</p>
+{coverage_warning}
 <div class="summary">{summary_boxes}</div>
 <p><a href="manual_labels_template.csv">manual_labels_template.csv</a> | <a href="README_manual_review.md">README_manual_review.md</a> | <a href="review_pack_summary.json">review_pack_summary.json</a></p>
 <table>
   <thead>
-    <tr><th>sample_id</th><th>source_mode</th><th>anchor timestamp</th><th>direction guess</th><th>candidate reason codes</th><th>chart</th><th>sample page</th><th>recommended manual labels to fill</th></tr>
+    <tr><th>sample_id</th><th>source_mode</th><th>anchor timestamp</th><th>direction guess</th><th>execution_data_status</th><th>M1 count</th><th>M5 count</th><th>M15 count</th><th>candidate reason codes</th><th>chart</th><th>sample page</th><th>recommended manual labels to fill</th></tr>
   </thead>
   <tbody>{table_body}</tbody>
 </table>
@@ -778,10 +901,14 @@ def _write_readme(samples: Sequence[VisualReviewSample], summary: Mapping[str, A
         "- Is there a target liquidity pool or likely reaction target?",
         "- Would a 20 pip normal / 40 pip max stop fit behind local structure?",
         "- Did price react quickly, accumulate, or engulf against the setup?",
+        "- Check `execution_data_status` first. Skip or down-rank samples with insufficient M1/M5 execution data.",
         "",
         "## Summary",
         "",
         f"- total_samples: `{summary.get('total_samples')}`",
+        f"- reviewable_samples: `{summary.get('reviewable_samples')}`",
+        f"- reviewable_m1_m5_count: `{summary.get('reviewable_m1_m5_count')}`",
+        f"- insufficient_execution_data_count: `{summary.get('insufficient_execution_data_count')}`",
         f"- source_modes_used: `{', '.join(summary.get('source_modes_used', []))}`",
         f"- limitations: `{', '.join(summary.get('limitations', []))}`",
     ]
@@ -829,8 +956,8 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
     if normalized_cfg.include_trade_review:
         trade_samples, trades_loaded, audit_rows_loaded = _trade_review_samples(normalized_cfg, limitations)
         samples.extend(trade_samples)
-    if normalized_cfg.include_candidate_windows and len(samples) < normalized_cfg.max_samples:
-        remaining_cfg = VisualReviewPackConfig(
+    if normalized_cfg.include_candidate_windows and normalized_cfg.max_samples > 0:
+        candidate_cfg = VisualReviewPackConfig(
             symbol=normalized_cfg.symbol,
             data_dir=normalized_cfg.data_dir,
             output_dir=normalized_cfg.output_dir,
@@ -838,15 +965,19 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
             audit_path=normalized_cfg.audit_path,
             from_date=normalized_cfg.from_date,
             to_date=normalized_cfg.to_date,
-            max_samples=normalized_cfg.max_samples - len(samples),
+            max_samples=normalized_cfg.max_samples,
             include_candidate_windows=True,
             include_trade_review=False,
             dry_run=normalized_cfg.dry_run,
             number_theory_threshold_pips=normalized_cfg.number_theory_threshold_pips,
         )
-        samples.extend(_candidate_window_samples(remaining_cfg, frames, limitations))
+        samples.extend(_candidate_window_samples(candidate_cfg, frames, limitations))
 
-    samples = samples[: normalized_cfg.max_samples]
+    _set_all_execution_coverage(samples, frames)
+    raw_samples_count = len(samples)
+    samples, skipped_missing_ltf = _prefer_reviewable_samples(samples, normalized_cfg.max_samples)
+    if skipped_missing_ltf:
+        limitations.append("INSUFFICIENT_EXECUTION_DATA_SAMPLES_SKIPPED")
     _assign_paths(samples, output_dir)
     charts_generated = 0
     pages_generated = 0
@@ -858,6 +989,13 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
 
     source_modes = sorted({sample.source_mode for sample in samples})
     candidate_count = sum(1 for sample in samples if sample.source_mode == "CANDIDATE_WINDOW_MODE")
+    reviewable_m1_m5_count = sum(1 for sample in samples if sample.execution_data_status == REVIEWABLE_M1_M5)
+    reviewable_m5_only_count = sum(1 for sample in samples if sample.execution_data_status == REVIEWABLE_M5_ONLY)
+    weak_m1_only_count = sum(1 for sample in samples if sample.execution_data_status == WEAK_M1_ONLY)
+    insufficient_execution_data_count = sum(
+        1 for sample in samples if sample.execution_data_status == INSUFFICIENT_EXECUTION_DATA
+    )
+    reviewable_samples = reviewable_m1_m5_count + reviewable_m5_only_count + weak_m1_only_count
     _write_manual_template(samples, output_dir)
     discovered_trades_path = _discover_existing_path(normalized_cfg.trades_path, DEFAULT_TRADES_PATH)
     discovered_audit_path = _discover_existing_path(normalized_cfg.audit_path, DEFAULT_AUDIT_PATH)
@@ -875,6 +1013,13 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "audit_rows_loaded": audit_rows_loaded,
         "candidate_windows_generated": candidate_count,
         "total_samples": len(samples),
+        "raw_samples_considered": raw_samples_count,
+        "reviewable_samples": reviewable_samples,
+        "reviewable_m1_m5_count": reviewable_m1_m5_count,
+        "reviewable_m5_only_count": reviewable_m5_only_count,
+        "weak_m1_only_count": weak_m1_only_count,
+        "insufficient_execution_data_count": insufficient_execution_data_count,
+        "samples_skipped_due_to_missing_ltf_data": skipped_missing_ltf,
         "charts_generated": charts_generated,
         "html_pages_generated": pages_generated,
         "manual_label_template_path": str(output_dir / "manual_labels_template.csv"),
@@ -900,9 +1045,13 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
 
 __all__ = [
     "MANUAL_LABEL_COLUMNS",
+    "INSUFFICIENT_EXECUTION_DATA",
     "RESEARCH_WARNING",
+    "REVIEWABLE_M1_M5",
+    "REVIEWABLE_M5_ONLY",
     "VisualReviewPackConfig",
     "VisualReviewSample",
+    "WEAK_M1_ONLY",
     "create_visual_review_pack",
     "is_near_number_theory_level",
     "nearest_number_theory_level",
