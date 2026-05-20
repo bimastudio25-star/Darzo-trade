@@ -107,6 +107,8 @@ class VisualReviewPackConfig:
     max_samples: int = 40
     include_candidate_windows: bool = True
     include_trade_review: bool = True
+    allow_weak_m1_only: bool = False
+    include_insufficient_execution_debug: bool = False
     dry_run: bool = True
     number_theory_threshold_pips: float = 5.0
 
@@ -139,6 +141,7 @@ class VisualReviewSample:
     m1_candles_count: int = 0
     m5_candles_count: int = 0
     m15_candles_count: int = 0
+    h1_candles_count: int = 0
     execution_window_start: datetime | None = None
     execution_window_end: datetime | None = None
     notes: str = ""
@@ -258,7 +261,9 @@ def _set_execution_coverage(sample: VisualReviewSample, time_indexes: Mapping[st
     sample.m1_candles_count = _count_time_window(time_indexes.get("M1", pd.DatetimeIndex([], tz="UTC")), start, end)
     sample.m5_candles_count = _count_time_window(time_indexes.get("M5", pd.DatetimeIndex([], tz="UTC")), start, end)
     sample.m15_candles_count = _count_time_window(time_indexes.get("M15", pd.DatetimeIndex([], tz="UTC")), start, end)
-    if sample.m15_candles_count <= 0 or (sample.m1_candles_count <= 0 and sample.m5_candles_count <= 0):
+    sample.h1_candles_count = _count_time_window(time_indexes.get("H1", pd.DatetimeIndex([], tz="UTC")), start, end)
+    context_exists = sample.m15_candles_count > 0 or sample.h1_candles_count > 0
+    if not context_exists or (sample.m1_candles_count <= 0 and sample.m5_candles_count <= 0):
         sample.execution_data_status = INSUFFICIENT_EXECUTION_DATA
     elif sample.m1_candles_count > 0 and sample.m5_candles_count > 0:
         sample.execution_data_status = REVIEWABLE_M1_M5
@@ -269,7 +274,7 @@ def _set_execution_coverage(sample: VisualReviewSample, time_indexes: Mapping[st
 
 
 def _set_all_execution_coverage(samples: Iterable[VisualReviewSample], frames: dict[str, pd.DataFrame]) -> None:
-    time_indexes = {tf: _time_index(frame) for tf, frame in frames.items() if tf in {"M1", "M5", "M15"}}
+    time_indexes = {tf: _time_index(frame) for tf, frame in frames.items() if tf in {"M1", "M5", "M15", "H1"}}
     for sample in samples:
         _set_execution_coverage(sample, time_indexes)
 
@@ -283,9 +288,20 @@ def _coverage_rank(status: str) -> int:
     }.get(status, 4)
 
 
-def _prefer_reviewable_samples(samples: list[VisualReviewSample], max_samples: int) -> tuple[list[VisualReviewSample], int]:
+def _prefer_reviewable_samples(
+    samples: list[VisualReviewSample],
+    max_samples: int,
+    *,
+    allow_weak_m1_only: bool = False,
+    include_insufficient_execution_debug: bool = False,
+) -> tuple[list[VisualReviewSample], int]:
     ordered: list[VisualReviewSample] = []
-    for status in (REVIEWABLE_M1_M5, REVIEWABLE_M5_ONLY, WEAK_M1_ONLY, INSUFFICIENT_EXECUTION_DATA):
+    statuses = [REVIEWABLE_M1_M5, REVIEWABLE_M5_ONLY]
+    if allow_weak_m1_only:
+        statuses.append(WEAK_M1_ONLY)
+    if include_insufficient_execution_debug:
+        statuses.append(INSUFFICIENT_EXECUTION_DATA)
+    for status in statuses:
         group = [sample for sample in samples if sample.execution_data_status == status]
         ordered.extend(_dedupe_round_robin(group, max_samples))
     selected = ordered[:max_samples]
@@ -293,7 +309,7 @@ def _prefer_reviewable_samples(samples: list[VisualReviewSample], max_samples: i
     skipped_insufficient = sum(
         1
         for sample in samples
-        if sample.execution_data_status == INSUFFICIENT_EXECUTION_DATA and id(sample) not in selected_ids
+        if sample.execution_data_status in {WEAK_M1_ONLY, INSUFFICIENT_EXECUTION_DATA} and id(sample) not in selected_ids
     )
     return selected, skipped_insufficient
 
@@ -728,6 +744,7 @@ def _metadata_table(sample: VisualReviewSample) -> str:
         "m1_candles_count": sample.m1_candles_count,
         "m5_candles_count": sample.m5_candles_count,
         "m15_candles_count": sample.m15_candles_count,
+        "h1_candles_count": sample.h1_candles_count,
         "execution_window_start": sample.execution_window_start.isoformat() if sample.execution_window_start else "",
         "execution_window_end": sample.execution_window_end.isoformat() if sample.execution_window_end else "",
         "candidate_reason_codes": ", ".join(sample.candidate_reason_codes),
@@ -753,12 +770,15 @@ def _execution_warning_html(sample: VisualReviewSample) -> str:
     if sample.execution_data_status == INSUFFICIENT_EXECUTION_DATA:
         return (
             '<p class="warning">INSUFFICIENT EXECUTION DATA - do not label as A+. '
-            "Both M1 and M5 execution/reaction data are missing or M15 context is absent.</p>"
+            "Both M1 and M5 execution/reaction data are missing, or M15/H1 context is absent.</p>"
         )
     if sample.m1_candles_count <= 0:
         return '<p class="warning">M1 execution data missing: this sample is weak for Adelin v2 labeling.</p>'
     if sample.m5_candles_count <= 0:
-        return '<p class="warning">M5 reaction context missing: review is possible but weaker for Adelin v2 labeling.</p>'
+        return (
+            '<p class="warning">M5 reaction context missing: this sample is weak for Adelin v2 labeling '
+            "and should not be used as A+ evidence unless explicitly reviewed as a weak/debug case.</p>"
+        )
     return ""
 
 
@@ -941,6 +961,8 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         max_samples=max(0, int(cfg.max_samples)),
         include_candidate_windows=cfg.include_candidate_windows,
         include_trade_review=cfg.include_trade_review,
+        allow_weak_m1_only=cfg.allow_weak_m1_only,
+        include_insufficient_execution_debug=cfg.include_insufficient_execution_debug,
         dry_run=True if cfg.dry_run is None else bool(cfg.dry_run),
         number_theory_threshold_pips=cfg.number_theory_threshold_pips,
     )
@@ -968,6 +990,8 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
             max_samples=normalized_cfg.max_samples,
             include_candidate_windows=True,
             include_trade_review=False,
+            allow_weak_m1_only=normalized_cfg.allow_weak_m1_only,
+            include_insufficient_execution_debug=normalized_cfg.include_insufficient_execution_debug,
             dry_run=normalized_cfg.dry_run,
             number_theory_threshold_pips=normalized_cfg.number_theory_threshold_pips,
         )
@@ -975,9 +999,16 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
 
     _set_all_execution_coverage(samples, frames)
     raw_samples_count = len(samples)
-    samples, skipped_missing_ltf = _prefer_reviewable_samples(samples, normalized_cfg.max_samples)
+    samples, skipped_missing_ltf = _prefer_reviewable_samples(
+        samples,
+        normalized_cfg.max_samples,
+        allow_weak_m1_only=normalized_cfg.allow_weak_m1_only,
+        include_insufficient_execution_debug=normalized_cfg.include_insufficient_execution_debug,
+    )
     if skipped_missing_ltf:
         limitations.append("INSUFFICIENT_EXECUTION_DATA_SAMPLES_SKIPPED")
+    if len(samples) < normalized_cfg.max_samples and raw_samples_count > len(samples):
+        limitations.append("PACK_NOT_FILLED_DUE_TO_EXECUTION_COVERAGE_FILTER")
     _assign_paths(samples, output_dir)
     charts_generated = 0
     pages_generated = 0
@@ -1006,6 +1037,8 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "output_dir": str(output_dir),
         "data_dir": str(data_dir),
         "dry_run": normalized_cfg.dry_run,
+        "allow_weak_m1_only": normalized_cfg.allow_weak_m1_only,
+        "include_insufficient_execution_debug": normalized_cfg.include_insufficient_execution_debug,
         "source_modes_used": source_modes,
         "trades_path": str(discovered_trades_path) if discovered_trades_path is not None else None,
         "audit_path": str(discovered_audit_path) if discovered_audit_path is not None else None,

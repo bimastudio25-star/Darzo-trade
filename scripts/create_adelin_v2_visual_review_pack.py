@@ -39,6 +39,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--include-candidate-windows", action="store_true", default=True)
     parser.add_argument("--include-trade-review", action="store_true", default=True)
     parser.add_argument(
+        "--allow-weak-m1-only",
+        action="store_true",
+        default=False,
+        help="Allow weak samples with M1 but no M5 reaction context. Disabled by default.",
+    )
+    parser.add_argument(
+        "--include-insufficient-execution-debug",
+        action="store_true",
+        default=False,
+        help="Include non-labelable insufficient execution data samples for debugging only.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=True,
@@ -59,6 +71,8 @@ def config_from_args(args: argparse.Namespace) -> VisualReviewPackConfig:
         max_samples=args.max_samples,
         include_candidate_windows=bool(args.include_candidate_windows),
         include_trade_review=bool(args.include_trade_review),
+        allow_weak_m1_only=bool(args.allow_weak_m1_only),
+        include_insufficient_execution_debug=bool(args.include_insufficient_execution_debug),
         dry_run=bool(args.dry_run),
     )
 
@@ -80,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                 "reviewable_m5_only_count": summary["reviewable_m5_only_count"],
                 "weak_m1_only_count": summary["weak_m1_only_count"],
                 "insufficient_execution_data_count": summary["insufficient_execution_data_count"],
+                "samples_skipped_due_to_missing_ltf_data": summary["samples_skipped_due_to_missing_ltf_data"],
                 "charts_generated": summary["charts_generated"],
                 "html_pages_generated": summary["html_pages_generated"],
                 "limitations": summary["limitations"],
