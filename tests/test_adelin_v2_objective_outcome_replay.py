@@ -16,7 +16,10 @@ from dazro_trade.analytics.adelin_v2_objective_outcome_replay import (
     GOOD_FAST_REACTION,
     GOOD_SLOW_REACTION,
     NO_REACTION,
+    ENTRY_DIRECTION_CONFLICT,
+    ROUND_LEVEL,
     ROUND_LEVEL_TOUCH_ENTRY,
+    SWEEP_EXTREME,
     UNKNOWN_DIRECTION,
     UNKNOWN_ENTRY_LEVEL,
     UNKNOWN_INSUFFICIENT_FORWARD_DATA,
@@ -24,6 +27,7 @@ from dazro_trade.analytics.adelin_v2_objective_outcome_replay import (
     EntryHypothesis,
     ObjectiveReplayConfig,
     ReplayInputSample,
+    build_entry_hypothesis,
     generate_control_samples,
     infer_reversal_direction,
     replay_forward_path,
@@ -174,11 +178,27 @@ def _sample(anchor: datetime, sample_id: str = "sample_001", row_type: str = "CA
 
 
 def _entry() -> EntryHypothesis:
-    return EntryHypothesis(ROUND_LEVEL_TOUCH_ENTRY, 4900.0, "TEST_NUMBER_THEORY_LEVEL", True)
+    return EntryHypothesis(
+        ROUND_LEVEL_TOUCH_ENTRY,
+        4900.0,
+        ROUND_LEVEL,
+        True,
+        entry_level_confidence="HIGH",
+        entry_level_reason_codes=("TEST_NUMBER_THEORY_LEVEL",),
+    )
 
 
 def _direction(value: str) -> DirectionInference:
-    return DirectionInference(value, "M5", "UPWARD_SWEEP" if value == "SHORT" else "DOWNWARD_SWEEP", 4901.0, None, "HIGH", ("TEST",))
+    return DirectionInference(
+        value,
+        "M5",
+        "UPWARD_SWEEP" if value == "SHORT" else "DOWNWARD_SWEEP",
+        4901.0,
+        None,
+        "HIGH",
+        ("TEST",),
+        4903.0 if value == "SHORT" else 4897.0,
+    )
 
 
 def test_module_import_is_safe():
@@ -217,6 +237,73 @@ def test_pip_size_resolver_uses_project_symbol_registry():
     resolution = resolve_pip_size("XAUUSD")
     assert resolution.pip_size == 0.1
     assert resolution.source == "core.symbols.get_symbol_spec"
+
+
+def test_round_level_entry_source_works():
+    anchor = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    sample = ReplayInputSample(
+        row_type="CANDIDATE",
+        sample_id="round",
+        symbol="XAUUSD",
+        anchor_timestamp=anchor,
+        source_mode="CANDIDATE_WINDOW_MODE",
+        metadata={"number_theory_level": "4900.0"},
+    )
+    entry = build_entry_hypothesis(sample, {"M1": _path_frame(anchor)}, _direction("LONG"), symbol="XAUUSD", pip_size=0.1)
+    assert entry.entry_price == 4900.0
+    assert entry.entry_level_source == ROUND_LEVEL
+    assert entry.entry_level_confidence == "HIGH"
+    assert "EXPLICIT_ROUND_LEVEL_METADATA" in entry.entry_level_reason_codes
+
+
+def test_sweep_extreme_entry_source_works_when_round_level_missing():
+    anchor = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    frames = {"M1": _frame([(anchor, 4914.0, 4914.2, 4913.8, 4914.0)])}
+    direction = DirectionInference(
+        "SHORT",
+        "M5",
+        "UPWARD_SWEEP",
+        4913.0,
+        anchor,
+        "HIGH",
+        ("RECENT_LOCAL_HIGH_TAKEN_AND_REJECTED_OR_STALLED",),
+        4915.4,
+    )
+    sample = ReplayInputSample("CANDIDATE", "sweep", "XAUUSD", anchor, "CANDIDATE_WINDOW_MODE", metadata={})
+    entry = build_entry_hypothesis(sample, frames, direction, symbol="XAUUSD", pip_size=0.1)
+    assert entry.entry_price == 4915.4
+    assert entry.entry_level_source == SWEEP_EXTREME
+    assert entry.entry_level_confidence == "MEDIUM"
+    assert "DIRECTION_INFERRED_SWEEP_EXTREME_HEURISTIC" in entry.entry_level_reason_codes
+
+
+def test_unknown_entry_remains_unknown_without_defensible_level():
+    anchor = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    frames = {"M1": _frame([(anchor, 4914.0, 4914.2, 4913.8, 4914.0)])}
+    direction = DirectionInference(UNKNOWN_DIRECTION, None, None, None, None, "UNKNOWN", ("NO_CLEAR_SWEEP",))
+    sample = ReplayInputSample("CANDIDATE", "unknown", "XAUUSD", anchor, "CANDIDATE_WINDOW_MODE", metadata={})
+    entry = build_entry_hypothesis(sample, frames, direction, symbol="XAUUSD", pip_size=0.1)
+    assert entry.entry_price is None
+    assert entry.entry_level_source == "UNKNOWN"
+    assert entry.entry_level_confidence == "UNKNOWN"
+    assert "DIRECTION_REQUIRED_FOR_SWEEP_ENTRY" in entry.entry_level_reason_codes
+
+
+def test_entry_direction_conflict_is_detected():
+    anchor = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    frames = {"M1": _frame([(anchor, 4914.0, 4914.2, 4913.8, 4914.0)])}
+    sample = ReplayInputSample(
+        row_type="CANDIDATE",
+        sample_id="conflict",
+        symbol="XAUUSD",
+        anchor_timestamp=anchor,
+        source_mode="CANDIDATE_WINDOW_MODE",
+        metadata={"sweep_level": "4916.0"},
+    )
+    entry = build_entry_hypothesis(sample, frames, _direction("LONG"), symbol="XAUUSD", pip_size=0.1)
+    assert entry.entry_price is None
+    assert entry.limitation == ENTRY_DIRECTION_CONFLICT
+    assert ENTRY_DIRECTION_CONFLICT in entry.entry_level_reason_codes
 
 
 def test_direction_inference_upward_sweep_short():
@@ -270,6 +357,8 @@ def test_replay_computes_mfe_mae_for_long():
     assert row["max_favorable_pips"] == 100.0
     assert row["max_adverse_pips"] == 3.0
     assert row["automatic_outcome_label"] == GOOD_FAST_REACTION
+    assert row["entry_level_confidence"] == "HIGH"
+    assert row["entry_level_is_heuristic"] is True
 
 
 def test_replay_computes_mfe_mae_for_short():
@@ -365,6 +454,11 @@ def test_run_writes_outputs_summary_and_enriched_template(tmp_path: Path):
     assert summary["total_candidate_samples_loaded"] == 2
     assert summary["candidate_samples_replayed"] == 2
     assert "candidate_vs_control" in summary
+    assert "candidate_entry_level_source_counts" in summary
+    assert "candidate_known_entry_count" in summary
+    assert "candidate_vs_control_known_entry" in summary
+    assert "candidate_fast_reaction_rate" in summary["candidate_vs_control_known_entry"]
+    assert "candidate_outcome_counts_by_entry_level_source" in summary
     assert (output_dir / "objective_outcome_replay.csv").exists()
     assert (output_dir / "objective_outcome_replay_summary.json").exists()
     assert (output_dir / "objective_outcome_replay.md").exists()
@@ -372,6 +466,8 @@ def test_run_writes_outputs_summary_and_enriched_template(tmp_path: Path):
     assert (output_dir / "enriched_manual_labels_template.csv").exists()
     saved_summary = json.loads((output_dir / "objective_outcome_replay_summary.json").read_text(encoding="utf-8"))
     assert "candidate_fast_reaction_rate" in saved_summary["candidate_vs_control"]
+    assert "candidate_fast_reaction_rate" in saved_summary["candidate_vs_control_known_entry"]
+    assert "ROUND_LEVEL" in saved_summary["candidate_entry_level_source_counts"]
 
 
 def test_cli_writes_outputs(tmp_path: Path):

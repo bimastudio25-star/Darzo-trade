@@ -1,7 +1,7 @@
 """Objective Adelin v2 visual-sample outcome replay.
 
 This module is diagnostic-only. It reads visual review samples and historical
-candles, replays a single transparent round-level entry hypothesis, and writes
+candles, replays transparent entry-level hypotheses, and writes
 candidate-vs-control baseline reports. It does not import or call live trading,
 broker, order, or notification code.
 """
@@ -28,6 +28,15 @@ from dazro_trade.core.symbols import get_symbol_spec, price_to_pips
 DEFAULT_VISUAL_PACK_DIR = Path("backtests/reports/adelin_v2_visual_review_pack")
 DEFAULT_OUTPUT_DIR = Path("backtests/reports/adelin_v2_objective_outcome_replay")
 ROUND_LEVEL_TOUCH_ENTRY = "ROUND_LEVEL_TOUCH_ENTRY"
+ROUND_LEVEL = "ROUND_LEVEL"
+SWEEP_EXTREME = "SWEEP_EXTREME"
+SWEPT_LIQUIDITY_LEVEL = "SWEPT_LIQUIDITY_LEVEL"
+REACTION_ZONE_LEVEL = "REACTION_ZONE_LEVEL"
+FVG_BOUNDARY = "FVG_BOUNDARY"
+IFVG_BOUNDARY = "IFVG_BOUNDARY"
+ANCHOR_LEVEL = "ANCHOR_LEVEL"
+UNKNOWN_ENTRY_SOURCE = "UNKNOWN"
+ENTRY_DIRECTION_CONFLICT = "ENTRY_DIRECTION_CONFLICT"
 UNKNOWN_ENTRY_LEVEL = "UNKNOWN_ENTRY_LEVEL"
 UNKNOWN_DIRECTION = "UNKNOWN_DIRECTION"
 UNKNOWN_INSUFFICIENT_FORWARD_DATA = "UNKNOWN_INSUFFICIENT_FORWARD_DATA"
@@ -81,6 +90,7 @@ class DirectionInference:
     sweep_timestamp: datetime | None
     direction_confidence: str
     direction_reason_codes: tuple[str, ...]
+    sweep_extreme: float | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,8 @@ class EntryHypothesis:
     entry_level_source: str | None
     entry_is_heuristic: bool
     limitation: str | None = None
+    entry_level_confidence: str = "UNKNOWN"
+    entry_level_reason_codes: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -233,7 +245,54 @@ def _round_level_distance_pips(symbol: str, price: float, level: float) -> float
     return round(abs(price_to_pips(symbol, float(price) - float(level))), 4)
 
 
-def build_round_level_entry(
+def _entry_direction_conflicts(
+    *,
+    entry_price: float,
+    direction: DirectionInference,
+    frames: Mapping[str, pd.DataFrame],
+    anchor: datetime,
+    pip_size: float,
+) -> bool:
+    anchor_price = _nearest_candle_close(frames, anchor)
+    if anchor_price is None or direction.direction_guess not in {"LONG", "SHORT"}:
+        return False
+    tolerance = 5 * pip_size
+    if direction.direction_guess == "LONG":
+        return entry_price > anchor_price + tolerance
+    return entry_price < anchor_price - tolerance
+
+
+def _with_conflict_check(
+    entry: EntryHypothesis,
+    *,
+    direction: DirectionInference,
+    frames: Mapping[str, pd.DataFrame],
+    anchor: datetime,
+    pip_size: float,
+    check_conflict: bool,
+) -> EntryHypothesis:
+    if not check_conflict or entry.entry_price is None:
+        return entry
+    if not _entry_direction_conflicts(
+        entry_price=entry.entry_price,
+        direction=direction,
+        frames=frames,
+        anchor=anchor,
+        pip_size=pip_size,
+    ):
+        return entry
+    return EntryHypothesis(
+        entry_hypothesis_type=UNKNOWN_ENTRY_LEVEL,
+        entry_price=None,
+        entry_level_source=UNKNOWN_ENTRY_SOURCE,
+        entry_is_heuristic=True,
+        limitation=ENTRY_DIRECTION_CONFLICT,
+        entry_level_confidence="UNKNOWN",
+        entry_level_reason_codes=(*entry.entry_level_reason_codes, ENTRY_DIRECTION_CONFLICT),
+    )
+
+
+def _round_level_entry(
     sample: ReplayInputSample,
     frames: Mapping[str, pd.DataFrame],
     *,
@@ -243,29 +302,153 @@ def build_round_level_entry(
     explicit_level = _parse_float(
         sample.metadata.get("number_theory_level")
         or sample.metadata.get("round_level")
-        or sample.metadata.get("entry_level")
-        or sample.metadata.get("old_entry_price")
     )
     if explicit_level is not None:
         return EntryHypothesis(
             entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
             entry_price=round(float(explicit_level), 2),
-            entry_level_source="VISUAL_SAMPLE_NUMBER_THEORY_LEVEL",
+            entry_level_source=ROUND_LEVEL,
             entry_is_heuristic=True,
+            entry_level_confidence="HIGH",
+            entry_level_reason_codes=("EXPLICIT_ROUND_LEVEL_METADATA",),
         )
     anchor_price = _nearest_candle_close(frames, sample.anchor_timestamp)
     if anchor_price is None:
-        return EntryHypothesis(UNKNOWN_ENTRY_LEVEL, None, None, True, "ANCHOR_PRICE_UNAVAILABLE")
+        return EntryHypothesis(
+            UNKNOWN_ENTRY_LEVEL,
+            None,
+            UNKNOWN_ENTRY_SOURCE,
+            True,
+            "ANCHOR_PRICE_UNAVAILABLE",
+            "UNKNOWN",
+            ("ANCHOR_PRICE_UNAVAILABLE",),
+        )
     level = _nearest_round_level(anchor_price)
     distance = _round_level_distance_pips(symbol, anchor_price, level)
     if distance <= threshold_pips:
         return EntryHypothesis(
             entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
             entry_price=round(level, 2),
-            entry_level_source="NEAREST_ROUND_LEVEL_AT_ANCHOR_PRICE",
+            entry_level_source=ROUND_LEVEL,
             entry_is_heuristic=True,
+            entry_level_confidence="MEDIUM",
+            entry_level_reason_codes=("ANCHOR_PRICE_NEAR_ROUND_LEVEL",),
         )
-    return EntryHypothesis(UNKNOWN_ENTRY_LEVEL, None, None, True, "NO_ROUND_LEVEL_WITHIN_THRESHOLD")
+    return EntryHypothesis(
+        UNKNOWN_ENTRY_LEVEL,
+        None,
+        UNKNOWN_ENTRY_SOURCE,
+        True,
+        "NO_ROUND_LEVEL_WITHIN_THRESHOLD",
+        "UNKNOWN",
+        ("NO_ROUND_LEVEL_WITHIN_THRESHOLD",),
+    )
+
+
+def build_round_level_entry(
+    sample: ReplayInputSample,
+    frames: Mapping[str, pd.DataFrame],
+    *,
+    symbol: str,
+    threshold_pips: float = 5.0,
+) -> EntryHypothesis:
+    """Backward-compatible ROUND_LEVEL-only entry resolver."""
+    return _round_level_entry(sample, frames, symbol=symbol, threshold_pips=threshold_pips)
+
+
+def _sweep_entry_confidence(direction: DirectionInference) -> str:
+    if direction.direction_source_timeframe == "M5" and direction.direction_confidence in {"HIGH", "MEDIUM"}:
+        return "MEDIUM"
+    if direction.direction_confidence in {"HIGH", "MEDIUM", "LOW"}:
+        return "LOW"
+    return "UNKNOWN"
+
+
+def build_entry_hypothesis(
+    sample: ReplayInputSample,
+    frames: Mapping[str, pd.DataFrame],
+    direction: DirectionInference,
+    *,
+    symbol: str,
+    threshold_pips: float = 5.0,
+    pip_size: float = 0.1,
+) -> EntryHypothesis:
+    round_entry = _round_level_entry(sample, frames, symbol=symbol, threshold_pips=threshold_pips)
+    if round_entry.entry_price is not None:
+        return _with_conflict_check(
+            round_entry,
+            direction=direction,
+            frames=frames,
+            anchor=sample.anchor_timestamp,
+            pip_size=pip_size,
+            check_conflict=False,
+        )
+
+    if direction.direction_guess == UNKNOWN_DIRECTION:
+        return EntryHypothesis(
+            UNKNOWN_ENTRY_LEVEL,
+            None,
+            UNKNOWN_ENTRY_SOURCE,
+            True,
+            "DIRECTION_REQUIRED_FOR_SWEEP_ENTRY",
+            "UNKNOWN",
+            ("DIRECTION_REQUIRED_FOR_SWEEP_ENTRY",),
+        )
+
+    explicit_swept_level = _parse_float(
+        sample.metadata.get("swept_liquidity_level")
+        or sample.metadata.get("sweep_level")
+        or sample.metadata.get("liquidity_level")
+    )
+    if explicit_swept_level is not None:
+        return _with_conflict_check(
+            EntryHypothesis(
+                entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+                entry_price=round(float(explicit_swept_level), 2),
+                entry_level_source=SWEPT_LIQUIDITY_LEVEL,
+                entry_is_heuristic=True,
+                entry_level_confidence="MEDIUM",
+                entry_level_reason_codes=("EXPLICIT_SWEPT_LIQUIDITY_LEVEL_METADATA",),
+            ),
+            direction=direction,
+            frames=frames,
+            anchor=sample.anchor_timestamp,
+            pip_size=pip_size,
+            check_conflict=True,
+        )
+
+    if direction.sweep_extreme is not None:
+        return EntryHypothesis(
+            entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+            entry_price=round(float(direction.sweep_extreme), 2),
+            entry_level_source=SWEEP_EXTREME,
+            entry_is_heuristic=True,
+            entry_level_confidence=_sweep_entry_confidence(direction),
+            entry_level_reason_codes=(
+                "DIRECTION_INFERRED_SWEEP_EXTREME_HEURISTIC",
+                f"{direction.direction_source_timeframe or 'UNKNOWN'}_{direction.sweep_type or 'UNKNOWN_SWEEP'}",
+            ),
+        )
+
+    if direction.swept_level is not None:
+        return EntryHypothesis(
+            entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+            entry_price=round(float(direction.swept_level), 2),
+            entry_level_source=SWEPT_LIQUIDITY_LEVEL,
+            entry_is_heuristic=True,
+            entry_level_confidence="LOW",
+            entry_level_reason_codes=("DIRECTION_INFERRED_SWEPT_LIQUIDITY_LEVEL_HEURISTIC",),
+        )
+
+    return EntryHypothesis(
+        UNKNOWN_ENTRY_LEVEL,
+        None,
+        UNKNOWN_ENTRY_SOURCE,
+        True,
+        "NO_DEFENSIBLE_ENTRY_LEVEL",
+        "UNKNOWN",
+        ("NO_DEFENSIBLE_ENTRY_LEVEL",),
+    )
 
 
 def _sweep_confidence(penetration_pips: float, closed_back: bool) -> str:
@@ -315,6 +498,7 @@ def _infer_direction_from_frame(
                         "direction": "SHORT",
                         "sweep_type": "UPWARD_SWEEP",
                         "level": prior_high,
+                        "sweep_extreme": high,
                         "timestamp": when,
                         "confidence": _sweep_confidence(penetration_pips, closed_back),
                         "penetration_pips": penetration_pips,
@@ -331,6 +515,7 @@ def _infer_direction_from_frame(
                         "direction": "LONG",
                         "sweep_type": "DOWNWARD_SWEEP",
                         "level": prior_low,
+                        "sweep_extreme": low,
                         "timestamp": when,
                         "confidence": _sweep_confidence(penetration_pips, closed_back),
                         "penetration_pips": penetration_pips,
@@ -348,6 +533,7 @@ def _infer_direction_from_frame(
         sweep_timestamp=chosen["timestamp"],
         direction_confidence=str(chosen["confidence"]),
         direction_reason_codes=(str(chosen["reason"]),),
+        sweep_extreme=round(float(chosen["sweep_extreme"]), 2),
     )
 
 
@@ -457,7 +643,7 @@ def replay_forward_path(
     if path.empty:
         path = _slice_time(frames.get("M5", pd.DataFrame()), anchor, end)
     limitations: list[str] = []
-    reason_codes: list[str] = []
+    reason_codes: list[str] = list(entry.entry_level_reason_codes)
     secondary_flags: list[str] = []
     if entry.entry_price is None:
         limitations.append(entry.limitation or UNKNOWN_ENTRY_LEVEL)
@@ -651,12 +837,17 @@ def _base_row(
         "direction_source_timeframe": direction.direction_source_timeframe,
         "sweep_type": direction.sweep_type,
         "swept_level": direction.swept_level,
+        "sweep_extreme": direction.sweep_extreme,
         "sweep_timestamp": direction.sweep_timestamp.isoformat() if direction.sweep_timestamp else None,
         "direction_reason_codes": "|".join(direction.direction_reason_codes),
         "entry_hypothesis_type": entry.entry_hypothesis_type,
         "entry_price": entry.entry_price,
         "entry_level_source": entry.entry_level_source,
+        "entry_level_confidence": entry.entry_level_confidence,
+        "entry_level_reason_codes": "|".join(entry.entry_level_reason_codes),
         "entry_is_heuristic": entry.entry_is_heuristic,
+        "entry_level_is_heuristic": entry.entry_is_heuristic,
+        "entry_direction_conflict": ENTRY_DIRECTION_CONFLICT in entry.entry_level_reason_codes,
         "pip_size": pip_size,
         "visual_html_path": sample.html_path,
     }
@@ -710,7 +901,7 @@ def _unknown_row(
         "m5_followthrough_quality": "UNKNOWN",
         "automatic_outcome_label": label,
         "secondary_outcome_flags": "",
-        "reason_codes": label,
+        "reason_codes": "|".join([label, *entry.entry_level_reason_codes]),
         "limitations": "|".join(limitations),
     }
     return row
@@ -837,12 +1028,17 @@ OUTPUT_FIELDS = [
     "direction_source_timeframe",
     "sweep_type",
     "swept_level",
+    "sweep_extreme",
     "sweep_timestamp",
     "direction_reason_codes",
     "entry_hypothesis_type",
     "entry_price",
     "entry_level_source",
+    "entry_level_confidence",
+    "entry_level_reason_codes",
     "entry_is_heuristic",
+    "entry_level_is_heuristic",
+    "entry_direction_conflict",
     "pip_size",
     "sl_20_price",
     "sl_40_price",
@@ -904,6 +1100,45 @@ def _rate(rows: Sequence[Mapping[str, Any]], row_type: str, predicate: Any) -> f
     return round(sum(1 for row in subset if predicate(row)) / len(subset), 4)
 
 
+def _is_known_entry(row: Mapping[str, Any]) -> bool:
+    return _parse_float(row.get("entry_price")) is not None and str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) != UNKNOWN_ENTRY_SOURCE
+
+
+def _source_counts(rows: Sequence[Mapping[str, Any]], row_type: str | None = None) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in rows:
+        if row_type is not None and row.get("row_type") != row_type:
+            continue
+        source = str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE)
+        out[source] = out.get(source, 0) + 1
+    return dict(sorted(out.items()))
+
+
+def _outcome_counts_by_source(rows: Sequence[Mapping[str, Any]], row_type: str) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
+    for row in rows:
+        if row.get("row_type") != row_type:
+            continue
+        source = str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE)
+        label = str(row.get("automatic_outcome_label") or "UNKNOWN")
+        out.setdefault(source, {})
+        out[source][label] = out[source].get(label, 0) + 1
+    return {source: dict(sorted(counts.items())) for source, counts in sorted(out.items())}
+
+
+def _comparison_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    return {
+        "candidate_fast_reaction_rate": _rate(rows, "CANDIDATE", lambda row: bool(row.get("fast_reaction_100pips_15m"))),
+        "control_fast_reaction_rate": _rate(rows, "CONTROL", lambda row: bool(row.get("fast_reaction_100pips_15m"))),
+        "candidate_fast_sl_20_rate": _rate(rows, "CANDIDATE", lambda row: row.get("automatic_outcome_label") == FAST_SL_20),
+        "control_fast_sl_20_rate": _rate(rows, "CONTROL", lambda row: row.get("automatic_outcome_label") == FAST_SL_20),
+        "candidate_runner_candidate_rate": _rate(rows, "CANDIDATE", lambda row: row.get("automatic_outcome_label") in {RUNNER_CANDIDATE, STRONG_RUNNER}),
+        "control_runner_candidate_rate": _rate(rows, "CONTROL", lambda row: row.get("automatic_outcome_label") in {RUNNER_CANDIDATE, STRONG_RUNNER}),
+        "candidate_unknown_rate": _rate(rows, "CANDIDATE", lambda row: str(row.get("automatic_outcome_label", "")).startswith("UNKNOWN")),
+        "control_unknown_rate": _rate(rows, "CONTROL", lambda row: str(row.get("automatic_outcome_label", "")).startswith("UNKNOWN")),
+    }
+
+
 def build_summary(
     *,
     cfg: ObjectiveReplayConfig,
@@ -917,6 +1152,15 @@ def build_summary(
 ) -> dict[str, Any]:
     candidate_counts = _counts(rows, "CANDIDATE")
     control_counts = _counts(rows, "CONTROL")
+    known_entry_rows = [row for row in rows if _is_known_entry(row)]
+    round_level_rows = [row for row in rows if row.get("entry_level_source") == ROUND_LEVEL]
+    sweep_extreme_rows = [row for row in rows if row.get("entry_level_source") == SWEEP_EXTREME]
+    candidate_known_count = sum(1 for row in rows if row.get("row_type") == "CANDIDATE" and _is_known_entry(row))
+    control_known_count = sum(1 for row in rows if row.get("row_type") == "CONTROL" and _is_known_entry(row))
+    candidate_replayed = sum(1 for row in rows if row.get("row_type") == "CANDIDATE")
+    control_replayed = sum(1 for row in rows if row.get("row_type") == "CONTROL")
+    candidate_unknown_entry_count = candidate_counts.get(UNKNOWN_ENTRY_LEVEL, 0)
+    control_unknown_entry_count = control_counts.get(UNKNOWN_ENTRY_LEVEL, 0)
     summary_limitations = list(limitations)
     if candidate_counts.get(UNKNOWN_ENTRY_LEVEL):
         summary_limitations.append(f"CANDIDATE_UNKNOWN_ENTRY_LEVEL_ROWS_{candidate_counts[UNKNOWN_ENTRY_LEVEL]}")
@@ -926,6 +1170,10 @@ def build_summary(
         summary_limitations.append(f"CONTROL_UNKNOWN_ENTRY_LEVEL_ROWS_{control_counts[UNKNOWN_ENTRY_LEVEL]}")
     if control_counts.get(UNKNOWN_DIRECTION):
         summary_limitations.append(f"CONTROL_UNKNOWN_DIRECTION_ROWS_{control_counts[UNKNOWN_DIRECTION]}")
+    if any(row.get("entry_level_source") == SWEEP_EXTREME and row.get("row_type") == "CANDIDATE" for row in rows) and not any(
+        row.get("entry_level_source") == SWEEP_EXTREME and row.get("row_type") == "CONTROL" for row in rows
+    ):
+        summary_limitations.append("CONTROL_SWEEP_EXTREME_ROWS_0_BASELINE_UNAVAILABLE")
     return {
         "run_started_at": started.isoformat(),
         "run_finished_at": _utc_now().isoformat(),
@@ -940,23 +1188,33 @@ def build_summary(
         "reaction_fast_minutes": cfg.reaction_fast_minutes,
         "reaction_slow_minutes": cfg.reaction_slow_minutes,
         "total_candidate_samples_loaded": candidate_loaded,
-        "candidate_samples_replayed": sum(1 for row in rows if row.get("row_type") == "CANDIDATE"),
+        "candidate_samples_replayed": candidate_replayed,
         "control_random_requested": control_requested,
         "control_samples_generated": control_generated,
-        "control_samples_replayed": sum(1 for row in rows if row.get("row_type") == "CONTROL"),
+        "control_samples_replayed": control_replayed,
         "rows_written": len(rows),
+        "candidate_known_entry_count": candidate_known_count,
+        "control_known_entry_count": control_known_count,
+        "candidate_unknown_entry_level_count": candidate_unknown_entry_count,
+        "control_unknown_entry_level_count": control_unknown_entry_count,
+        "candidate_unknown_entry_level_rate": round(candidate_unknown_entry_count / candidate_replayed, 4) if candidate_replayed else 0.0,
+        "control_unknown_entry_level_rate": round(control_unknown_entry_count / control_replayed, 4) if control_replayed else 0.0,
+        "entry_level_source_counts": _source_counts(rows),
+        "candidate_entry_level_source_counts": _source_counts(rows, "CANDIDATE"),
+        "control_entry_level_source_counts": _source_counts(rows, "CONTROL"),
         "candidate_outcome_label_counts": candidate_counts,
         "control_outcome_label_counts": control_counts,
-        "candidate_vs_control": {
-            "candidate_fast_reaction_rate": _rate(rows, "CANDIDATE", lambda row: bool(row.get("fast_reaction_100pips_15m"))),
-            "control_fast_reaction_rate": _rate(rows, "CONTROL", lambda row: bool(row.get("fast_reaction_100pips_15m"))),
-            "candidate_fast_sl_20_rate": _rate(rows, "CANDIDATE", lambda row: row.get("automatic_outcome_label") == FAST_SL_20),
-            "control_fast_sl_20_rate": _rate(rows, "CONTROL", lambda row: row.get("automatic_outcome_label") == FAST_SL_20),
-            "candidate_runner_candidate_rate": _rate(rows, "CANDIDATE", lambda row: row.get("automatic_outcome_label") in {RUNNER_CANDIDATE, STRONG_RUNNER}),
-            "control_runner_candidate_rate": _rate(rows, "CONTROL", lambda row: row.get("automatic_outcome_label") in {RUNNER_CANDIDATE, STRONG_RUNNER}),
-            "candidate_unknown_rate": _rate(rows, "CANDIDATE", lambda row: str(row.get("automatic_outcome_label", "")).startswith("UNKNOWN")),
-            "control_unknown_rate": _rate(rows, "CONTROL", lambda row: str(row.get("automatic_outcome_label", "")).startswith("UNKNOWN")),
+        "candidate_outcome_counts_by_entry_level_source": _outcome_counts_by_source(rows, "CANDIDATE"),
+        "control_outcome_counts_by_entry_level_source": _outcome_counts_by_source(rows, "CONTROL"),
+        "outcome_counts_by_entry_level_source": {
+            "CANDIDATE": _outcome_counts_by_source(rows, "CANDIDATE"),
+            "CONTROL": _outcome_counts_by_source(rows, "CONTROL"),
         },
+        "candidate_vs_control": _comparison_metrics(rows),
+        "candidate_vs_control_all_rows": _comparison_metrics(rows),
+        "candidate_vs_control_known_entry": _comparison_metrics(known_entry_rows),
+        "candidate_vs_control_round_level": _comparison_metrics(round_level_rows),
+        "candidate_vs_control_sweep_extreme": _comparison_metrics(sweep_extreme_rows),
         "limitations": sorted(set(summary_limitations)),
         "safety": {
             "live_trading_enabled": False,
@@ -1000,6 +1258,21 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         f"- candidate samples replayed: `{summary['candidate_samples_replayed']}`",
         f"- control samples generated: `{summary['control_samples_generated']}`",
         f"- rows written: `{summary['rows_written']}`",
+        f"- candidate known-entry rows: `{summary['candidate_known_entry_count']}`",
+        f"- control known-entry rows: `{summary['control_known_entry_count']}`",
+        f"- candidate unknown entry-level rate: `{summary['candidate_unknown_entry_level_rate']}`",
+        "",
+        "Known-entry subset is still descriptive and not validation.",
+        "",
+        "## Entry Level Source Counts",
+        "",
+        "### Candidate",
+        "",
+        *[f"- `{source}`: `{count}`" for source, count in summary["candidate_entry_level_source_counts"].items()],
+        "",
+        "### Control",
+        "",
+        *[f"- `{source}`: `{count}`" for source, count in summary["control_entry_level_source_counts"].items()],
         "",
         "## Candidate Outcome Counts",
         "",
@@ -1012,6 +1285,24 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         "## Candidate Vs Control",
         "",
         *[f"- `{key}`: `{value}`" for key, value in summary["candidate_vs_control"].items()],
+        "",
+        "## Candidate Vs Control Known Entry",
+        "",
+        *[f"- `{key}`: `{value}`" for key, value in summary["candidate_vs_control_known_entry"].items()],
+        "",
+        "## Candidate Outcome Counts By Entry Source",
+        "",
+        *[
+            f"- `{source}`: {json.dumps(counts, sort_keys=True)}"
+            for source, counts in summary["candidate_outcome_counts_by_entry_level_source"].items()
+        ],
+        "",
+        "## Control Outcome Counts By Entry Source",
+        "",
+        *[
+            f"- `{source}`: {json.dumps(counts, sort_keys=True)}"
+            for source, counts in summary["control_outcome_counts_by_entry_level_source"].items()
+        ],
         "",
         "## Limitations",
         "",
@@ -1038,6 +1329,8 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
             f"<td>{html.escape(str(row.get('anchor_timestamp')))}</td>"
             f"<td>{html.escape(str(row.get('direction_guess')))}</td>"
             f"<td>{html.escape(str(row.get('entry_price')))}</td>"
+            f"<td>{html.escape(str(row.get('entry_level_source')))}</td>"
+            f"<td>{html.escape(str(row.get('entry_level_confidence')))}</td>"
             f"<td>{html.escape(str(row.get('automatic_outcome_label')))}</td>"
             f"<td>{html.escape(str(row.get('max_favorable_pips')))}</td>"
             f"<td>{html.escape(str(row.get('max_adverse_pips')))}</td>"
@@ -1059,14 +1352,22 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
 <body>
   <h1>Adelin v2 Objective Outcome Replay</h1>
   <p class="warning">Diagnostic baseline comparison only. Not validation, not signals, not live trading.</p>
+  <p><strong>Known-entry subset is still descriptive and not validation.</strong></p>
+  <h2>Entry Level Source Counts</h2>
+  <h3>Candidate</h3>
+  {label_table(summary["candidate_entry_level_source_counts"])}
+  <h3>Control</h3>
+  {label_table(summary["control_entry_level_source_counts"])}
   <h2>Candidate Outcome Counts</h2>
   {label_table(summary["candidate_outcome_label_counts"])}
   <h2>Control Outcome Counts</h2>
   {label_table(summary["control_outcome_label_counts"])}
   <h2>Candidate Vs Control</h2>
   {label_table(summary["candidate_vs_control"])}
+  <h2>Candidate Vs Control Known Entry</h2>
+  {label_table(summary["candidate_vs_control_known_entry"])}
   <h2>Rows</h2>
-  <table><tr><th>type</th><th>sample</th><th>anchor</th><th>direction</th><th>entry</th><th>label</th><th>MFE</th><th>MAE</th></tr>
+  <table><tr><th>type</th><th>sample</th><th>anchor</th><th>direction</th><th>entry</th><th>source</th><th>confidence</th><th>label</th><th>MFE</th><th>MAE</th></tr>
   {''.join(body_rows)}
   </table>
 </body>
@@ -1091,6 +1392,10 @@ def _write_enriched_labels(
         "automatic_outcome_label",
         "direction_guess",
         "entry_price",
+        "entry_level_source",
+        "entry_level_confidence",
+        "entry_level_reason_codes",
+        "entry_level_is_heuristic",
         "max_favorable_pips",
         "max_adverse_pips",
         "time_to_100_pips_minutes",
@@ -1136,16 +1441,18 @@ def run_objective_replay(cfg: ObjectiveReplayConfig) -> dict[str, Any]:
     limitations.extend(control_limitations)
     replay_rows: list[dict[str, Any]] = []
     for sample in [*candidate_samples, *control_samples]:
-        entry = build_round_level_entry(
-            sample,
-            frames,
-            symbol=cfg.symbol,
-            threshold_pips=cfg.round_level_threshold_pips,
-        )
         direction = infer_reversal_direction(
             frames,
             sample.anchor_timestamp,
             lookback_minutes=cfg.direction_lookback_minutes,
+            pip_size=pip_resolution.pip_size,
+        )
+        entry = build_entry_hypothesis(
+            sample,
+            frames,
+            direction,
+            symbol=cfg.symbol,
+            threshold_pips=cfg.round_level_threshold_pips,
             pip_size=pip_resolution.pip_size,
         )
         replay_rows.append(
@@ -1185,10 +1492,14 @@ __all__ = [
     "GOOD_SLOW_REACTION",
     "NO_REACTION",
     "ObjectiveReplayConfig",
+    "ROUND_LEVEL",
     "ROUND_LEVEL_TOUCH_ENTRY",
+    "SWEEP_EXTREME",
+    "SWEPT_LIQUIDITY_LEVEL",
     "UNKNOWN_DIRECTION",
     "UNKNOWN_ENTRY_LEVEL",
     "UNKNOWN_INSUFFICIENT_FORWARD_DATA",
+    "build_entry_hypothesis",
     "build_round_level_entry",
     "generate_control_samples",
     "infer_reversal_direction",

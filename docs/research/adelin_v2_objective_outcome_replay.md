@@ -18,6 +18,8 @@ The replay asks narrow diagnostic questions:
 
 The control group is a baseline comparison only, not proof of edge.
 
+The first replay run exposed an important limitation: 33 of 40 candidate rows were labeled `UNKNOWN_ENTRY_LEVEL`. That meant only 7 candidate rows had a usable v1 entry level, so the candidate-vs-control comparison was descriptive but too under-covered to interpret as strategy evidence.
+
 ## Safety
 
 The replay module only reads visual-pack metadata and historical candle CSVs. It does not enable Adelin live, import broker/order execution, send Telegram messages, or modify Strategy 2, Strategy 3, VWAP, or market data.
@@ -62,11 +64,20 @@ The replay does not invent direction when the lookback window is ambiguous.
 
 ## Entry Hypothesis
 
-Version 1 uses only `ROUND_LEVEL_TOUCH_ENTRY`.
+Version 1 keeps one replay hypothesis type, `ROUND_LEVEL_TOUCH_ENTRY`, but now records the entry-level source more explicitly.
 
-If the visual sample has a number-theory or round level, that level is used as the transparent entry hypothesis. If not, the nearest round level at the anchor price may be used only when it is within the conservative threshold. Otherwise the row is labeled `UNKNOWN_ENTRY_LEVEL`.
+Supported entry-level sources:
 
-`ANCHOR_CLOSE_ENTRY` and sweep-extreme entry variants are intentionally excluded from this branch.
+- `ROUND_LEVEL`: high confidence when explicitly present in visual metadata, medium confidence when the anchor price is conservatively near a round level.
+- `SWEEP_EXTREME`: low/medium confidence heuristic from the deterministic M1/M5 sweep that inferred direction. For a long it uses the downward sweep low; for a short it uses the upward sweep high.
+- `SWEPT_LIQUIDITY_LEVEL`: low/medium confidence heuristic when an explicit swept-liquidity level exists, or when the inferred sweep level is available but the sweep extreme is not.
+- `UNKNOWN`: no defensible entry level.
+
+`FVG_BOUNDARY`, `IFVG_BOUNDARY`, `REACTION_ZONE_LEVEL`, and `ANCHOR_LEVEL` are reserved source classes. This branch does not extract FVG/IFVG levels because those detectors are not implemented and tested yet.
+
+If an entry level conflicts with the deterministic reversal direction, the row is marked with `ENTRY_DIRECTION_CONFLICT` and directional replay is not forced.
+
+The replay writes `entry_level_source`, `entry_price`, `entry_level_confidence`, `entry_level_reason_codes`, and `entry_level_is_heuristic` for every row.
 
 ## Outcome Labels
 
@@ -93,6 +104,19 @@ The matched control group uses the same symbol, available date range, M1/M5/M15/
 
 The output compares candidate and control rates for fast reaction, fast 20-pip stop, runner candidates, and unknown rows.
 
+Reports now include:
+
+- entry-level source counts,
+- unknown entry-level count and rate,
+- candidate/control known-entry counts,
+- outcome counts by entry-level source,
+- candidate-vs-control metrics for all rows,
+- candidate-vs-control metrics for known-entry rows,
+- round-level-only metrics,
+- sweep-extreme-only metrics.
+
+Known-entry subset is still descriptive and not validation.
+
 ## Output Files
 
 Output directory:
@@ -110,6 +134,8 @@ Files:
 ## Interpretation
 
 Candidate windows remain candidate windows, not signals. The control group is only a baseline diagnostic. This branch does not validate profitability, deployability, or live readiness.
+
+Reducing `UNKNOWN_ENTRY_LEVEL` is useful only when the new level is transparent and defensible. Sweep-extreme entries are heuristic replay anchors, not trade recommendations.
 
 ## Next Step
 
