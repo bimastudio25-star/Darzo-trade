@@ -63,6 +63,16 @@ def _signal(when: datetime, direction: str = "LONG") -> Strategy3Signal:
     )
 
 
+def _data_context() -> dict[str, object]:
+    return {
+        "combined_data_context_hash": "ctx",
+        "files": {
+            "H4": {"sha256": "h4hash", "latest_timestamp": "2026-05-14T20:00:00+00:00"},
+            "M15": {"sha256": "m15hash", "latest_timestamp": "2026-05-14T22:45:00+00:00"},
+        },
+    }
+
+
 def _config(module, tmp_path, *, scan_driver_bars: int = 1):
     return module.ShadowScannerConfig(
         symbol="XAUUSD",
@@ -104,6 +114,7 @@ def test_signal_export_contains_required_safety_metadata(monkeypatch, tmp_path):
     module = _scanner_module()
     monkeypatch.setattr(module, "load_csv_timeframes", lambda *a, **kw: _market())
     monkeypatch.setattr(module, "evaluate_strategy_3_vwap_1r", lambda market, *, now_utc, **kw: _signal(now_utc))
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
 
     summary = module.run_scanner(_config(module, tmp_path))
     row = next(csv.DictReader((tmp_path / "paper_signals.csv").open(newline="", encoding="utf-8")))
@@ -121,6 +132,13 @@ def test_signal_export_contains_required_safety_metadata(monkeypatch, tmp_path):
     assert row["order_execution_enabled"] == "False"
     assert row["telegram_enabled"] == "False"
     assert row["vwap_value"] == "100.0"
+    assert row["data_context_hash"] == "ctx"
+    assert row["h4_hash"] == "h4hash"
+    assert row["h4_latest_timestamp"] == "2026-05-14T20:00:00+00:00"
+    assert row["m15_hash"] == "m15hash"
+    assert row["m15_latest_timestamp"] == "2026-05-14T22:45:00+00:00"
+    assert summary["data_context"]["combined_data_context_hash"] == "ctx"
+    assert (tmp_path / "paper_signals_data_context.json").exists()
     assert json.loads(row["reason_codes"]) == ["liquidity_sweep", "vwap_band_vwap", "setup_trend_following", "target_1r"]
 
 

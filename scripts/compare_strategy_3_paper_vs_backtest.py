@@ -22,6 +22,7 @@ from scripts.compare_strategy_3_shadow_vs_backtest import (  # noqa: E402
     build_backtest_comparable_signals,
     compare_signals,
 )
+from scripts.strategy_3_data_context import compute_data_context, diff_contexts, write_context
 
 STRATEGY_NAME = "strategy_3_vwap_1r"
 DEFAULT_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4", "D1"]
@@ -78,6 +79,7 @@ class PaperVsBacktestConfig:
     timestamp_tolerance_seconds: int
     price_tolerance: float
     dry_run: bool
+    allow_data_context_mismatch: bool = False
     h4_repair_report_path: Path = Path("backtests/reports/strategy_3_h4_safe_repair/h4_repair_report.json")
     h4_post_repair_diagnostic_path: Path = Path(
         "backtests/reports/strategy_3_h4_data_source_diagnostic_post_repair/h4_data_source_diagnostic.json"
@@ -99,6 +101,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timestamp-tolerance-seconds", type=int, default=0)
     parser.add_argument("--price-tolerance", type=float, default=0.01)
     parser.add_argument("--dry-run", action="store_true", default=True)
+    parser.add_argument("--allow-data-context-mismatch", action="store_true", default=False)
     parser.add_argument("--signal-pre-buffer-minutes", type=int, default=60)
     parser.add_argument("--post-signal-buffer-minutes", type=int, default=5)
     parser.add_argument("--data-warmup-days", type=int, default=1)
@@ -129,6 +132,18 @@ def read_paper_signals(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
         rows = [dict(row) for row in reader]
     missing = [field for field in REQUIRED_FIELDS if field not in fieldnames]
     return rows, missing
+
+
+def load_paper_data_context(scanner_summary_path: Path, paper_signals_path: Path) -> dict[str, Any] | None:
+    scanner_summary = read_json(scanner_summary_path)
+    context = scanner_summary.get("data_context")
+    if isinstance(context, dict) and context.get("combined_data_context_hash"):
+        return context
+    sidecar = paper_signals_path.parent / "paper_signals_data_context.json"
+    sidecar_context = read_json(sidecar)
+    if sidecar_context.get("combined_data_context_hash"):
+        return sidecar_context
+    return None
 
 
 def derive_comparison_window(rows: list[dict[str, Any]], cfg: PaperVsBacktestConfig) -> dict[str, str] | None:
@@ -329,15 +344,21 @@ def verdict_flags(summary: dict[str, Any]) -> list[str]:
     critical = any(int(accepted_categories.get(name, 0)) > 0 for name in critical_categories)
     h4_clean = summary.get("data_integrity", {}).get("h4_clean_for_comparison", False)
     paper_clean = summary.get("paper_signals_clean_for_validation", False)
+    data_context = summary.get("data_context", {})
+    data_context_match = bool(data_context.get("data_context_match"))
+    data_context_missing = bool(data_context.get("data_context_missing"))
 
     if not h4_clean:
         flags.append("HTF_CONTEXT_CAVEAT_REQUIRES_DATA_DIAGNOSTIC")
-    if paper_clean:
+    flags.extend(data_context.get("data_context_verdict_flags", []))
+    if data_context_missing or not data_context_match:
+        flags.append("COMPARISON_NOT_CLEAN_VALIDATION")
+    if paper_clean and data_context_match:
         flags.append("PAPER_SIGNALS_CLEAN_FOR_VALIDATION")
     else:
         flags.append("PAPER_SIGNALS_NOT_CLEAN_FOR_VALIDATION")
 
-    if accepted_rate is not None and accepted_rate >= 0.95 and not critical and h4_clean and paper_clean:
+    if accepted_rate is not None and accepted_rate >= 0.95 and not critical and h4_clean and paper_clean and data_context_match:
         flags.append("SHADOW_BACKTEST_ACCEPTED_MATCH_OK")
     elif accepted_rate is not None and accepted_rate >= 0.80:
         flags.append("SHADOW_BACKTEST_MINOR_MISMATCHES")
@@ -350,7 +371,7 @@ def verdict_flags(summary: dict[str, Any]) -> list[str]:
         flags.append("SHADOW_BACKTEST_MINOR_MISMATCHES")
 
     flags.extend(["NO_LIVE_DEPLOYMENT_DECISION", "STRATEGY_3_REMAINS_PAPER_ONLY"])
-    return flags
+    return list(dict.fromkeys(flags))
 
 
 def write_report(output_dir: Path, summary: dict[str, Any]) -> None:
@@ -392,6 +413,15 @@ def write_report(output_dir: Path, summary: dict[str, Any]) -> None:
         f"- post-repair OHLCV match rate: `{summary['data_integrity']['post_repair_ohlcv_match_rate']}`",
         f"- H4 backup path: `{summary['data_integrity']['backup_path']}`",
         f"- paper_signals_clean_for_validation: `{summary['paper_signals_clean_for_validation']}`",
+        "",
+        "## Data Context Integrity",
+        "",
+        f"- paper_data_context_hash: `{summary['data_context']['paper_data_context_hash']}`",
+        f"- backtest_data_context_hash: `{summary['data_context']['backtest_data_context_hash']}`",
+        f"- data_context_match: `{summary['data_context']['data_context_match']}`",
+        f"- data_context_missing: `{summary['data_context']['data_context_missing']}`",
+        f"- mismatched_timeframes: `{summary['data_context']['mismatched_timeframes']}`",
+        f"- data_context_verdict_flags: `{summary['data_context']['data_context_verdict_flags']}`",
         "",
         "## Results",
         "",
@@ -440,6 +470,10 @@ def write_outputs(output_dir: Path, summary: dict[str, Any], all_detected: dict[
             legacy_path.unlink()
     (output_dir / "comparison_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
     (output_dir / "missing_fields_summary.json").write_text(json.dumps(missing_fields, indent=2, sort_keys=True), encoding="utf-8")
+    if isinstance(summary.get("paper_data_context"), dict) and summary["paper_data_context"]:
+        write_context(output_dir / "data_context_paper.json", summary["paper_data_context"])
+    write_context(output_dir / "data_context_backtest.json", summary["backtest_data_context"])
+    (output_dir / "data_context_diff.json").write_text(json.dumps(summary["data_context"], indent=2, sort_keys=True), encoding="utf-8")
     all_rows = _output_rows(all_detected, "all_detected")
     accepted_rows = _output_rows(accepted_only, "accepted_only")
     write_csv(output_dir / "comparison_all_detected.csv", all_rows, MATCH_OUTPUT_FIELDS)
@@ -456,6 +490,13 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
     pipeline_summary = read_json(cfg.pipeline_summary_path)
     repair_report = read_json(cfg.h4_repair_report_path)
     post_diag = read_json(cfg.h4_post_repair_diagnostic_path)
+    paper_data_context = load_paper_data_context(cfg.scanner_summary_path, cfg.paper_signals_path)
+    backtest_data_context = compute_data_context(symbol=cfg.symbol, data_dir=cfg.data_dir, timeframes=DEFAULT_TIMEFRAMES)
+    data_context_diff = diff_contexts(paper_data_context, backtest_data_context)
+    if cfg.allow_data_context_mismatch and not data_context_diff["data_context_match"]:
+        data_context_diff["verdict_flags"] = list(
+            dict.fromkeys([*data_context_diff["verdict_flags"], "DATA_CONTEXT_MISMATCH_ALLOWED_DIAGNOSTIC"])
+        )
     window = derive_comparison_window(paper_rows, cfg)
     backtest_context_rows: list[dict[str, Any]] = []
     backtest_rows: list[dict[str, Any]] = []
@@ -491,6 +532,7 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         "run_finished_at": _utc_now(),
         "runtime_seconds": round(perf_counter() - started_perf, 4),
         "dry_run": cfg.dry_run,
+        "allow_data_context_mismatch": cfg.allow_data_context_mismatch,
         "symbol": cfg.symbol,
         "strategy": STRATEGY_NAME,
         "data_dir": cfg.data_dir,
@@ -540,6 +582,18 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         "price_diff_stats_all_detected": price_diff_stats(all_detected),
         "price_diff_stats_accepted_only": price_diff_stats(accepted_only),
         "data_integrity": data_integrity,
+        "paper_data_context": paper_data_context or {},
+        "backtest_data_context": backtest_data_context,
+        "data_context": {
+            **data_context_diff,
+            "data_context_verdict_flags": data_context_diff.get("verdict_flags", []),
+        },
+        "paper_data_context_hash": data_context_diff.get("paper_data_context_hash"),
+        "backtest_data_context_hash": data_context_diff.get("backtest_data_context_hash"),
+        "data_context_match": data_context_diff.get("data_context_match"),
+        "data_context_missing": data_context_diff.get("data_context_missing"),
+        "mismatched_timeframes": data_context_diff.get("mismatched_timeframes", []),
+        "data_context_verdict_flags": data_context_diff.get("verdict_flags", []),
         "h4_freshness_status": data_integrity["h4_freshness_status"],
         "paper_signals_clean_for_validation": data_integrity["paper_signals_clean_for_validation"],
         "pipeline_verdict_flags": pipeline_summary.get("verdict_flags", []),
@@ -566,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
         timestamp_tolerance_seconds=int(args.timestamp_tolerance_seconds),
         price_tolerance=float(args.price_tolerance),
         dry_run=bool(args.dry_run),
+        allow_data_context_mismatch=bool(args.allow_data_context_mismatch),
         h4_repair_report_path=Path(args.h4_repair_report_path),
         h4_post_repair_diagnostic_path=Path(args.h4_post_repair_diagnostic_path),
         signal_pre_buffer_minutes=int(args.signal_pre_buffer_minutes),

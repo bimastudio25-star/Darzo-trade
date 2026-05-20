@@ -51,6 +51,27 @@ def _backtest_row(**updates: object) -> dict[str, object]:
     return row
 
 
+def _data_context(hash_value: str = "ctx") -> dict[str, object]:
+    return {
+        "combined_data_context_hash": hash_value,
+        "symbol": "XAUUSD",
+        "timeframes_included": ["M1", "M5", "M15", "H1", "H4", "D1"],
+        "files": {
+            tf: {
+                "exists": True,
+                "sha256": f"{hash_value}-{tf}",
+                "file_size": 10,
+                "row_count": 1,
+                "first_timestamp": "2026-05-20T00:00:00+00:00",
+                "latest_timestamp": "2026-05-20T10:00:00+00:00",
+                "detected_encoding": "utf-8",
+                "header_present": True,
+            }
+            for tf in ["M1", "M5", "M15", "H1", "H4", "D1"]
+        },
+    }
+
+
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     fields = list(dict.fromkeys(_module().REQUIRED_FIELDS + list(_paper_row().keys())))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +92,7 @@ def _write_context(tmp_path: Path, *, paper_clean: bool = True, h4_clean: bool =
     pipeline_summary.parent.mkdir(parents=True, exist_ok=True)
     repair_report.parent.mkdir(parents=True, exist_ok=True)
     post_diag.parent.mkdir(parents=True, exist_ok=True)
-    scanner_summary.write_text(json.dumps({"paper_signals_clean_for_validation": paper_clean}), encoding="utf-8")
+    scanner_summary.write_text(json.dumps({"paper_signals_clean_for_validation": paper_clean, "data_context": _data_context()}), encoding="utf-8")
     pipeline_summary.write_text(
         json.dumps(
             {
@@ -158,6 +179,7 @@ def test_accepted_only_excludes_blocked_signals(monkeypatch, tmp_path):
         cfg.paper_signals_path,
         [_paper_row(cooldown_accepted="True"), _paper_row(signal_timestamp="2026-05-20T10:15:00+00:00", cooldown_accepted="False")],
     )
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
     monkeypatch.setattr(
         module,
         "build_backtest_comparable_signals",
@@ -192,6 +214,7 @@ def test_h4_not_clean_blocks_clean_verdict(monkeypatch, tmp_path):
     module = _module()
     cfg = _config(tmp_path, h4_clean=False)
     _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
     monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
     summary = module.run_comparison(cfg)
     assert "HTF_CONTEXT_CAVEAT_REQUIRES_DATA_DIAGNOSTIC" in summary["verdict_flags"]
@@ -202,6 +225,7 @@ def test_paper_not_clean_blocks_clean_verdict(monkeypatch, tmp_path):
     module = _module()
     cfg = _config(tmp_path, paper_clean=False)
     _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
     monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
     summary = module.run_comparison(cfg)
     assert "PAPER_SIGNALS_NOT_CLEAN_FOR_VALIDATION" in summary["verdict_flags"]
@@ -212,6 +236,7 @@ def test_outputs_and_safety_fields(monkeypatch, tmp_path):
     module = _module()
     cfg = _config(tmp_path)
     _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
     monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
     summary = module.run_comparison(cfg)
     assert (cfg.output_dir / "comparison_summary.json").exists()
@@ -222,3 +247,55 @@ def test_outputs_and_safety_fields(monkeypatch, tmp_path):
     assert summary["safety"]["telegram_sent"] is False
     assert summary["safety"]["broker_called"] is False
     assert "SHADOW_BACKTEST_ACCEPTED_MATCH_OK" in summary["verdict_flags"]
+
+
+def test_comparison_detects_matching_data_context(monkeypatch, tmp_path):
+    module = _module()
+    cfg = _config(tmp_path)
+    _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
+    monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
+    summary = module.run_comparison(cfg)
+    assert summary["data_context_match"] is True
+    assert "DATA_CONTEXT_MATCH" in summary["verdict_flags"]
+    assert "SHADOW_BACKTEST_ACCEPTED_MATCH_OK" in summary["verdict_flags"]
+
+
+def test_comparison_detects_mismatched_data_context(monkeypatch, tmp_path):
+    module = _module()
+    cfg = _config(tmp_path)
+    _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context("other"))
+    monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
+    summary = module.run_comparison(cfg)
+    assert summary["data_context_match"] is False
+    assert "DATA_CONTEXT_MISMATCH" in summary["verdict_flags"]
+    assert "COMPARISON_NOT_CLEAN_VALIDATION" in summary["verdict_flags"]
+    assert "SHADOW_BACKTEST_ACCEPTED_MATCH_OK" not in summary["verdict_flags"]
+
+
+def test_missing_data_context_blocks_clean_verdict(monkeypatch, tmp_path):
+    module = _module()
+    cfg = _config(tmp_path)
+    scanner_summary = json.loads(cfg.scanner_summary_path.read_text(encoding="utf-8"))
+    scanner_summary.pop("data_context", None)
+    cfg.scanner_summary_path.write_text(json.dumps(scanner_summary), encoding="utf-8")
+    _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context())
+    monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
+    summary = module.run_comparison(cfg)
+    assert summary["data_context_missing"] is True
+    assert "DATA_CONTEXT_MISSING" in summary["verdict_flags"]
+    assert "PAPER_SIGNALS_CLEAN_FOR_VALIDATION" not in summary["verdict_flags"]
+
+
+def test_allow_data_context_mismatch_is_still_diagnostic(monkeypatch, tmp_path):
+    module = _module()
+    cfg = module.PaperVsBacktestConfig(**{**_config(tmp_path).__dict__, "allow_data_context_mismatch": True})
+    _write_csv(cfg.paper_signals_path, [_paper_row()])
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context("other"))
+    monkeypatch.setattr(module, "build_backtest_comparable_signals", lambda _cfg, _window: [_backtest_row()])
+    summary = module.run_comparison(cfg)
+    assert "DATA_CONTEXT_MISMATCH_ALLOWED_DIAGNOSTIC" in summary["verdict_flags"]
+    assert "COMPARISON_NOT_CLEAN_VALIDATION" in summary["verdict_flags"]
+    assert "SHADOW_BACKTEST_ACCEPTED_MATCH_OK" not in summary["verdict_flags"]

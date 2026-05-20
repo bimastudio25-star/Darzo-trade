@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 from dazro_trade.analysis.strategy_3_vwap_1r import Strategy3Diagnostics, evaluate_strategy_3_vwap_1r
 from dazro_trade.backtest.data_loader import BacktestDataSlicer, load_csv_timeframes
 from dazro_trade.runtime.sessions import current_session_name
+from scripts.strategy_3_data_context import compute_data_context
 from scripts.strategy_3_htf_freshness import analyze_htf_freshness, write_h4_quarantine_report
 
 STRATEGY_NAME = "strategy_3_vwap_1r"
@@ -65,6 +66,11 @@ CSV_FIELDS = [
     "source_timeframe",
     "latest_data_timestamp",
     "data_rows_used",
+    "data_context_hash",
+    "h4_hash",
+    "h4_latest_timestamp",
+    "m15_hash",
+    "m15_latest_timestamp",
     "cooldown_status",
     "cooldown_accepted",
     "cooldown_blocked",
@@ -201,9 +207,13 @@ def _signal_to_row(
     last_signal_timestamp: datetime | None,
     latest_by_timeframe: dict[str, str | None],
     data_rows_used: dict[str, int],
+    data_context: dict[str, Any],
 ) -> dict[str, Any]:
     vwap = signal.confluences.get("vwap") if isinstance(signal.confluences, dict) else {}
     risk_distance = abs(float(signal.entry) - float(signal.stop))
+    context_files = data_context.get("files", {}) if isinstance(data_context.get("files"), dict) else {}
+    h4_context = context_files.get("H4", {}) if isinstance(context_files.get("H4"), dict) else {}
+    m15_context = context_files.get("M15", {}) if isinstance(context_files.get("M15"), dict) else {}
     return {
         "scanner_run_id": scanner_run_id,
         "generated_at": generated_at,
@@ -236,6 +246,11 @@ def _signal_to_row(
         "source_timeframe": "M15",
         "latest_data_timestamp": latest_by_timeframe.get("M15"),
         "data_rows_used": _json_dump(data_rows_used),
+        "data_context_hash": data_context.get("combined_data_context_hash"),
+        "h4_hash": h4_context.get("sha256"),
+        "h4_latest_timestamp": h4_context.get("latest_timestamp"),
+        "m15_hash": m15_context.get("sha256"),
+        "m15_latest_timestamp": m15_context.get("latest_timestamp"),
         "cooldown_status": cooldown_status,
         "cooldown_accepted": cooldown_accepted,
         "cooldown_blocked": not cooldown_accepted,
@@ -255,6 +270,7 @@ def _write_outputs(
     csv_path = output_dir / "paper_signals.csv"
     jsonl_path = output_dir / "paper_signals.jsonl"
     summary_path = output_dir / "scanner_summary.json"
+    data_context_path = output_dir / "paper_signals_data_context.json"
     md_path = output_dir / "scanner_run.md"
 
     with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -268,6 +284,8 @@ def _write_outputs(
             f.write(json.dumps(row, sort_keys=True, default=str) + "\n")
 
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    if isinstance(summary.get("data_context"), dict):
+        data_context_path.write_text(json.dumps(summary["data_context"], indent=2, sort_keys=True, default=str), encoding="utf-8")
 
     if rows:
         signal_lines = "\n".join(
@@ -322,6 +340,7 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
     scanner_run_id = f"strategy3-shadow-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
 
     market_data = load_csv_timeframes(config.symbol, config.timeframes, data_dir=config.data_dir)
+    data_context = compute_data_context(symbol=config.symbol, data_dir=config.data_dir, timeframes=REQUIRED_TIMEFRAMES)
     missing = [tf for tf in REQUIRED_TIMEFRAMES if tf not in market_data or market_data[tf].empty]
     if missing:
         raise ValueError(f"missing_required_timeframes={missing}")
@@ -390,6 +409,8 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
                 "latest_available_timestamp_by_timeframe": latest_by_tf,
                 "earliest_available_timestamp_by_timeframe": earliest_by_tf,
                 "latest_data_timestamp": latest_by_tf.get("M15"),
+                "data_context": data_context,
+                "data_context_hash": data_context.get("combined_data_context_hash"),
                 "driver_timeframe": "M15",
                 "driver_candles_seen": int(len(driver_times)),
                 "driver_candles_processed": 0,
@@ -480,6 +501,7 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
                 last_signal_timestamp=last_ts,
                 latest_by_timeframe=latest_by_tf,
                 data_rows_used={tf: int(len(frame)) for tf, frame in market_slice.items()},
+                data_context=data_context,
             )
         )
 
@@ -519,6 +541,8 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
         "latest_available_timestamp_by_timeframe": latest_by_tf,
         "earliest_available_timestamp_by_timeframe": earliest_by_tf,
         "latest_data_timestamp": latest_by_tf.get("M15"),
+        "data_context": data_context,
+        "data_context_hash": data_context.get("combined_data_context_hash"),
         "driver_timeframe": "M15",
         "driver_candles_seen": int(len(driver_times)),
         "driver_candles_processed": int(len(driver_times)),
@@ -553,6 +577,7 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
             "last_run_started_at": run_started_at,
             "last_run_finished_at": run_finished_at,
             "latest_available_timestamp": latest_by_tf.get("M15"),
+            "data_context_hash": data_context.get("combined_data_context_hash"),
             "total_incremental_runs": prior_runs + 1,
             "total_driver_candles_processed": int(previous_state.get("total_driver_candles_processed", 0) or 0) + len(driver_times),
             "total_signals_detected": int(previous_state.get("total_signals_detected", 0) or 0) + len(rows),
