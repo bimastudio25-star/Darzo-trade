@@ -1,0 +1,56 @@
+{
+  "candidate_outcome_label_counts": {
+    "FAST_SL_20": 4,
+    "GOOD_FAST_REACTION": 1,
+    "GOOD_SLOW_REACTION": 2,
+    "UNKNOWN_ENTRY_LEVEL": 33
+  },
+  "candidate_samples_replayed": 40,
+  "candidate_vs_control": {
+    "candidate_fast_reaction_rate": 0.025,
+    "candidate_fast_sl_20_rate": 0.1,
+    "candidate_runner_candidate_rate": 0.0,
+    "candidate_unknown_rate": 0.825,
+    "control_fast_reaction_rate": 0.175,
+    "control_fast_sl_20_rate": 0.55,
+    "control_runner_candidate_rate": 0.0,
+    "control_unknown_rate": 0.05
+  },
+  "control_outcome_label_counts": {
+    "FAST_SL_20": 22,
+    "GOOD_FAST_REACTION": 5,
+    "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 7,
+    "GOOD_SLOW_REACTION": 4,
+    "UNKNOWN_DIRECTION": 2
+  },
+  "control_random_requested": 40,
+  "control_samples_generated": 40,
+  "control_samples_replayed": 40,
+  "direction_lookback_minutes": 30,
+  "dry_run": true,
+  "forward_hours": 4.0,
+  "limitations": [
+    "CANDIDATE_UNKNOWN_ENTRY_LEVEL_ROWS_33",
+    "CONTROL_UNKNOWN_DIRECTION_ROWS_2"
+  ],
+  "output_dir": "backtests\\reports\\adelin_v2_objective_outcome_replay",
+  "pip_size": 0.1,
+  "pip_size_source": "core.symbols.get_symbol_spec",
+  "reaction_fast_minutes": 15,
+  "reaction_slow_minutes": 30,
+  "rows_written": 80,
+  "run_finished_at": "2026-05-20T23:15:45.682600+00:00",
+  "run_started_at": "2026-05-20T23:15:20.808285+00:00",
+  "safety": {
+    "broker_execution_enabled": false,
+    "data_modified": false,
+    "live_trading_enabled": false,
+    "order_execution_enabled": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "telegram_enabled": false
+  },
+  "symbol": "XAUUSD",
+  "total_candidate_samples_loaded": 40,
+  "visual_pack_dir": "backtests\\reports\\adelin_v2_visual_review_pack"
+}
