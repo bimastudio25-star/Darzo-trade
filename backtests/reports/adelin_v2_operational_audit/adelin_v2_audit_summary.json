@@ -1,0 +1,39 @@
+{
+  "continuation_blocked_count": 0,
+  "continuation_flagged_count": 0,
+  "data_dir": "data",
+  "data_limitations": [
+    "NO_ADELIN_TRADES_AUDITED",
+    "TRADE_EXPORT_PATH_MISSING"
+  ],
+  "dirty_reversal_count": 0,
+  "dry_run": true,
+  "fieldnames": [],
+  "filter_metadata": {
+    "filter_limitation": null,
+    "filter_mode": "no_rows_loaded"
+  },
+  "fresh_rejection_invalid_count": 0,
+  "gap_contamination_count": 0,
+  "generated_at": "2026-05-20T20:59:40.800454+00:00",
+  "market_data_modified": false,
+  "missing_data_count": 0,
+  "multi_tf_alignment_available_count": 0,
+  "no_target_liquidity_count": 0,
+  "number_theory_confluence_count": 0,
+  "output_files": {
+    "csv": "backtests\\reports\\adelin_v2_operational_audit\\adelin_v2_trade_audit.csv",
+    "json": "backtests\\reports\\adelin_v2_operational_audit\\adelin_v2_audit_summary.json",
+    "markdown": "backtests\\reports\\adelin_v2_operational_audit\\adelin_v2_operational_audit.md"
+  },
+  "possible_reversal_count": 0,
+  "reaction_zone_available_count": 0,
+  "research_only_warning": "Existing historical Adelin exports do not contain enough context to fully classify Adelin v2 logic. This audit is a structural gap analysis, not final validation.",
+  "sl_over_40_pips_count": 0,
+  "source_path": "backtests\\reports\\final\\executed_trades.csv",
+  "source_rows_loaded": 0,
+  "symbol": "XAUUSD",
+  "total_old_adelin_trades_loaded": 0,
+  "trades_audited": 0,
+  "unknown_insufficient_data_count": 0
+}
