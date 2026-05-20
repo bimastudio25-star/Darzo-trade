@@ -154,6 +154,21 @@ PowerShell wrapper:
 .\scripts\run_strategy_3_local_paper_pipeline.ps1 -Symbol XAUUSD -SymbolBroker XAUUSD -Loop -IntervalMinutes 15 -Apply
 ```
 
+## HTF Freshness Gate
+
+Strategy 3 uses D1/H4/H1 context. The pipeline now writes an H4 quarantine diagnostic and the paper scanner blocks clean Strategy 3 paper signals when H4 is stale or quarantined.
+
+D1 can legitimately lag by one day while the current daily candle is forming. H4 should normally advance to the latest completed 4-hour candle. If H4 remains stale, scanner output is marked:
+
+`STRATEGY_3_SCANNER_BLOCKED_STALE_HTF_CONTEXT`
+
+Reports:
+
+- `backtests/reports/strategy_3_h4_quarantine_diagnostic/h4_quarantine_report.json`
+- `backtests/reports/strategy_3_h4_quarantine_diagnostic/h4_quarantine_report.md`
+
+Do not treat paper signals as clean validation evidence while `paper_signals_clean_for_validation` is false.
+
 ## What Adelin Must Leave Open
 
 - MT5 terminal open.

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -23,6 +25,35 @@ from scripts.audit_xauusd_data import (
     read_candle_csv,
     validate_frame,
 )
+
+CSV_REPLACE_RETRY_COUNT = 8
+CSV_REPLACE_INITIAL_SLEEP_SECONDS = 0.25
+CSV_REPLACE_MAX_SLEEP_SECONDS = 2.0
+
+
+class CsvReplacePermissionError(PermissionError):
+    def __init__(self, *, target_path: Path, temp_path: Path, attempts: int, last_error: BaseException):
+        self.target_path = Path(target_path)
+        self.temp_path = Path(temp_path)
+        self.attempts = attempts
+        self.last_error = last_error
+        self.advice = (
+            "Close Excel/VSCode previews of the CSV, stop duplicate pipeline processes, "
+            "pause OneDrive sync, and check antivirus/read-only file state."
+        )
+        super().__init__(
+            f"File locked while replacing {self.target_path}. Temp file preserved at {self.temp_path}. "
+            f"Attempts={attempts}. Last error={last_error}. Advice: {self.advice}"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target_path": str(self.target_path),
+            "temp_path": str(self.temp_path),
+            "attempts": self.attempts,
+            "last_error": str(self.last_error),
+            "advice": self.advice,
+        }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -69,12 +100,48 @@ def _format_time(value: Any, has_time: bool) -> str:
     return ts.strftime("%Y.%m.%d %H:%M" if has_time else "%Y.%m.%d")
 
 
-def write_project_csv(df: pd.DataFrame, path: Path, schema: list[str], *, timestamp_has_time: bool) -> None:
+def _is_permission_replace_error(exc: BaseException) -> bool:
+    winerror = getattr(exc, "winerror", None)
+    return isinstance(exc, PermissionError) or winerror == 5
+
+
+def _unique_tmp_path(path: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return path.with_name(f"{path.name}.{os.getpid()}.{stamp}.{uuid4().hex[:8]}.tmp")
+
+
+def write_project_csv(
+    df: pd.DataFrame,
+    path: Path,
+    schema: list[str],
+    *,
+    timestamp_has_time: bool,
+    retry_count: int = CSV_REPLACE_RETRY_COUNT,
+    initial_sleep_seconds: float = CSV_REPLACE_INITIAL_SLEEP_SECONDS,
+    max_sleep_seconds: float = CSV_REPLACE_MAX_SLEEP_SECONDS,
+) -> Path:
     out = _ensure_schema(df, schema).copy()
     out["time"] = out["time"].map(lambda value: _format_time(value, timestamp_has_time))
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    out.to_csv(tmp, index=False, header=False, encoding="utf-16", lineterminator="\n")
-    tmp.replace(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _unique_tmp_path(path)
+    with tmp.open("w", encoding="utf-16", newline="") as f:
+        out.to_csv(f, index=False, header=False, lineterminator="\n")
+        f.flush()
+        os.fsync(f.fileno())
+    delay = float(initial_sleep_seconds)
+    attempts = max(1, int(retry_count))
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            os.replace(tmp, path)
+            return tmp
+        except OSError as exc:
+            last_error = exc
+            if not _is_permission_replace_error(exc) or attempt >= attempts:
+                break
+            sleep(delay)
+            delay = min(float(max_sleep_seconds), delay * 2)
+    raise CsvReplacePermissionError(target_path=path, temp_path=tmp, attempts=attempts, last_error=last_error or PermissionError("replace failed"))
 
 
 def merge_frames(existing: pd.DataFrame, incoming: pd.DataFrame, *, prefer_incoming: bool) -> tuple[pd.DataFrame, dict[str, int]]:
@@ -226,6 +293,9 @@ def build_ingestion(
     backups: list[str] = []
     updated_files: list[str] = []
     if apply_mode and not failed:
+        completed_timeframes: list[str] = []
+        failed_timeframe: str | None = None
+        file_lock_error: dict[str, Any] | None = None
         for item in items:
             merged = item.pop("_merged_frame", None)
             if merged is None or "DATA_UPDATED" not in item.get("verdict_flags", []):
@@ -233,21 +303,41 @@ def build_ingestion(
             existing_path = Path(item["existing_path"])
             if backup_enabled:
                 backups.append(str(_backup_file(existing_path, data_dir.parent / "data_backups", symbol, stamp)))
-            write_project_csv(
-                merged,
-                existing_path,
-                item["existing_schema"],
-                timestamp_has_time=bool(item["timestamp_has_time"]),
-            )
+            try:
+                write_project_csv(
+                    merged,
+                    existing_path,
+                    item["existing_schema"],
+                    timestamp_has_time=bool(item["timestamp_has_time"]),
+                )
+            except CsvReplacePermissionError as exc:
+                failed = True
+                failed_timeframe = str(item["timeframe"])
+                file_lock_error = exc.to_dict()
+                item["verdict_flags"] = list(dict.fromkeys(item.get("verdict_flags", []) + ["FILE_LOCKED_DURING_REPLACE"]))
+                item["file_lock_error"] = file_lock_error
+                break
             updated_files.append(str(existing_path))
+            completed_timeframes.append(str(item["timeframe"]))
+        skipped_after_failure = [
+            str(item["timeframe"])
+            for item in items
+            if failed_timeframe and str(item["timeframe"]) not in completed_timeframes and str(item["timeframe"]) != failed_timeframe
+        ]
     else:
+        completed_timeframes = []
+        failed_timeframe = None
+        file_lock_error = None
+        skipped_after_failure = []
         for item in items:
             item.pop("_merged_frame", None)
     total_new = sum(int(item.get("new_rows_added", 0)) for item in items)
     verdict = "INGESTION_APPLIED" if apply_mode and not failed else "INGESTION_DRY_RUN_OK"
     if failed:
-        verdict = "FINAL_VALIDATION_FAILED"
+        verdict = "INGESTION_FILE_LOCKED" if file_lock_error else "FINAL_VALIDATION_FAILED"
     flags = [verdict] + all_flags
+    if file_lock_error:
+        flags.extend(["FILE_LOCKED_DURING_REPLACE", "PARTIAL_APPLY_FAILED"])
     if backup_enabled and backups:
         flags.append("BACKUP_CREATED")
     if total_new == 0:
@@ -290,6 +380,17 @@ def build_ingestion(
         "total_new_rows_added": int(total_new),
         "backups": backups,
         "updated_files": updated_files,
+        "ingestion_apply_status": (
+            "file_locked" if file_lock_error else "ok" if apply_mode and not failed else "dry_run_only" if not apply_mode else "failed"
+        ),
+        "failed_timeframe": failed_timeframe,
+        "failed_path": file_lock_error.get("target_path") if file_lock_error else None,
+        "temp_path_preserved": file_lock_error.get("temp_path") if file_lock_error else None,
+        "replace_attempts": file_lock_error.get("attempts") if file_lock_error else None,
+        "completed_timeframes": completed_timeframes,
+        "skipped_timeframes_after_failure": skipped_after_failure,
+        "scanner_skipped_due_to_ingestion_failure": bool(file_lock_error),
+        "file_lock_error": file_lock_error,
         "paper_scanner_ran": scanner_ran,
         "verdict_flags": list(dict.fromkeys(flags)),
         "safety": {
@@ -314,6 +415,11 @@ def write_ingestion_report(summary: dict[str, Any], output_dir: Path) -> None:
         f"- dry_run: `{summary['dry_run']}`",
         f"- apply: `{summary['apply']}`",
         f"- backup_enabled: `{summary['backup_enabled']}`",
+        f"- ingestion_apply_status: `{summary.get('ingestion_apply_status')}`",
+        f"- failed_timeframe: `{summary.get('failed_timeframe')}`",
+        f"- failed_path: `{summary.get('failed_path')}`",
+        f"- temp_path_preserved: `{summary.get('temp_path_preserved')}`",
+        f"- replace_attempts: `{summary.get('replace_attempts')}`",
         f"- total_new_rows_added: `{summary['total_new_rows_added']}`",
         f"- verdict_flags: `{', '.join(summary['verdict_flags'])}`",
         "",
@@ -352,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     summary["post_ingest_audit"] = build_audit(Path(args.data_dir), args.symbol, _split_timeframes(args.timeframes))
     write_ingestion_report(summary, Path(args.output_dir))
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))
-    return 0 if "FINAL_VALIDATION_FAILED" not in summary["verdict_flags"] else 1
+    return 0 if not {"FINAL_VALIDATION_FAILED", "INGESTION_FILE_LOCKED"} & set(summary["verdict_flags"]) else 1
 
 
 if __name__ == "__main__":

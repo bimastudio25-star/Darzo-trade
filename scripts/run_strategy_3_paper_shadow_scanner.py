@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 from dazro_trade.analysis.strategy_3_vwap_1r import Strategy3Diagnostics, evaluate_strategy_3_vwap_1r
 from dazro_trade.backtest.data_loader import BacktestDataSlicer, load_csv_timeframes
 from dazro_trade.runtime.sessions import current_session_name
+from scripts.strategy_3_htf_freshness import analyze_htf_freshness, write_h4_quarantine_report
 
 STRATEGY_NAME = "strategy_3_vwap_1r"
 MODE = "paper_shadow"
@@ -93,6 +94,8 @@ class ShadowScannerConfig:
     reset_state: bool = False
     append: bool = True
     max_candles_per_run: int | None = None
+    enforce_htf_freshness: bool = True
+    htf_report_dir: Path | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -109,6 +112,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reset-state", action="store_true", default=False)
     parser.add_argument("--append", action="store_true", default=True)
     parser.add_argument("--max-candles-per-run", type=int, default=None)
+    parser.add_argument("--allow-stale-htf-context", action="store_true", default=False)
+    parser.add_argument("--htf-report-dir", default="backtests/reports/strategy_3_h4_quarantine_diagnostic")
     parser.add_argument(
         "--scan-driver-bars",
         type=int,
@@ -351,6 +356,69 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
     else:
         driver_times = [ts.to_pydatetime() for ts in driver_series.tail(max(1, config.scan_driver_bars))]
 
+    htf_diagnostic: dict[str, Any] = {}
+    if config.enforce_htf_freshness:
+        htf_now = driver_series.max().to_pydatetime()
+        htf_diagnostic = analyze_htf_freshness(
+            data_dir=Path(config.data_dir),
+            symbol=config.symbol,
+            market_data=market_data,
+            now_utc=htf_now,
+        )
+        report_dir = config.htf_report_dir or (config.output_dir / "htf_freshness")
+        write_h4_quarantine_report(htf_diagnostic, report_dir)
+        if htf_diagnostic.get("scanner_blocked_due_to_stale_htf"):
+            existing_rows = _load_existing_signal_rows(config.output_dir / "paper_signals.csv") if config.incremental and config.append else []
+            runtime_seconds = round(perf_counter() - started_perf, 4)
+            summary = {
+                "scanner_run_id": scanner_run_id,
+                "mode": "paper_shadow_incremental" if config.incremental else MODE,
+                "incremental": config.incremental,
+                "state_file": str(state_path) if config.incremental else None,
+                "previous_last_processed_timestamp": previous_last_processed,
+                "new_last_processed_timestamp": previous_last_processed,
+                "run_started_at": run_started_at,
+                "run_finished_at": _utc_now_iso(),
+                "runtime_seconds": runtime_seconds,
+                "symbol": config.symbol,
+                "strategy": STRATEGY_NAME,
+                "data_dir": config.data_dir,
+                "output_dir": str(config.output_dir),
+                "dry_run": config.dry_run,
+                "cooldown_minutes": config.cooldown_minutes,
+                "timeframes": list(config.timeframes),
+                "latest_available_timestamp_by_timeframe": latest_by_tf,
+                "earliest_available_timestamp_by_timeframe": earliest_by_tf,
+                "latest_data_timestamp": latest_by_tf.get("M15"),
+                "driver_timeframe": "M15",
+                "driver_candles_seen": int(len(driver_times)),
+                "driver_candles_processed": 0,
+                "signals_detected": 0,
+                "signals_accepted": 0,
+                "signals_blocked_by_cooldown": 0,
+                "paper_signals_total_after_run": len(existing_rows),
+                "new_paper_signals_this_run": 0,
+                "duplicates_skipped": 0,
+                "long_signals": 0,
+                "short_signals": 0,
+                "setup_mode_counts": {},
+                "band_touched_counts": {},
+                "no_signal_reason": "stale_htf_context_h4",
+                "verdict_flags": ["STRATEGY_3_SCANNER_BLOCKED_STALE_HTF_CONTEXT"],
+                "htf_freshness": htf_diagnostic,
+                "htf_freshness_status": htf_diagnostic.get("htf_freshness_status"),
+                "stale_timeframes": htf_diagnostic.get("stale_timeframes", []),
+                "scanner_blocked_due_to_stale_htf": True,
+                "stale_timeframe": "H4",
+                "stale_by_bars": htf_diagnostic.get("h4_stale_by_bars"),
+                "latest_h4_timestamp": htf_diagnostic.get("h4_latest_existing_timestamp"),
+                "expected_latest_h4_timestamp": htf_diagnostic.get("h4_expected_latest_closed_timestamp"),
+                "paper_signals_clean_for_validation": False,
+                "safety": dict(SAFETY_FLAGS),
+            }
+            _write_outputs(output_dir=config.output_dir, rows=existing_rows, summary=summary)
+            return summary
+
     diagnostics = Strategy3Diagnostics()
     diagnostics.cooldown_enabled = config.cooldown_minutes > 0
     diagnostics.strategy_3_cooldown_minutes = config.cooldown_minutes
@@ -466,6 +534,12 @@ def run_scanner(config: ShadowScannerConfig) -> dict[str, Any]:
         "band_touched_counts": band_touched_counts,
         "no_signal_reason": None if rows else ("no_new_driver_candles_to_process" if config.incremental and not driver_times else "no_strategy_3_signal_on_latest_driver_candle"),
         "strategy_diagnostics": diagnostics.to_dict(),
+        "verdict_flags": [],
+        "htf_freshness": htf_diagnostic,
+        "htf_freshness_status": htf_diagnostic.get("htf_freshness_status") if htf_diagnostic else None,
+        "stale_timeframes": htf_diagnostic.get("stale_timeframes", []) if htf_diagnostic else [],
+        "scanner_blocked_due_to_stale_htf": False,
+        "paper_signals_clean_for_validation": not bool(htf_diagnostic) or bool(htf_diagnostic.get("paper_signals_clean_for_validation", True)),
         "safety": dict(SAFETY_FLAGS),
     }
     _write_outputs(output_dir=config.output_dir, rows=output_rows, summary=summary)
@@ -512,6 +586,8 @@ def main(argv: list[str] | None = None) -> int:
         reset_state=bool(args.reset_state),
         append=bool(args.append),
         max_candles_per_run=args.max_candles_per_run,
+        enforce_htf_freshness=not bool(args.allow_stale_htf_context),
+        htf_report_dir=Path(args.htf_report_dir) if args.htf_report_dir else None,
     )
     summary = run_scanner(config)
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))

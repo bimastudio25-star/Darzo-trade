@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -16,8 +17,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.audit_xauusd_data import build_audit, write_audit_report
 from scripts.fetch_xauusd_mt5_candles import CollectorConfig, run_collector
-from scripts.import_xauusd_candles import build_ingestion, write_ingestion_report
+from scripts.import_xauusd_candles import CsvReplacePermissionError, build_ingestion, write_ingestion_report
 from scripts.run_strategy_3_paper_shadow_scanner import ShadowScannerConfig, run_scanner
+from scripts.strategy_3_htf_freshness import analyze_htf_freshness, write_h4_quarantine_report
 
 SAFETY = {
     "live_trading_enabled": False,
@@ -26,6 +28,8 @@ SAFETY = {
     "broker_order_functions_called": False,
     "order_send_called": False,
 }
+
+H4_DIAGNOSTIC_DIR = Path("backtests/reports/strategy_3_h4_quarantine_diagnostic")
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class PipelineConfig:
     run_scanner: bool
     from_timestamp: str | None
     max_loops: int | None
+    force_pipeline_lock: bool = False
     data_dir: Path = Path("data")
     incoming_dir: Path = Path("incoming_data/XAUUSD")
     reports_dir: Path = Path("backtests/reports/strategy_3_local_paper_pipeline")
@@ -65,6 +70,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-scanner", action="store_true", default=False)
     parser.add_argument("--from-timestamp", default=None)
     parser.add_argument("--max-loops", type=int, default=None)
+    parser.add_argument("--force-pipeline-lock", action="store_true", default=False)
     return parser.parse_args(argv)
 
 
@@ -97,6 +103,9 @@ def _has_blocker(flags: list[str]) -> bool:
         "NON_MONOTONIC_TIMESTAMPS_DETECTED",
         "INVALID_OHLC_DETECTED",
         "MISSING_OHLC_VALUES_DETECTED",
+        "INGESTION_FILE_LOCKED",
+        "FILE_LOCKED_DURING_REPLACE",
+        "PARTIAL_APPLY_FAILED",
     }
     return bool(blockers & effective_flags)
 
@@ -104,6 +113,63 @@ def _has_blocker(flags: list[str]) -> bool:
 def _audit_structurally_clean(audit: dict[str, Any]) -> bool:
     flags = set(audit.get("verdict_flags", []))
     return not bool(flags & {"DATA_AUDIT_FAILED", "DUPLICATE_TIMESTAMPS_DETECTED", "NON_MONOTONIC_TIMESTAMPS_DETECTED", "INVALID_OHLC_DETECTED", "MISSING_OHLC_VALUES_DETECTED"})
+
+
+def _onedrive_warning(path: Path) -> str | None:
+    resolved = str(path.resolve()).lower()
+    if "onedrive" not in resolved:
+        return None
+    return (
+        "ONEDRIVE_PATH_FILE_LOCK_RISK: Repository/data path is under OneDrive. "
+        "OneDrive sync can temporarily lock CSV files during replace. Consider pausing "
+        "OneDrive sync while the paper pipeline is running or moving repo/data outside OneDrive."
+    )
+
+
+def _parse_iso_datetime(value: Any) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _lock_path(cfg: PipelineConfig) -> Path:
+    return cfg.reports_dir / "pipeline.lock"
+
+
+def _acquire_pipeline_lock(cfg: PipelineConfig) -> tuple[bool, str | None]:
+    if not cfg.loop:
+        return True, None
+    path = _lock_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not cfg.force_pipeline_lock:
+        return False, f"duplicate_pipeline_warning: existing lock file at {path}. Use --force-pipeline-lock only after confirming no other pipeline is running."
+    payload = {
+        "pid": os.getpid(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "command": " ".join(sys.argv),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return True, None
+
+
+def _release_pipeline_lock(cfg: PipelineConfig) -> None:
+    if not cfg.loop:
+        return
+    path = _lock_path(cfg)
+    try:
+        if path.exists():
+            lock = json.loads(path.read_text(encoding="utf-8"))
+            if int(lock.get("pid", -1)) == os.getpid():
+                path.unlink()
+    except Exception:
+        pass
 
 
 def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
@@ -163,21 +229,45 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         dry_ok = not _has_blocker(dry_flags)
         new_rows = int(dry_summary.get("total_new_rows_added", 0))
         if cfg.apply and dry_ok and new_rows > 0:
-            apply_summary = build_ingestion(
-                source_dir=cfg.incoming_dir,
-                data_dir=cfg.data_dir,
-                symbol=cfg.symbol,
-                timeframes=cfg.timeframes,
-                dry_run=False,
-                apply=True,
-                backup=True,
-                no_backup=False,
-                prefer_incoming=False,
-                strict=False,
-                run_paper_scanner_after_ingest=False,
-            )
+            try:
+                apply_summary = build_ingestion(
+                    source_dir=cfg.incoming_dir,
+                    data_dir=cfg.data_dir,
+                    symbol=cfg.symbol,
+                    timeframes=cfg.timeframes,
+                    dry_run=False,
+                    apply=True,
+                    backup=True,
+                    no_backup=False,
+                    prefer_incoming=False,
+                    strict=False,
+                    run_paper_scanner_after_ingest=False,
+                )
+            except CsvReplacePermissionError as exc:
+                apply_summary = {
+                    "verdict_flags": ["INGESTION_FILE_LOCKED", "FILE_LOCKED_DURING_REPLACE", "PARTIAL_APPLY_FAILED"],
+                    "ingestion_apply_status": "file_locked",
+                    "failed_timeframe": None,
+                    "failed_path": str(exc.target_path),
+                    "temp_path_preserved": str(exc.temp_path),
+                    "replace_attempts": exc.attempts,
+                    "completed_timeframes": [],
+                    "skipped_timeframes_after_failure": [],
+                    "scanner_skipped_due_to_ingestion_failure": True,
+                    "file_lock_error": exc.to_dict(),
+                    "timeframes": [],
+                    "total_new_rows_added": new_rows,
+                }
             write_ingestion_report(apply_summary, Path("backtests/reports/strategy_3_data_ingestion"))
             _write_event(events_path, {"step": "import_apply", "verdict_flags": apply_summary.get("verdict_flags", [])})
+            if "FILE_LOCKED_DURING_REPLACE" in apply_summary.get("verdict_flags", []):
+                print(
+                    f"File locked while replacing {apply_summary.get('failed_path')}. "
+                    f"Temp file preserved at {apply_summary.get('temp_path_preserved')}. "
+                    "This is usually caused by Excel/VSCode/OneDrive/another pipeline process. "
+                    "The loop will retry next cycle.",
+                    file=sys.stderr,
+                )
         elif new_rows == 0:
             flags.append("LOCAL_PIPELINE_NO_NEW_ROWS")
         elif not cfg.apply:
@@ -187,8 +277,30 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
     write_audit_report(audit, Path("backtests/reports/strategy_3_data_ingestion"))
     _write_event(events_path, {"step": "audit", "verdict_flags": audit.get("verdict_flags", [])})
 
+    htf_diagnostic = analyze_htf_freshness(
+        data_dir=cfg.data_dir,
+        symbol=cfg.symbol,
+        incoming_dir=cfg.incoming_dir,
+        collector_summary=fetch,
+        now_utc=_parse_iso_datetime(fetch.get("date_to")),
+    )
+    write_h4_quarantine_report(htf_diagnostic, H4_DIAGNOSTIC_DIR)
+    _write_event(
+        events_path,
+        {
+            "step": "htf_freshness",
+            "htf_freshness_status": htf_diagnostic.get("htf_freshness_status"),
+            "stale_timeframes": htf_diagnostic.get("stale_timeframes", []),
+        },
+    )
+
     audit_ok = _audit_structurally_clean(audit)
-    data_ready_for_scanner = audit_ok and (apply_summary is not None or (dry_summary is not None and int(dry_summary.get("total_new_rows_added", 0)) == 0))
+    ingestion_apply_status = apply_summary.get("ingestion_apply_status") if apply_summary else None
+    scanner_skipped_due_to_ingestion_failure = bool(apply_summary and apply_summary.get("scanner_skipped_due_to_ingestion_failure"))
+    data_ready_for_scanner = audit_ok and (
+        (apply_summary is not None and ingestion_apply_status in {None, "ok"})
+        or (dry_summary is not None and int(dry_summary.get("total_new_rows_added", 0)) == 0)
+    )
     if cfg.run_scanner and data_ready_for_scanner:
         scanner = run_scanner(
             ShadowScannerConfig(
@@ -201,9 +313,11 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
                 incremental=True,
                 from_timestamp=cfg.from_timestamp,
                 append=True,
+                htf_report_dir=H4_DIAGNOSTIC_DIR,
             )
         )
         _write_event(events_path, {"step": "scanner", "signals_detected": scanner.get("signals_detected", 0)})
+        write_h4_quarantine_report(htf_diagnostic, H4_DIAGNOSTIC_DIR)
 
     if _has_blocker(fetch_flags):
         flags.append("LOCAL_PIPELINE_FETCH_FAILED")
@@ -211,6 +325,8 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         flags.append("LOCAL_PIPELINE_IMPORT_DRY_RUN_FAILED")
     if apply_summary and _has_blocker(list(apply_summary.get("verdict_flags", []))):
         flags.append("LOCAL_PIPELINE_IMPORT_APPLY_FAILED")
+    if apply_summary and "FILE_LOCKED_DURING_REPLACE" in apply_summary.get("verdict_flags", []):
+        flags.append("LOCAL_PIPELINE_FILE_LOCKED_RETRY_NEXT_LOOP")
     if not audit_ok:
         flags.append("LOCAL_PIPELINE_AUDIT_FAILED")
     if cfg.run_scanner and data_ready_for_scanner and scanner is None:
@@ -247,8 +363,38 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         "forming_candles_skipped_by_timeframe": fetch.get("forming_candles_skipped_by_timeframe"),
         "import_dry_run_status": dry_summary.get("verdict_flags") if dry_summary else None,
         "import_apply_status": apply_summary.get("verdict_flags") if apply_summary else None,
+        "ingestion_apply_status": ingestion_apply_status or ("dry_run_only" if not cfg.apply else None),
+        "failed_timeframe": apply_summary.get("failed_timeframe") if apply_summary else None,
+        "failed_path": apply_summary.get("failed_path") if apply_summary else None,
+        "temp_path_preserved": apply_summary.get("temp_path_preserved") if apply_summary else None,
+        "replace_attempts": apply_summary.get("replace_attempts") if apply_summary else None,
+        "completed_timeframes": apply_summary.get("completed_timeframes") if apply_summary else [],
+        "scanner_skipped_due_to_ingestion_failure": scanner_skipped_due_to_ingestion_failure,
+        "loop_will_retry": bool(cfg.loop and apply_summary and "FILE_LOCKED_DURING_REPLACE" in apply_summary.get("verdict_flags", [])),
+        "one_drive_warning": _onedrive_warning(Path.cwd()),
+        "duplicate_pipeline_warning": None,
         "audit_status": audit.get("verdict_flags"),
         "scanner_status": scanner.get("no_signal_reason") if scanner else None,
+        "htf_freshness_status": htf_diagnostic.get("htf_freshness_status"),
+        "stale_timeframes": htf_diagnostic.get("stale_timeframes", []),
+        "quarantined_timeframes": htf_diagnostic.get("quarantined_timeframes", []),
+        "h4_quarantine_status": htf_diagnostic.get("h4_quarantine_status"),
+        "h4_latest_existing_timestamp": htf_diagnostic.get("h4_latest_existing_timestamp"),
+        "h4_expected_latest_closed_timestamp": htf_diagnostic.get("h4_expected_latest_closed_timestamp"),
+        "h4_stale_by_bars": htf_diagnostic.get("h4_stale_by_bars"),
+        "h4_quarantine_reason": htf_diagnostic.get("h4_quarantine_reason"),
+        "h4_recommended_action": htf_diagnostic.get("h4_recommended_action"),
+        "scanner_blocked_due_to_stale_htf": bool(
+            (scanner or {}).get("scanner_blocked_due_to_stale_htf")
+            or htf_diagnostic.get("scanner_blocked_due_to_stale_htf")
+        ),
+        "paper_signals_clean_for_validation": bool(
+            (scanner or {}).get(
+                "paper_signals_clean_for_validation",
+                htf_diagnostic.get("paper_signals_clean_for_validation", False),
+            )
+        ),
+        "d1_closed_candle_lag_expected": htf_diagnostic.get("d1_closed_candle_lag_expected"),
         "rows_added_by_timeframe": rows_added,
         "latest_timestamp_by_timeframe": latest_by_tf,
         "paper_signals_total_after_run": scanner.get("paper_signals_total_after_run") if scanner else None,
@@ -272,6 +418,21 @@ def _pipeline_markdown(summary: dict[str, Any]) -> str:
             f"- broker symbol: `{summary['symbol_broker']}`",
             f"- apply_enabled: `{summary['apply_enabled']}`",
             f"- verdict_flags: `{', '.join(summary['verdict_flags'])}`",
+            f"- ingestion_apply_status: `{summary.get('ingestion_apply_status')}`",
+            f"- failed_timeframe: `{summary.get('failed_timeframe')}`",
+            f"- failed_path: `{summary.get('failed_path')}`",
+            f"- temp_path_preserved: `{summary.get('temp_path_preserved')}`",
+            f"- scanner_skipped_due_to_ingestion_failure: `{summary.get('scanner_skipped_due_to_ingestion_failure')}`",
+            f"- htf_freshness_status: `{summary.get('htf_freshness_status')}`",
+            f"- stale_timeframes: `{', '.join(summary.get('stale_timeframes', []))}`",
+            f"- h4_quarantine_status: `{summary.get('h4_quarantine_status')}`",
+            f"- h4_latest_existing_timestamp: `{summary.get('h4_latest_existing_timestamp')}`",
+            f"- h4_expected_latest_closed_timestamp: `{summary.get('h4_expected_latest_closed_timestamp')}`",
+            f"- h4_stale_by_bars: `{summary.get('h4_stale_by_bars')}`",
+            f"- scanner_blocked_due_to_stale_htf: `{summary.get('scanner_blocked_due_to_stale_htf')}`",
+            f"- paper_signals_clean_for_validation: `{summary.get('paper_signals_clean_for_validation')}`",
+            f"- d1_closed_candle_lag_expected: `{summary.get('d1_closed_candle_lag_expected')}`",
+            f"- one_drive_warning: `{summary.get('one_drive_warning')}`",
             f"- new_paper_signals_this_run: `{summary['new_paper_signals_this_run']}`",
             f"- paper_signals_total_after_run: `{summary['paper_signals_total_after_run']}`",
             "",
@@ -282,6 +443,27 @@ def _pipeline_markdown(summary: dict[str, Any]) -> str:
 def run_pipeline(cfg: PipelineConfig) -> dict[str, Any]:
     loops = 0
     last_summary: dict[str, Any] = {}
+    lock_acquired, duplicate_warning = _acquire_pipeline_lock(cfg)
+    if not lock_acquired:
+        summary = {
+            "run_started_at": datetime.now(timezone.utc).isoformat(),
+            "run_finished_at": datetime.now(timezone.utc).isoformat(),
+            "runtime_seconds": 0.0,
+            "loop_mode": cfg.loop,
+            "interval_minutes": cfg.interval_minutes,
+            "loops_completed": 0,
+            "symbol": cfg.symbol,
+            "symbol_broker": cfg.symbol_broker,
+            "apply_enabled": cfg.apply,
+            "verdict_flags": ["LOCAL_PIPELINE_BLOCKED", "DUPLICATE_PIPELINE_LOCK_DETECTED"],
+            "duplicate_pipeline_warning": duplicate_warning,
+            "one_drive_warning": _onedrive_warning(Path.cwd()),
+            "safety": dict(SAFETY),
+        }
+        cfg.reports_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.reports_dir / "pipeline_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        (cfg.reports_dir / "pipeline_run.md").write_text(_pipeline_markdown({**summary, "new_paper_signals_this_run": 0, "paper_signals_total_after_run": None}), encoding="utf-8")
+        return summary
     try:
         while True:
             loops += 1
@@ -295,6 +477,8 @@ def run_pipeline(cfg: PipelineConfig) -> dict[str, Any]:
     except KeyboardInterrupt:
         last_summary = last_summary or {"verdict_flags": []}
         last_summary["verdict_flags"] = list(dict.fromkeys(list(last_summary.get("verdict_flags", [])) + ["LOCAL_PIPELINE_STOPPED_BY_USER"]))
+    finally:
+        _release_pipeline_lock(cfg)
     return last_summary
 
 
@@ -314,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         run_scanner=not bool(args.skip_scanner) and bool(args.run_scanner),
         from_timestamp=args.from_timestamp,
         max_loops=args.max_loops,
+        force_pipeline_lock=bool(args.force_pipeline_lock),
     )
     summary = run_pipeline(cfg)
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))
