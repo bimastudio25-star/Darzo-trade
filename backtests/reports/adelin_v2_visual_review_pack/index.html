@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Adelin v2 Visual Review Pack</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; margin: 0; color: #172033; background: #f7f7f4; }
+    header { background: #1f2937; color: white; padding: 18px 24px; }
+    main { padding: 20px 24px 36px; max-width: 1220px; margin: 0 auto; }
+    a { color: #0f766e; }
+    .warning { border-left: 5px solid #b91c1c; background: #fff1f2; padding: 12px 14px; margin: 16px 0; font-weight: 700; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 18px 0; }
+    .summary div { background: white; border: 1px solid #d7d7d2; padding: 10px; }
+    table { border-collapse: collapse; width: 100%; background: white; }
+    th, td { border: 1px solid #d7d7d2; padding: 8px 9px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { background: #eceee8; }
+    .metadata th { width: 260px; }
+    .chart { width: 100%; border: 1px solid #d7d7d2; background: white; }
+    .small { color: #4b5563; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header><h1>Adelin v2 Visual Review Pack</h1></header>
+  <main>
+<p class="warning">Research-only. Candidate windows are for visual labeling only and are not trade signals. Adelin live remains disabled.</p>
+<div class="summary"><div><strong>total_samples</strong><br>40</div>
+<div><strong>source_modes_used</strong><br>CANDIDATE_WINDOW_MODE</div>
+<div><strong>candidate_windows_generated</strong><br>40</div>
+<div><strong>charts_generated</strong><br>40</div>
+<div><strong>html_pages_generated</strong><br>40</div></div>
+<p><a href="manual_labels_template.csv">manual_labels_template.csv</a> | <a href="README_manual_review.md">README_manual_review.md</a> | <a href="review_pack_summary.json">review_pack_summary.json</a></p>
+<table>
+  <thead>
+    <tr><th>sample_id</th><th>source_mode</th><th>anchor timestamp</th><th>direction guess</th><th>candidate reason codes</th><th>chart</th><th>sample page</th><th>recommended manual labels to fill</th></tr>
+  </thead>
+  <tbody><tr><td>sample_001</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-14T10:00:00+00:00</td><td>UNKNOWN</td><td>NUMBER_THEORY_LEVEL_NEAR</td><td><a href="charts/sample_001.svg">chart</a></td><td><a href="examples/sample_001.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_002</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-14T07:00:00+00:00</td><td>SHORT</td><td>M15_SWING_HIGH_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_002.svg">chart</a></td><td><a href="examples/sample_002.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_003</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-15T03:30:00+00:00</td><td>LONG</td><td>M15_SWING_LOW_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_003.svg">chart</a></td><td><a href="examples/sample_003.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_004</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-20T04:15:00+00:00</td><td>LONG</td><td>LARGE_LOWER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_004.svg">chart</a></td><td><a href="examples/sample_004.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_005</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-23T16:30:00+00:00</td><td>SHORT</td><td>LARGE_UPPER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_005.svg">chart</a></td><td><a href="examples/sample_005.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_006</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-30T13:45:00+00:00</td><td>UNKNOWN</td><td>NEW_YORK_OPEN_CONTEXT</td><td><a href="charts/sample_006.svg">chart</a></td><td><a href="examples/sample_006.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_007</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-08-05T06:45:00+00:00</td><td>UNKNOWN</td><td>LONDON_OPEN_CONTEXT</td><td><a href="charts/sample_007.svg">chart</a></td><td><a href="examples/sample_007.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_008</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-07T01:00:00+00:00</td><td>UNKNOWN</td><td>ASIA_OPEN_CONTEXT</td><td><a href="charts/sample_008.svg">chart</a></td><td><a href="examples/sample_008.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_009</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-15T07:00:00+00:00</td><td>UNKNOWN</td><td>NUMBER_THEORY_LEVEL_NEAR</td><td><a href="charts/sample_009.svg">chart</a></td><td><a href="examples/sample_009.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_010</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-14T12:15:00+00:00</td><td>SHORT</td><td>M15_SWING_HIGH_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_010.svg">chart</a></td><td><a href="examples/sample_010.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_011</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-15T15:15:00+00:00</td><td>LONG</td><td>M15_SWING_LOW_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_011.svg">chart</a></td><td><a href="examples/sample_011.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_012</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-20T17:00:00+00:00</td><td>LONG</td><td>LARGE_LOWER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_012.svg">chart</a></td><td><a href="examples/sample_012.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_013</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-06-12T21:00:00+00:00</td><td>SHORT</td><td>LARGE_UPPER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_013.svg">chart</a></td><td><a href="examples/sample_013.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_014</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-06-14T13:15:00+00:00</td><td>UNKNOWN</td><td>NEW_YORK_OPEN_CONTEXT</td><td><a href="charts/sample_014.svg">chart</a></td><td><a href="examples/sample_014.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_015</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-06T08:00:00+00:00</td><td>UNKNOWN</td><td>LONDON_OPEN_CONTEXT</td><td><a href="charts/sample_015.svg">chart</a></td><td><a href="examples/sample_015.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_016</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-14T01:15:00+00:00</td><td>UNKNOWN</td><td>ASIA_OPEN_CONTEXT</td><td><a href="charts/sample_016.svg">chart</a></td><td><a href="examples/sample_016.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_017</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-15T13:00:00+00:00</td><td>UNKNOWN</td><td>NUMBER_THEORY_LEVEL_NEAR</td><td><a href="charts/sample_017.svg">chart</a></td><td><a href="examples/sample_017.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_018</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-14T15:15:00+00:00</td><td>SHORT</td><td>M15_SWING_HIGH_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_018.svg">chart</a></td><td><a href="examples/sample_018.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_019</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-16T09:45:00+00:00</td><td>LONG</td><td>M15_SWING_LOW_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_019.svg">chart</a></td><td><a href="examples/sample_019.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_020</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-21T16:00:00+00:00</td><td>LONG</td><td>LARGE_LOWER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_020.svg">chart</a></td><td><a href="examples/sample_020.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_021</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-07-01T17:00:00+00:00</td><td>SHORT</td><td>LARGE_UPPER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_021.svg">chart</a></td><td><a href="examples/sample_021.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_022</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-06-26T13:15:00+00:00</td><td>UNKNOWN</td><td>NEW_YORK_OPEN_CONTEXT</td><td><a href="charts/sample_022.svg">chart</a></td><td><a href="examples/sample_022.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_023</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-07T08:00:00+00:00</td><td>UNKNOWN</td><td>LONDON_OPEN_CONTEXT</td><td><a href="charts/sample_023.svg">chart</a></td><td><a href="examples/sample_023.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_024</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-18T01:00:00+00:00</td><td>UNKNOWN</td><td>ASIA_OPEN_CONTEXT</td><td><a href="charts/sample_024.svg">chart</a></td><td><a href="examples/sample_024.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_025</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-15T17:30:00+00:00</td><td>UNKNOWN</td><td>NUMBER_THEORY_LEVEL_NEAR</td><td><a href="charts/sample_025.svg">chart</a></td><td><a href="examples/sample_025.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_026</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-14T17:00:00+00:00</td><td>SHORT</td><td>M15_SWING_HIGH_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_026.svg">chart</a></td><td><a href="examples/sample_026.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_027</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-16T12:30:00+00:00</td><td>LONG</td><td>M15_SWING_LOW_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_027.svg">chart</a></td><td><a href="examples/sample_027.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_028</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-06-12T17:00:00+00:00</td><td>LONG</td><td>LARGE_LOWER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_028.svg">chart</a></td><td><a href="examples/sample_028.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_029</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-07-30T20:00:00+00:00</td><td>SHORT</td><td>LARGE_UPPER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_029.svg">chart</a></td><td><a href="examples/sample_029.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_030</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-07-17T13:30:00+00:00</td><td>UNKNOWN</td><td>NEW_YORK_OPEN_CONTEXT</td><td><a href="charts/sample_030.svg">chart</a></td><td><a href="examples/sample_030.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_031</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-08T08:00:00+00:00</td><td>UNKNOWN</td><td>LONDON_OPEN_CONTEXT</td><td><a href="charts/sample_031.svg">chart</a></td><td><a href="examples/sample_031.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_032</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-25T01:15:00+00:00</td><td>UNKNOWN</td><td>ASIA_OPEN_CONTEXT</td><td><a href="charts/sample_032.svg">chart</a></td><td><a href="examples/sample_032.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_033</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-16T02:00:00+00:00</td><td>UNKNOWN</td><td>NUMBER_THEORY_LEVEL_NEAR</td><td><a href="charts/sample_033.svg">chart</a></td><td><a href="examples/sample_033.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_034</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-14T21:15:00+00:00</td><td>SHORT</td><td>M15_SWING_HIGH_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_034.svg">chart</a></td><td><a href="examples/sample_034.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_035</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-05-16T15:30:00+00:00</td><td>LONG</td><td>M15_SWING_LOW_SWEEP_VISUAL_CANDIDATE</td><td><a href="charts/sample_035.svg">chart</a></td><td><a href="examples/sample_035.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_036</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-07-05T15:45:00+00:00</td><td>LONG</td><td>LARGE_LOWER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_036.svg">chart</a></td><td><a href="examples/sample_036.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_037</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-08-02T15:45:00+00:00</td><td>SHORT</td><td>LARGE_UPPER_WICK_REVERSAL_VISUAL_CANDIDATE</td><td><a href="charts/sample_037.svg">chart</a></td><td><a href="examples/sample_037.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_038</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-07-25T13:45:00+00:00</td><td>UNKNOWN</td><td>NEW_YORK_OPEN_CONTEXT</td><td><a href="charts/sample_038.svg">chart</a></td><td><a href="examples/sample_038.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_039</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-11-15T08:00:00+00:00</td><td>UNKNOWN</td><td>LONDON_OPEN_CONTEXT</td><td><a href="charts/sample_039.svg">chart</a></td><td><a href="examples/sample_039.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr>
+<tr><td>sample_040</td><td>CANDIDATE_WINDOW_MODE</td><td>2024-12-02T01:15:00+00:00</td><td>UNKNOWN</td><td>ASIA_OPEN_CONTEXT</td><td><a href="charts/sample_040.svg">chart</a></td><td><a href="examples/sample_040.html">page</a></td><td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td></tr></tbody>
+</table>
+</main>
+</body>
+</html>

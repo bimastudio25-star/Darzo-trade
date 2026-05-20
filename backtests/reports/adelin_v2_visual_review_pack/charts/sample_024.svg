@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="804" viewBox="0 0 1120 804">
+<style>
+text{font-family:Arial,Helvetica,sans-serif}.title{font-size:21px;font-weight:700;fill:#1f2937}.subtitle{font-size:12px;fill:#4b5563}.panel-title{font-size:15px;font-weight:700;fill:#111827}.muted{font-size:13px;fill:#6b7280}.plot-bg{fill:#f8fafc;stroke:#cbd5e1;stroke-width:1}.up-body{fill:#15803d;stroke:#14532d;stroke-width:.8}.down-body{fill:#b91c1c;stroke:#7f1d1d;stroke-width:.8}.up-wick{stroke:#14532d;stroke-width:1}.down-wick{stroke:#7f1d1d;stroke-width:1}.sweep-line{stroke:#7c3aed;stroke-width:1.6;stroke-dasharray:6 4}.number-line{stroke:#0f766e;stroke-width:1.4;stroke-dasharray:3 4}.entry-line{stroke:#2563eb;stroke-width:1.4}.sl-line{stroke:#dc2626;stroke-width:1.4}.tp-line{stroke:#16a34a;stroke-width:1.4}.level-label,.axis-label{font-size:11px;fill:#374151}
+</style>
+<text x="28" y="28" class="title">Adelin v2 visual review sample sample_024</text>
+<text x="28" y="48" class="subtitle">Candidate windows are for visual labeling only and are not trade signals.</text>
+<text x="560" y="48" class="subtitle" text-anchor="middle">ASIA_OPEN_CONTEXT</text>
+<text x="70" y="82" class="panel-title">H1 liquidity context</text>
+<rect x="70" y="96" width="1010" height="192" class="plot-bg"/>
+<text x="82" y="138" class="muted">No candles available for this timeframe/window.</text>
+<text x="70" y="332" class="panel-title">M15 liquidity / reaction context</text>
+<rect x="70" y="346" width="1010" height="192" class="plot-bg"/>
+<line x1="90.20" y1="479.81" x2="90.20" y2="524.76" class="up-wick"/>
+<rect x="86.20" y="480.93" width="8.00" height="43.06" class="up-body"/>
+<line x1="130.60" y1="469.87" x2="130.60" y2="491.74" class="up-wick"/>
+<rect x="126.60" y="477.72" width="8.00" height="6.12" class="up-body"/>
+<line x1="171.00" y1="471.91" x2="171.00" y2="486.44" class="up-wick"/>
+<rect x="167.00" y="476.09" width="8.00" height="3.21" class="up-body"/>
+<line x1="211.40" y1="474.77" x2="211.40" y2="496.48" class="down-wick"/>
+<rect x="207.40" y="476.09" width="8.00" height="14.98" class="down-body"/>
+<line x1="251.80" y1="480.93" x2="251.80" y2="495.46" class="up-wick"/>
+<rect x="247.80" y="488.22" width="8.00" height="3.11" class="up-body"/>
+<line x1="292.20" y1="485.83" x2="292.20" y2="498.87" class="down-wick"/>
+<rect x="288.20" y="488.17" width="8.00" height="4.18" class="down-body"/>
+<line x1="332.60" y1="482.36" x2="332.60" y2="494.08" class="up-wick"/>
+<rect x="328.60" y="482.51" width="8.00" height="9.22" class="up-body"/>
+<line x1="373.00" y1="461.67" x2="373.00" y2="485.26" class="up-wick"/>
+<rect x="369.00" y="464.78" width="8.00" height="17.68" class="up-body"/>
+<line x1="413.40" y1="441.18" x2="413.40" y2="464.78" class="up-wick"/>
+<rect x="409.40" y="446.64" width="8.00" height="18.14" class="up-body"/>
+<line x1="453.80" y1="376.16" x2="453.80" y2="449.08" class="up-wick"/>
+<rect x="449.80" y="376.36" width="8.00" height="70.38" class="up-body"/>
+<line x1="494.20" y1="359.24" x2="494.20" y2="393.59" class="down-wick"/>
+<rect x="490.20" y="376.31" width="8.00" height="14.22" class="down-body"/>
+<line x1="534.60" y1="390.68" x2="534.60" y2="420.60" class="down-wick"/>
+<rect x="530.60" y="390.68" width="8.00" height="20.84" class="down-body"/>
+<line x1="575.00" y1="370.86" x2="575.00" y2="412.55" class="up-wick"/>
+<rect x="571.00" y="386.15" width="8.00" height="25.84" class="up-body"/>
+<line x1="615.40" y1="373.10" x2="615.40" y2="386.50" class="up-wick"/>
+<rect x="611.40" y="380.44" width="8.00" height="5.40" class="up-body"/>
+<line x1="655.80" y1="376.36" x2="655.80" y2="394.40" class="down-wick"/>
+<rect x="651.80" y="380.80" width="8.00" height="1.53" class="down-body"/>
+<line x1="696.20" y1="378.96" x2="696.20" y2="398.48" class="down-wick"/>
+<rect x="692.20" y="381.97" width="8.00" height="8.51" class="down-body"/>
+<line x1="736.60" y1="383.60" x2="736.60" y2="401.08" class="down-wick"/>
+<rect x="732.60" y="390.68" width="8.00" height="9.84" class="down-body"/>
+<line x1="777.00" y1="395.83" x2="777.00" y2="407.60" class="up-wick"/>
+<rect x="773.00" y="399.19" width="8.00" height="1.07" class="up-body"/>
+<line x1="817.40" y1="391.09" x2="817.40" y2="403.17" class="down-wick"/>
+<rect x="813.40" y="399.35" width="8.00" height="1.02" class="down-body"/>
+<line x1="857.80" y1="397.00" x2="857.80" y2="404.80" class="up-wick"/>
+<rect x="853.80" y="397.05" width="8.00" height="3.31" class="up-body"/>
+<line x1="898.20" y1="387.27" x2="898.20" y2="400.11" class="up-wick"/>
+<rect x="894.20" y="392.77" width="8.00" height="4.33" class="up-body"/>
+<line x1="938.60" y1="386.76" x2="938.60" y2="394.10" class="up-wick"/>
+<rect x="934.60" y="387.78" width="8.00" height="4.94" class="up-body"/>
+<line x1="979.00" y1="385.74" x2="979.00" y2="392.21" class="down-wick"/>
+<rect x="975.00" y="387.73" width="8.00" height="1.83" class="down-body"/>
+<line x1="1019.40" y1="380.44" x2="1019.40" y2="392.72" class="up-wick"/>
+<rect x="1015.40" y="384.72" width="8.00" height="5.15" class="up-body"/>
+<line x1="1059.80" y1="384.52" x2="1059.80" y2="398.99" class="down-wick"/>
+<rect x="1055.80" y="385.03" width="8.00" height="12.94" class="down-body"/>
+<text x="70" y="556" class="axis-label">2024-11-18 01:00:00+00:00 to 2024-11-18 07:00:00+00:00</text>
+<text x="1080" y="556" text-anchor="end" class="axis-label">2562.19 - 2599.87</text>
+<text x="70" y="582" class="panel-title">M1 execution window</text>
+<rect x="70" y="596" width="1010" height="192" class="plot-bg"/>
+<text x="82" y="638" class="muted">No candles available for this timeframe/window.</text>
+</svg>
