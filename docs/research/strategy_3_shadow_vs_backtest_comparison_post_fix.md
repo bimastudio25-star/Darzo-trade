@@ -1,123 +1,132 @@
-# Strategy 3 Shadow vs Backtest Comparison Post Fix
+# Strategy 3 Shadow vs Backtest Comparison - Post H4 Repair
 
 Status: research/paper-only runtime-vs-backtest consistency check. This report does not make Strategy 3 live-ready.
 
 ## Context
 
-The closed-candle MT5 pipeline fix allowed Strategy 3 paper accumulation to advance after the local data update stalled on forming H4/D1 candles.
+Strategy 3 paper validation was blocked while H4 was stale/quarantined. The Windows file-lock fix, H4 freshness diagnostics, H4 source diagnostic, and safe H4 repair are now in place.
 
-Latest local paper pipeline result:
+The H4 repair replaced one material conflict row at `2026-05-19T00:00:00+00:00` and appended 10 missing closed H4 bars. Local H4 now reaches `2026-05-20T16:00:00+00:00`; post-repair OHLC overlap is `298/298 = 1.0`.
 
-- M1 rows added: 1135
-- M5 rows added: 226
-- M15 rows added: 74
-- H1 rows added: 17
-- H4 rows added: 0, quarantined/unchanged
-- D1 rows added: 0, forming/unchanged
-- scanner driver candles processed: 74
-- paper signals detected: 27
-- paper signals accepted after cooldown: 12
-- cooldown-blocked signals: 15
+The current paper scanner output contains 64 cumulative Strategy 3 paper signals and the pipeline summary marks `paper_signals_clean_for_validation = true`.
 
-The purpose of this branch is to verify that Strategy 3 paper/runtime scanner signals match the Strategy 3 backtest/research path on the same local data window.
-
-## Input Files
-
-- Paper signals: `backtests/reports/strategy_3_paper_shadow_scanner/paper_signals.csv`
-- Scanner summary: `backtests/reports/strategy_3_paper_shadow_scanner/scanner_summary.json`
-- Data: `data/XAUUSD`
-- Strategy: `strategy_3_vwap_1r`
-- Cooldown: 120 minutes
-
-## Safety Confirmation
+## Safety
 
 - no live trading
-- no Telegram trade signals
+- no Telegram
 - no orders
 - no broker execution
 - no `order_send`
-- no Strategy 3 entry logic changes
-- no VWAP changes
-- no cooldown changes
+- no Strategy 3 logic changes
+- no VWAP, sigma, or cooldown changes
 
-## Comparison Window
+## Inputs
 
-The comparison uses the scanner incremental state, not a signal-derived synthetic window:
+- paper signals: `backtests/reports/strategy_3_paper_shadow_scanner/paper_signals.csv`
+- scanner summary: `backtests/reports/strategy_3_paper_shadow_scanner/scanner_summary.json`
+- pipeline summary: `backtests/reports/strategy_3_local_paper_pipeline/pipeline_summary.json`
+- H4 repair report: `backtests/reports/strategy_3_h4_safe_repair/h4_repair_report.json`
+- H4 post-repair diagnostic: `backtests/reports/strategy_3_h4_data_source_diagnostic_post_repair/h4_data_source_diagnostic.json`
+- local data: `data/XAUUSD`
 
-- backtest_from: `2026-05-19T01:00:00+00:00`
-- backtest_to: `2026-05-19T19:30:00+00:00`
+## Method
+
+The comparison generated Strategy 3 backtest-comparable signals over the paper-signal window only, using XAUUSD, Strategy 3, cooldown 120 minutes, timestamp tolerance `0s`, and price tolerance `0.01 USD`.
+
+Command:
+
+```powershell
+python scripts/compare_strategy_3_paper_vs_backtest.py --symbol XAUUSD --data-dir data --paper-signals-path backtests/reports/strategy_3_paper_shadow_scanner/paper_signals.csv --scanner-summary-path backtests/reports/strategy_3_paper_shadow_scanner/scanner_summary.json --pipeline-summary-path backtests/reports/strategy_3_local_paper_pipeline/pipeline_summary.json --output-dir backtests/reports/strategy_3_shadow_vs_backtest_comparison_post_fix --cooldown-minutes 120 --timestamp-tolerance-seconds 0 --price-tolerance 0.01 --dry-run
+```
+
+Window:
+
 - earliest paper signal: `2026-05-19T02:00:00+00:00`
-- latest paper signal: `2026-05-19T16:00:00+00:00`
-- timestamp tolerance: 0 seconds
-- price tolerance: 0.01 USD
+- latest paper signal: `2026-05-20T22:00:00+00:00`
+- backtest signal scan start: `2026-05-19T01:00:00+00:00`
+- backtest signal scan end: `2026-05-20T22:05:00+00:00`
+- data warmup start reported: `2026-05-18T02:00:00+00:00`
 
-The comparison evaluates the same M15 driver-candle interval that the incremental scanner processed.
+## Data Integrity
 
-## All-Detected Comparison
+- H4 freshness: `fresh`
+- H4 stale_by_bars: `0`
+- H4 latest existing timestamp: `2026-05-20T16:00:00+00:00`
+- H4 expected latest closed timestamp: `2026-05-20T16:00:00+00:00`
+- post-repair OHLC match rate: `1.0`
+- post-repair OHLCV match rate: `0.0369`
+- mismatch type: `volume_only`
+- H4 backup: `data\XAUUSD\H4.csv.backup.20260520T222909Z`
+
+The remaining OHLCV mismatch is volume-only. It is non-blocking for this price-level runtime/backtest comparison.
+
+## Results
 
 | Metric | Value |
 |---|---:|
-| Paper signals | 27 |
-| Backtest signals | 27 |
-| Matched | 27 |
-| Mismatched | 0 |
-| Missing in backtest | 0 |
-| Extra in backtest | 0 |
-| Match rate | 100.00% |
+| Paper detected signals | 64 |
+| Paper accepted signals | 29 |
+| Paper cooldown-blocked signals | 35 |
+| Backtest detected signals | 65 |
+| Backtest accepted signals | 29 |
+| Backtest cooldown-blocked signals | 36 |
+| All-detected match rate | 92.31% |
+| Accepted-only match rate | 93.10% |
 
-## Accepted-Only Comparison
+All-detected mismatch categories:
 
-| Metric | Value |
-|---|---:|
-| Accepted paper signals | 12 |
-| Accepted backtest signals | 12 |
-| Matched | 12 |
-| Mismatched | 0 |
-| Missing in backtest | 0 |
-| Extra in backtest | 0 |
-| Match rate | 100.00% |
+- `STOP_LOSS_MISMATCH`: 3
+- `TAKE_PROFIT_MISMATCH`: 3
+- `COOLDOWN_STATUS_MISMATCH`: 1
+- `EXTRA_IN_BACKTEST`: 1
 
-## Mismatch Table
+Accepted-only mismatch categories:
 
-No mismatches were found.
+- `MISSING_IN_BACKTEST`: 1
+- `EXTRA_IN_BACKTEST`: 1
+- `STOP_LOSS_MISMATCH`: 1
+- `TAKE_PROFIT_MISMATCH`: 1
 
-The comparison matched:
+Field-level accepted-only rates:
 
-- timestamp
-- direction
-- entry price
-- stop loss
-- take profit
-- setup_mode
-- band_touched
-- cooldown status
-- VWAP/sigma context within strict tolerance
+- direction: `100%`
+- entry: `100%`
+- stop loss: `96.43%`
+- take profit: `96.43%`
+- setup_mode: `100%`
+- band_touched: `100%`
+- cooldown status on paired signals: `100%`
 
-## HTF Caveat
+Price mismatch stats:
 
-The comparison is valid for the runtime data state that produced the paper signals, but HTF freshness still needs monitoring:
+- all-detected max absolute diff: `0.68`
+- accepted-only max absolute diff: `0.68`
 
-- H4 was quarantined/unchanged due overlap mismatch.
-- D1 current forming candle was skipped.
-- M1/M5/M15/H1 were updated correctly.
+## Verdict Flags
 
-This caveat does not invalidate this runtime-vs-backtest comparison because both paths used the same local data state. It does mean HTF data repair/freshness should remain visible in future pipeline reports.
+- `PAPER_SIGNALS_CLEAN_FOR_VALIDATION`
+- `SHADOW_BACKTEST_MINOR_MISMATCHES`
+- `NO_LIVE_DEPLOYMENT_DECISION`
+- `STRATEGY_3_REMAINS_PAPER_ONLY`
 
-## Verdict
+## Interpretation
 
-- `SHADOW_BACKTEST_MATCH_CONFIRMED`
-- `RUNTIME_BACKTEST_CONSISTENCY_OK`
-- `SHADOW_BACKTEST_ACCEPTED_MATCH_OK`
-- `HTF_CONTEXT_CAVEAT_PRESENT`
+This is not a clean >=95% runtime/backtest pass. It is also not a strategy failure. The accepted-only comparison is close, but the strict threshold was not met.
 
-Strategy 3 remains research/paper-only. This is a runtime consistency pass, not profitability validation and not deployment approval.
+The comparison validates that most runtime/paper signals align with the backtest path after the H4 repair, but there are enough stop/target and one extra/missing accepted-signal asymmetry to require diagnostics before spread/slippage modeling.
 
-## Next Recommended Step
+This report does not validate profitability, edge, deployment, Telegram alerts, broker integration, or live readiness.
 
-Continue paper accumulation with the closed-candle pipeline.
+## Next Step
 
-When more paper signals accumulate, rerun this comparison. If consistency remains high, the next research branch remains:
+Recommended next branch:
 
-`feat/strategy-3-spread-slippage-model`
+`feat/strategy-3-runtime-comparison-diagnostics`
 
-Do not proceed to live alerts, broker integration, or orders before spread/slippage realism and separate risk review.
+Focus:
+
+- inspect the accepted-only extra/missing pair around `2026-05-20T01:45:00+00:00` and `2026-05-20T03:30:00+00:00`
+- inspect stop/TP drift around the mismatched `2026-05-20` signals
+- decide whether mismatches came from stale pre-repair paper rows, scanner state initialization, or a true runtime/backtest path divergence
+
+Do not proceed to spread/slippage modeling until accepted-only consistency reaches at least 95% or the mismatch is explicitly explained and bounded.
