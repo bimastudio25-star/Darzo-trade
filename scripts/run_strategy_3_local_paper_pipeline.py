@@ -19,6 +19,7 @@ from scripts.audit_xauusd_data import build_audit, write_audit_report
 from scripts.fetch_xauusd_mt5_candles import CollectorConfig, run_collector
 from scripts.import_xauusd_candles import CsvReplacePermissionError, build_ingestion, write_ingestion_report
 from scripts.run_strategy_3_paper_shadow_scanner import ShadowScannerConfig, run_scanner
+from scripts.strategy_3_htf_freshness import analyze_htf_freshness, write_h4_quarantine_report
 
 SAFETY = {
     "live_trading_enabled": False,
@@ -27,6 +28,8 @@ SAFETY = {
     "broker_order_functions_called": False,
     "order_send_called": False,
 }
+
+H4_DIAGNOSTIC_DIR = Path("backtests/reports/strategy_3_h4_quarantine_diagnostic")
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,19 @@ def _onedrive_warning(path: Path) -> str | None:
         "OneDrive sync can temporarily lock CSV files during replace. Consider pausing "
         "OneDrive sync while the paper pipeline is running or moving repo/data outside OneDrive."
     )
+
+
+def _parse_iso_datetime(value: Any) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
 
 
 def _lock_path(cfg: PipelineConfig) -> Path:
@@ -261,6 +277,23 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
     write_audit_report(audit, Path("backtests/reports/strategy_3_data_ingestion"))
     _write_event(events_path, {"step": "audit", "verdict_flags": audit.get("verdict_flags", [])})
 
+    htf_diagnostic = analyze_htf_freshness(
+        data_dir=cfg.data_dir,
+        symbol=cfg.symbol,
+        incoming_dir=cfg.incoming_dir,
+        collector_summary=fetch,
+        now_utc=_parse_iso_datetime(fetch.get("date_to")),
+    )
+    write_h4_quarantine_report(htf_diagnostic, H4_DIAGNOSTIC_DIR)
+    _write_event(
+        events_path,
+        {
+            "step": "htf_freshness",
+            "htf_freshness_status": htf_diagnostic.get("htf_freshness_status"),
+            "stale_timeframes": htf_diagnostic.get("stale_timeframes", []),
+        },
+    )
+
     audit_ok = _audit_structurally_clean(audit)
     ingestion_apply_status = apply_summary.get("ingestion_apply_status") if apply_summary else None
     scanner_skipped_due_to_ingestion_failure = bool(apply_summary and apply_summary.get("scanner_skipped_due_to_ingestion_failure"))
@@ -280,9 +313,11 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
                 incremental=True,
                 from_timestamp=cfg.from_timestamp,
                 append=True,
+                htf_report_dir=H4_DIAGNOSTIC_DIR,
             )
         )
         _write_event(events_path, {"step": "scanner", "signals_detected": scanner.get("signals_detected", 0)})
+        write_h4_quarantine_report(htf_diagnostic, H4_DIAGNOSTIC_DIR)
 
     if _has_blocker(fetch_flags):
         flags.append("LOCAL_PIPELINE_FETCH_FAILED")
@@ -340,6 +375,26 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         "duplicate_pipeline_warning": None,
         "audit_status": audit.get("verdict_flags"),
         "scanner_status": scanner.get("no_signal_reason") if scanner else None,
+        "htf_freshness_status": htf_diagnostic.get("htf_freshness_status"),
+        "stale_timeframes": htf_diagnostic.get("stale_timeframes", []),
+        "quarantined_timeframes": htf_diagnostic.get("quarantined_timeframes", []),
+        "h4_quarantine_status": htf_diagnostic.get("h4_quarantine_status"),
+        "h4_latest_existing_timestamp": htf_diagnostic.get("h4_latest_existing_timestamp"),
+        "h4_expected_latest_closed_timestamp": htf_diagnostic.get("h4_expected_latest_closed_timestamp"),
+        "h4_stale_by_bars": htf_diagnostic.get("h4_stale_by_bars"),
+        "h4_quarantine_reason": htf_diagnostic.get("h4_quarantine_reason"),
+        "h4_recommended_action": htf_diagnostic.get("h4_recommended_action"),
+        "scanner_blocked_due_to_stale_htf": bool(
+            (scanner or {}).get("scanner_blocked_due_to_stale_htf")
+            or htf_diagnostic.get("scanner_blocked_due_to_stale_htf")
+        ),
+        "paper_signals_clean_for_validation": bool(
+            (scanner or {}).get(
+                "paper_signals_clean_for_validation",
+                htf_diagnostic.get("paper_signals_clean_for_validation", False),
+            )
+        ),
+        "d1_closed_candle_lag_expected": htf_diagnostic.get("d1_closed_candle_lag_expected"),
         "rows_added_by_timeframe": rows_added,
         "latest_timestamp_by_timeframe": latest_by_tf,
         "paper_signals_total_after_run": scanner.get("paper_signals_total_after_run") if scanner else None,
@@ -368,6 +423,15 @@ def _pipeline_markdown(summary: dict[str, Any]) -> str:
             f"- failed_path: `{summary.get('failed_path')}`",
             f"- temp_path_preserved: `{summary.get('temp_path_preserved')}`",
             f"- scanner_skipped_due_to_ingestion_failure: `{summary.get('scanner_skipped_due_to_ingestion_failure')}`",
+            f"- htf_freshness_status: `{summary.get('htf_freshness_status')}`",
+            f"- stale_timeframes: `{', '.join(summary.get('stale_timeframes', []))}`",
+            f"- h4_quarantine_status: `{summary.get('h4_quarantine_status')}`",
+            f"- h4_latest_existing_timestamp: `{summary.get('h4_latest_existing_timestamp')}`",
+            f"- h4_expected_latest_closed_timestamp: `{summary.get('h4_expected_latest_closed_timestamp')}`",
+            f"- h4_stale_by_bars: `{summary.get('h4_stale_by_bars')}`",
+            f"- scanner_blocked_due_to_stale_htf: `{summary.get('scanner_blocked_due_to_stale_htf')}`",
+            f"- paper_signals_clean_for_validation: `{summary.get('paper_signals_clean_for_validation')}`",
+            f"- d1_closed_candle_lag_expected: `{summary.get('d1_closed_candle_lag_expected')}`",
             f"- one_drive_warning: `{summary.get('one_drive_warning')}`",
             f"- new_paper_signals_this_run: `{summary['new_paper_signals_this_run']}`",
             f"- paper_signals_total_after_run: `{summary['paper_signals_total_after_run']}`",

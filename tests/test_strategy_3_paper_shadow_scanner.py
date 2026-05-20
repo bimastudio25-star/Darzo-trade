@@ -72,6 +72,7 @@ def _config(module, tmp_path, *, scan_driver_bars: int = 1):
         cooldown_minutes=120,
         dry_run=True,
         scan_driver_bars=scan_driver_bars,
+        enforce_htf_freshness=False,
     )
 
 

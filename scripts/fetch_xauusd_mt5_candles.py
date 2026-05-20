@@ -198,9 +198,19 @@ def validate_timezone(frames: dict[str, pd.DataFrame], now_utc: datetime, tolera
     return warnings, latest
 
 
+def _ohlcv_payload(row: pd.Series, suffix: str = "") -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for col in ("open", "high", "low", "close", "tick_volume", "spread"):
+        name = f"{col}{suffix}"
+        if name in row:
+            value = row[name]
+            payload[col] = None if pd.isna(value) else float(value)
+    return payload
+
+
 def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, tolerance: float, *, closed_only: bool = False) -> dict[str, Any]:
     if existing.empty or fetched.empty:
-        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": 0, "overlap_rows_fetched": 0, "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None, "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
+        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": 0, "overlap_rows_fetched": 0, "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None, "last_mismatch_timestamp": None, "mismatch_example_existing_ohlcv": None, "mismatch_example_incoming_ohlcv": None, "overlap_window_start": None, "overlap_window_end": None, "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
     existing = existing.copy()
     fetched = fetched.copy()
     existing["time"] = pd.to_datetime(existing["time"], utc=True)
@@ -211,7 +221,7 @@ def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, to
     f = fetched[(fetched["time"] >= start) & (fetched["time"] <= last)]
     merged = e.merge(f, on="time", suffixes=("_existing", "_fetched"))
     if merged.empty:
-        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": int(len(e)), "overlap_rows_fetched": int(len(f)), "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None, "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
+        return {"verdict": "OVERLAP_NO_DATA", "overlap_rows_existing": int(len(e)), "overlap_rows_fetched": int(len(f)), "overlap_matched_rows": 0, "overlap_mismatched_rows": 0, "overlap_match_rate": None, "worst_ohlc_diff": None, "first_mismatch_timestamp": None, "last_mismatch_timestamp": None, "mismatch_example_existing_ohlcv": None, "mismatch_example_incoming_ohlcv": None, "overlap_window_start": start.isoformat(), "overlap_window_end": last.isoformat(), "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles"}
     diffs = []
     for col in ("open", "high", "low", "close"):
         diffs.append((merged[f"{col}_existing"].astype(float) - merged[f"{col}_fetched"].astype(float)).abs())
@@ -224,7 +234,11 @@ def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, to
         verdict = "OVERLAP_MATCH_GT_95"
     else:
         verdict = "OVERLAP_MATCH_LT_95"
-    first_mismatch = merged.loc[~matched, "time"].iloc[0].isoformat() if (~matched).any() else None
+    mismatch_rows = merged.loc[~matched]
+    first_mismatch = mismatch_rows["time"].iloc[0].isoformat() if not mismatch_rows.empty else None
+    last_mismatch = mismatch_rows["time"].iloc[-1].isoformat() if not mismatch_rows.empty else None
+    mismatch_example_existing = _ohlcv_payload(mismatch_rows.iloc[0], "_existing") if not mismatch_rows.empty else None
+    mismatch_example_incoming = _ohlcv_payload(mismatch_rows.iloc[0], "_fetched") if not mismatch_rows.empty else None
     return {
         "verdict": verdict,
         "overlap_rows_existing": int(len(e)),
@@ -234,6 +248,11 @@ def _existing_overlap(existing: pd.DataFrame, fetched: pd.DataFrame, tf: str, to
         "overlap_match_rate": round(match_rate, 4),
         "worst_ohlc_diff": round(float(max_diff.max()), 5),
         "first_mismatch_timestamp": first_mismatch,
+        "last_mismatch_timestamp": last_mismatch,
+        "mismatch_example_existing_ohlcv": mismatch_example_existing,
+        "mismatch_example_incoming_ohlcv": mismatch_example_incoming,
+        "overlap_window_start": start.isoformat(),
+        "overlap_window_end": last.isoformat(),
         "overlap_validation_basis": "closed_candles_only" if closed_only else "all_fetched_candles",
     }
 
@@ -324,10 +343,12 @@ def run_collector(cfg: CollectorConfig, mt5_module: Any | None = None) -> dict[s
             "overlap_match_rate_by_timeframe": {},
             "worst_ohlc_diff_by_timeframe": {},
             "verdict_by_timeframe": {},
+            "details_by_timeframe": {},
             "overlap_validation_basis": "closed_candles_only",
         },
         "raw_overlap_validation": {
             "verdict_by_timeframe": {},
+            "details_by_timeframe": {},
         },
         "timeframes_quarantined_by_overlap": [],
         "blocking_fetch_error": False,
@@ -410,10 +431,12 @@ def run_collector(cfg: CollectorConfig, mt5_module: Any | None = None) -> dict[s
         overlap = validate_overlap(closed_frames, cfg.data_dir, cfg.symbol, cfg.overlap_price_tolerance_usd, closed_only=not cfg.include_forming_candles)
         for tf, item in raw_overlap.items():
             summary["raw_overlap_validation"]["verdict_by_timeframe"][tf] = item.get("verdict")
+            summary["raw_overlap_validation"]["details_by_timeframe"][tf] = item
         for tf, item in overlap.items():
             summary["overlap_validation"]["overlap_match_rate_by_timeframe"][tf] = item.get("overlap_match_rate")
             summary["overlap_validation"]["worst_ohlc_diff_by_timeframe"][tf] = item.get("worst_ohlc_diff")
             summary["overlap_validation"]["verdict_by_timeframe"][tf] = item.get("verdict")
+            summary["overlap_validation"]["details_by_timeframe"][tf] = item
             if item.get("verdict"):
                 summary["verdict_flags"].append(str(item["verdict"]))
             raw_verdict = raw_overlap.get(tf, {}).get("verdict")
