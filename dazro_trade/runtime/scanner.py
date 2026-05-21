@@ -9,6 +9,11 @@ from typing import Any
 import pandas as pd
 
 from dazro_trade.adelin import format_adelin_signal, format_rejection_summary, format_vp_summary, run_adelin_scan
+from dazro_trade.adelin.safety import (
+    ADELIN_RESEARCH_ONLY_WARNING,
+    adelin_continuation_permission,
+    adelin_live_permission,
+)
 from dazro_trade.analysis.reentry import evaluate_reentry
 from dazro_trade.analysis.scalping import (
     ScalpingConfig,
@@ -430,6 +435,21 @@ class ScalpingScanner:
                 self.stats.last_filter_reason = ", ".join(result.get("rejected", [])[:3]) or "adelin_no_trade"
             return False
         if signal.get("setup_mode") == "VWAP_STD_RESEARCH_1R" and not self.settings.adelin_send_vwap_research:
+            return False
+        live_allowed, live_reason = adelin_live_permission(self.settings)
+        if not live_allowed:
+            self.stats.last_filter_reason = live_reason or "adelin_live_disabled"
+            log.warning(
+                "adelin_live_signal_blocked reason=%s disabled_reason=%s message=%s",
+                live_reason,
+                getattr(self.settings, "adelin_disabled_reason", ""),
+                ADELIN_RESEARCH_ONLY_WARNING,
+            )
+            return False
+        continuation_allowed, continuation_reason = adelin_continuation_permission(self.settings, result)
+        if not continuation_allowed:
+            self.stats.last_filter_reason = continuation_reason or "adelin_continuation_blocked"
+            log.warning("adelin_live_signal_blocked reason=%s", continuation_reason)
             return False
         count = self.adelin_session_counts.get(session, 0)
         if count >= self.settings.max_daily_signals:

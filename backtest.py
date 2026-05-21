@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 
 from dazro_trade.backtest import (
@@ -19,6 +19,19 @@ from dazro_trade.backtest import (
     run_backtest,
     validate_csv_timeframes,
 )
+from dazro_trade.analytics.candle_behavior_report import (
+    build_report as build_candle_behavior_report,
+    iterate_candle_behavior_records,
+    write_records_csv as write_candle_behavior_records_csv,
+    write_report_files as write_candle_behavior_files,
+)
+from dazro_trade.analytics.trade_link import link_records_to_trades
+from dazro_trade.analytics.trade_linked_edge_report import (
+    TradeLinkedConfig,
+    build_trade_linked_report,
+    write_trade_linked_files,
+)
+from dazro_trade.analytics.zone_features import extract_htf_liquidity_zones
 from dazro_trade.backtest.runner import build_equity_curve
 from dazro_trade.core.config import Settings
 
@@ -30,6 +43,19 @@ def _parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+
+
+def _parse_walk_forward_train_end(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = value.strip()
+    has_explicit_time = "T" in raw or " " in raw
+    parsed = datetime.fromisoformat(raw)
+    if not has_explicit_time:
+        parsed = datetime.combine(parsed.date(), time.max)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_lookback(value: str | None, defaults: dict[str, int]) -> dict[str, int]:
@@ -56,13 +82,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", default="backtests/reports")
     parser.add_argument("--driver-timeframe", default="M15")
     parser.add_argument("--max-sim-bars", type=int, default=480)
-    parser.add_argument("--strategies", default="all", help="Strategy aliases: adelin, strategy_2_0, liquidity_expansion, all")
+    parser.add_argument("--strategies", default="all", help="Strategy aliases: adelin, strategy_2_0, liquidity_expansion, strategy_3_vwap_1r, vwap_1r, all")
     parser.add_argument("--fast", action="store_true", help="Use precomputed no-lookahead slicing with bounded lookback windows")
     parser.add_argument("--max-candles", type=int, default=None, help="Debug cap per evaluator driver")
     parser.add_argument("--progress-every-candles", type=int, default=500)
     parser.add_argument("--lookback", default=None, help="Comma-separated fast lookbacks, e.g. M1=2000,M5=2000,H1=1000")
     parser.add_argument("--liquidity-map-lookback", default=None, help="Comma-separated Adelin liquidity map lookbacks, e.g. H4=300,H1=500,M15=1000,M5=1500")
     parser.add_argument("--validate-only", action="store_true", help="Validate CSVs and exit without running backtest")
+    parser.add_argument(
+        "--profile-candle-behavior",
+        action="store_true",
+        help="After the backtest, scan the chosen M1/M5 timeframe and emit profile_candle_behavior.{json,md} with per-candle features + zone-reaction stats. Read-only; does not change live rules.",
+    )
+    parser.add_argument(
+        "--profile-candle-tf",
+        default="M5",
+        choices=("M1", "M5"),
+        help="Timeframe to scan for the candle-behavior profile. Default M5.",
+    )
+    parser.add_argument(
+        "--profile-walk-forward-train-end",
+        default=None,
+        help="ISO date/datetime ending the IN-SAMPLE training window. Date-only values are inclusive to 23:59:59 UTC. Trades with signal_timestamp <= this cutoff are IS, the rest is OUT-OF-SAMPLE. When omitted, walk-forward is not applied.",
+    )
     args = parser.parse_args(argv)
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
@@ -151,6 +193,37 @@ def main(argv: list[str] | None = None) -> int:
         d = diag.to_dict() if hasattr(diag, "to_dict") else dict(diag) if isinstance(diag, dict) else {}
         log.info("diagnostics strategy=%s data=%s", name, d)
     log.info("backtest_reports paths=%s", paths)
+
+    if args.profile_candle_behavior:
+        scan_tf = args.profile_candle_tf
+        df_scan = market_data.get(scan_tf)
+        if df_scan is None or len(df_scan) == 0:
+            log.warning("profile_candle_behavior_no_data tf=%s", scan_tf)
+        else:
+            zones = extract_htf_liquidity_zones(market_data)
+            log.info("profile_candle_behavior_start tf=%s candles=%s zones=%s", scan_tf, len(df_scan), len(zones))
+            records = iterate_candle_behavior_records(df_scan, zones)
+            report = build_candle_behavior_report(records)
+            profile_paths = write_candle_behavior_files(output_dir=args.output_dir, report=report)
+            tf_minutes = {"M1": 1, "M5": 5, "M15": 15, "H1": 60, "H4": 240, "D1": 1440}.get(scan_tf, 5)
+            trade_links = link_records_to_trades(
+                records, signals, trades,
+                strategy="strategy_1_adelin_scalp",
+                timeframe_minutes=tf_minutes,
+                link_window_bars=20,
+            )
+            csv_path = write_candle_behavior_records_csv(
+                output_dir=args.output_dir, records=records, trade_links=trade_links,
+            )
+            wf_train_end = _parse_walk_forward_train_end(args.profile_walk_forward_train_end)
+            edge_cfg = TradeLinkedConfig(walk_forward_train_end=wf_train_end) if wf_train_end is not None else TradeLinkedConfig()
+            edge_report = build_trade_linked_report(records, trade_links, config=edge_cfg)
+            edge_paths = write_trade_linked_files(output_dir=args.output_dir, report=edge_report)
+            log.info(
+                "profile_candle_behavior_written market=%s records_csv=%s edge=%s records=%s linked=%s",
+                profile_paths, csv_path, edge_paths, len(records), len(trade_links),
+            )
+
     if partial:
         log.warning("backtest_partial_output_saved paths=%s", paths)
         return 130

@@ -174,6 +174,10 @@ class Settings:
     adelin_news_gate_enabled: bool = True
     adelin_send_rejection_debug: bool = False
     adelin_send_vwap_research: bool = True
+    # Research-only live lock: score audit found no predictive signal and toxic continuation.
+    adelin_live_enabled: bool = False
+    adelin_disabled_reason: str = "score_not_predictive_low_score_variance_continuation_toxic_rejection_oos_break_even"
+    adelin_block_continuation_entries: bool = True
 
     auto_signal_old_scalping: bool = False
     show_old_scalping_in_analisi: bool = True
@@ -195,6 +199,8 @@ class Settings:
     liquidity_expansion_max_spread_pips: float = 3.0
     liquidity_expansion_m15_reference_timezone: str = "broker"
     liquidity_expansion_require_risk_ok: bool = True
+
+    strategy_3_cooldown_minutes: int = 60
 
     enable_reentry_analysis: bool = True
     reentry_max_wait_minutes: int = 30
@@ -348,6 +354,12 @@ class Settings:
             adelin_news_gate_enabled=_bool(os.getenv("ADELIN_NEWS_GATE_ENABLED"), True),
             adelin_send_rejection_debug=_bool(os.getenv("ADELIN_SEND_REJECTION_DEBUG"), False),
             adelin_send_vwap_research=_bool(os.getenv("ADELIN_SEND_VWAP_RESEARCH"), True),
+            adelin_live_enabled=_bool(os.getenv("ADELIN_LIVE_ENABLED"), False),
+            adelin_disabled_reason=os.getenv(
+                "ADELIN_DISABLED_REASON",
+                "score_not_predictive_low_score_variance_continuation_toxic_rejection_oos_break_even",
+            ),
+            adelin_block_continuation_entries=_bool(os.getenv("ADELIN_BLOCK_CONTINUATION_ENTRIES"), True),
             auto_signal_old_scalping=_bool(os.getenv("AUTO_SIGNAL_OLD_SCALPING"), False),
             show_old_scalping_in_analisi=_bool(os.getenv("SHOW_OLD_SCALPING_IN_ANALISI"), True),
             strategy_coordinator_enabled=_bool(os.getenv("STRATEGY_COORDINATOR_ENABLED"), True),
@@ -367,6 +379,7 @@ class Settings:
             liquidity_expansion_max_spread_pips=_float("LIQUIDITY_EXPANSION_MAX_SPREAD_PIPS", 3.0),
             liquidity_expansion_m15_reference_timezone=os.getenv("LIQUIDITY_EXPANSION_M15_REFERENCE_TIMEZONE", "broker"),
             liquidity_expansion_require_risk_ok=_bool(os.getenv("LIQUIDITY_EXPANSION_REQUIRE_RISK_OK"), True),
+            strategy_3_cooldown_minutes=_int("STRATEGY_3_COOLDOWN_MINUTES", 60),
             enable_reentry_analysis=_bool(os.getenv("ENABLE_REENTRY_ANALYSIS"), True),
             reentry_max_wait_minutes=_int("REENTRY_MAX_WAIT_MINUTES", 30),
             reentry_require_new_entry=_bool(os.getenv("REENTRY_REQUIRE_NEW_ENTRY"), True),

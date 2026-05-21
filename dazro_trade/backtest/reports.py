@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from dazro_trade.backtest.metrics import BacktestMetrics, compute_per_strategy_metrics
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade
@@ -13,8 +13,22 @@ from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade
 log = logging.getLogger(__name__)
 
 
+def _jsonish(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
 def _flatten_signal(signal: BacktestSignal) -> dict:
-    return {
+    metadata = signal.metadata or {}
+    liquidity_context = metadata.get("liquidity_context")
+    if isinstance(liquidity_context, dict):
+        sweep = liquidity_context.get("sweep") if isinstance(liquidity_context.get("sweep"), dict) else {}
+    else:
+        sweep = {}
+    base = {
         "timestamp": signal.timestamp.isoformat() if signal.timestamp else None,
         "symbol": signal.symbol,
         "strategy": signal.strategy,
@@ -35,6 +49,32 @@ def _flatten_signal(signal: BacktestSignal) -> dict:
         "accepted": signal.accepted,
         "rejection_reasons": ";".join(signal.rejection_reasons or []),
     }
+    base.update(
+        {
+            "setup_mode": metadata.get("setup_mode"),
+            "reason_codes": ";".join(str(item) for item in metadata.get("reason_codes", []) if item is not None)
+            if isinstance(metadata.get("reason_codes"), (list, tuple, set))
+            else metadata.get("reason_codes"),
+            "confluences": _jsonish(metadata.get("confluences")),
+            "vwap": _jsonish(metadata.get("vwap")),
+            "vwap_distance": metadata.get("vwap_distance"),
+            "vwap_distance_pips": metadata.get("vwap_distance_pips"),
+            "band_touched": metadata.get("band_touched"),
+            "liquidity_context": _jsonish(liquidity_context),
+            "sweep_timeframe": liquidity_context.get("timeframe") if isinstance(liquidity_context, dict) else None,
+            "sweep_type": sweep.get("side") or liquidity_context.get("type") if isinstance(liquidity_context, dict) else None,
+            "sweep_price": liquidity_context.get("level") if isinstance(liquidity_context, dict) else None,
+            "fvg_ifvg_context": _jsonish(metadata.get("fvg_ifvg_context")),
+            "number_theory_context": _jsonish(metadata.get("number_theory_context")),
+            "target_model": metadata.get("target_model"),
+            "research_only": metadata.get("research_only"),
+            "strategy_name": signal.strategy,
+            "risk_distance": signal.sl_distance,
+            "reward_distance": abs(float(signal.tp1) - float(signal.entry)) if signal.tp1 is not None else None,
+            "rr": signal.rr_tp1,
+        }
+    )
+    return base
 
 
 def _flatten_trade(trade: BacktestTrade) -> dict:

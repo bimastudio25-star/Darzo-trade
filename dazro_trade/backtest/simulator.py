@@ -12,7 +12,7 @@ from dazro_trade.strategy.risk_labels import RiskLabel, classify_sl_risk
 
 log = logging.getLogger(__name__)
 
-Outcome = Literal["SL", "TP1", "TP2", "TP3", "TP4", "BE", "STILL_OPEN", "NO_DATA"]
+Outcome = Literal["SL", "TP1", "TP2", "TP3", "TP4", "BE", "STILL_OPEN", "TIMEOUT_CLOSE", "END_OF_DATA_CLOSE", "NO_DATA"]
 Direction = Literal["LONG", "SHORT"]
 
 
@@ -117,6 +117,8 @@ def simulate_trade_outcome(
     outcome: Outcome = "STILL_OPEN"
     exit_time: datetime | None = None
     exit_price: float | None = None
+    last_close: float | None = None
+    last_time: datetime | None = None
     tp1_locked = False
 
     iter_frame = frame.head(max_bars)
@@ -124,7 +126,9 @@ def simulate_trade_outcome(
         bars_held += 1
         high = float(candle["h"])
         low = float(candle["l"])
+        last_close = float(candle["c"])
         when = candle["time"].to_pydatetime() if "time" in candle and hasattr(candle["time"], "to_pydatetime") else None
+        last_time = when
         if direction == "LONG":
             adverse_excursion = max(0.0, entry - low)
             favorable_excursion = max(0.0, high - entry)
@@ -170,6 +174,10 @@ def simulate_trade_outcome(
             break
 
     r_multiple = 0.0
+    if outcome == "STILL_OPEN" and bars_held > 0:
+        outcome = "TIMEOUT_CLOSE" if len(frame) >= max_bars else "END_OF_DATA_CLOSE"
+        exit_price = last_close
+        exit_time = last_time
     if outcome == "SL":
         r_multiple = -1.0
     elif outcome == "BE":
@@ -177,6 +185,11 @@ def simulate_trade_outcome(
     elif outcome in {"TP1", "TP2", "TP3", "TP4"} and exit_price is not None:
         reward = abs(float(exit_price) - entry)
         r_multiple = reward / risk if risk > 0 else 0.0
+    elif outcome in {"TIMEOUT_CLOSE", "END_OF_DATA_CLOSE"} and exit_price is not None:
+        if direction == "LONG":
+            r_multiple = (float(exit_price) - entry) / risk if risk > 0 else 0.0
+        else:
+            r_multiple = (entry - float(exit_price)) / risk if risk > 0 else 0.0
 
     return BacktestTrade(
         signal=signal,

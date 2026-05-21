@@ -159,7 +159,13 @@ def test_independent_both_policy_send_first():
             self.sent.append(text)
             return {"ok": True}
 
-    settings = Settings(telegram_token="x", telegram_chat_id="1", strategy_independent_both_policy="send_first", max_daily_signals=10)
+    settings = Settings(
+        telegram_token="x",
+        telegram_chat_id="1",
+        strategy_independent_both_policy="send_first",
+        max_daily_signals=10,
+        adelin_live_enabled=True,
+    )
     scanner = ScalpingScanner(settings, telegram_bot=_Sender())
     scanner.first_silent_scan_pending = False
     scanner.last_price = 4700.0

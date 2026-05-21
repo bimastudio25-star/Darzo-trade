@@ -91,12 +91,25 @@ def test_short_sl_hit_first():
     assert trade.outcome == "SL"
 
 
-def test_still_open_when_neither_reached_within_max_bars():
+def test_timeout_close_when_neither_reached_within_max_bars():
     base = datetime(2026, 5, 13, 9, 1, tzinfo=timezone.utc)
     m1 = _m1(base, [(4700, 4701, 4699, 4700)] * 5)
     trade = simulate_trade_outcome(_signal_long(), m1, max_bars=5)
-    assert trade.outcome == "STILL_OPEN"
+    assert trade.outcome == "TIMEOUT_CLOSE"
     assert trade.r_multiple == 0.0
+    assert trade.exit_price == 4700.0
+
+
+def test_end_of_data_close_marks_available_close_r_multiple():
+    base = datetime(2026, 5, 13, 9, 1, tzinfo=timezone.utc)
+    m1 = _m1(base, [
+        (4700, 4701, 4699, 4701),
+        (4701, 4703, 4700, 4702),
+    ])
+    trade = simulate_trade_outcome(_signal_long(), m1, max_bars=5)
+    assert trade.outcome == "END_OF_DATA_CLOSE"
+    assert trade.exit_price == 4702.0
+    assert trade.r_multiple == 0.4
 
 
 def test_mae_mfe_tracked_correctly_long():

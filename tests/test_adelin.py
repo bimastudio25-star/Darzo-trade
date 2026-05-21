@@ -190,7 +190,7 @@ def test_runtime_integration_commands_and_first_scan_silent():
             self.sent.append(text)
             return {"ok": True}
 
-    scanner = ScalpingScanner(Settings(telegram_token="x", telegram_chat_id="1", adelin_session_gate_enabled=False), telegram_bot=Sender())
+    scanner = ScalpingScanner(Settings(telegram_token="x", telegram_chat_id="1", adelin_session_gate_enabled=False, adelin_live_enabled=True), telegram_bot=Sender())
     scanner.latest_adelin_result = {"setup_mode": "NO_TRADE", "rejected": ["liquidity_sweep_missing"], "vp_summary": {"profiles": ["daily_current"], "best_poc": 100}}
     scanner.latest_analysis = None
     assert {item[0] for item in VISIBLE_COMMANDS} >= {"status", "analisi", "watch", "scan", "plan", "trades", "stop", "resume", "help"}

@@ -9,6 +9,8 @@ venv/
 data/*.sqlite
 data/*.db
 data/
+incoming_data/
+data_backups/
 backtests/
 logs/
 signals.log

@@ -1,0 +1,45 @@
+{
+  "allow_weak_m1_only": false,
+  "audit_path": "backtests\\reports\\adelin_v2_operational_audit\\adelin_v2_trade_audit.csv",
+  "audit_rows_loaded": 0,
+  "candidate_windows_generated": 40,
+  "charts_generated": 40,
+  "data_dir": "data",
+  "dry_run": true,
+  "html_pages_generated": 40,
+  "include_insufficient_execution_debug": false,
+  "index_path": "backtests\\reports\\adelin_v2_visual_review_pack\\index.html",
+  "insufficient_execution_data_count": 0,
+  "limitations": [
+    "MATPLOTLIB_UNAVAILABLE_USING_SVG_CHARTS",
+    "NO_TRADES_PATH_AVAILABLE"
+  ],
+  "manual_label_template_path": "backtests\\reports\\adelin_v2_visual_review_pack\\manual_labels_template.csv",
+  "output_dir": "backtests\\reports\\adelin_v2_visual_review_pack",
+  "raw_samples_considered": 4000,
+  "readme_path": "backtests\\reports\\adelin_v2_visual_review_pack\\README_manual_review.md",
+  "reviewable_m1_m5_count": 40,
+  "reviewable_m5_only_count": 0,
+  "reviewable_samples": 40,
+  "run_finished_at": "2026-05-20T22:43:39.655124+00:00",
+  "run_started_at": "2026-05-20T22:43:32.142964+00:00",
+  "safety": {
+    "broker_execution_enabled": false,
+    "data_modified": false,
+    "live_trading_enabled": false,
+    "order_execution_enabled": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "telegram_enabled": false
+  },
+  "samples_skipped_due_to_missing_ltf_data": 0,
+  "source_modes_used": [
+    "CANDIDATE_WINDOW_MODE"
+  ],
+  "symbol": "XAUUSD",
+  "total_samples": 40,
+  "trades_loaded": 0,
+  "trades_path": null,
+  "warning": "Candidate windows are for visual labeling only and are not trade signals.",
+  "weak_m1_only_count": 0
+}

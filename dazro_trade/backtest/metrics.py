@@ -7,6 +7,13 @@ from typing import Iterable
 from dazro_trade.backtest.simulator import BacktestSignal, BacktestTrade
 
 
+STILL_OPEN_POLICY_AFFECTED_STRATEGIES = (
+    "strategy_1_adelin_scalp",
+    "strategy_2_liquidity_expansion",
+    "any_strategy_using_shared_simulator",
+)
+
+
 @dataclass(frozen=True)
 class BacktestMetrics:
     total_signals: int
@@ -37,7 +44,11 @@ class BacktestMetrics:
     sl_hit_rate: float
     be_hit_rate: float
     still_open_rate: float
+    timeout_close_rate: float
+    end_of_data_close_rate: float
     average_bars_held: float
+    metric_revision_due_to_still_open_policy: bool
+    affected_strategies: tuple[str, ...]
 
     def to_dict(self) -> dict:
         return {
@@ -69,7 +80,11 @@ class BacktestMetrics:
             "sl_hit_rate": round(self.sl_hit_rate, 4),
             "be_hit_rate": round(self.be_hit_rate, 4),
             "still_open_rate": round(self.still_open_rate, 4),
+            "timeout_close_rate": round(self.timeout_close_rate, 4),
+            "end_of_data_close_rate": round(self.end_of_data_close_rate, 4),
             "average_bars_held": round(self.average_bars_held, 4),
+            "metric_revision_due_to_still_open_policy": self.metric_revision_due_to_still_open_policy,
+            "affected_strategies": list(self.affected_strategies),
         }
 
 
@@ -172,8 +187,12 @@ def compute_backtest_metrics(signals: Iterable[BacktestSignal], trades: Iterable
         sl_hit_rate=_safe_div(outcomes.count("SL"), valid),
         be_hit_rate=_safe_div(outcomes.count("BE"), valid),
         still_open_rate=_safe_div(outcomes.count("STILL_OPEN"), valid),
+        timeout_close_rate=_safe_div(outcomes.count("TIMEOUT_CLOSE"), valid),
+        end_of_data_close_rate=_safe_div(outcomes.count("END_OF_DATA_CLOSE"), valid),
         average_bars_held=fmean(bars) if bars else 0.0,
+        metric_revision_due_to_still_open_policy=True,
+        affected_strategies=STILL_OPEN_POLICY_AFFECTED_STRATEGIES,
     )
 
 
-__all__ = ["BacktestMetrics", "compute_backtest_metrics"]
+__all__ = ["BacktestMetrics", "STILL_OPEN_POLICY_AFFECTED_STRATEGIES", "compute_backtest_metrics"]

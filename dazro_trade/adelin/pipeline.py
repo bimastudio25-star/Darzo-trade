@@ -9,6 +9,7 @@ from dazro_trade.adelin.confluence_engine import calculate_scalp_levels, calcula
 from dazro_trade.adelin.liquidity_map import build_liquidity_map, find_swept_level
 from dazro_trade.adelin.number_theory import nearest_number_theory, score_number_theory_confluence
 from dazro_trade.adelin.sweep_detector import calculate_vwap_bands, find_liquidity_sweep
+from dazro_trade.adelin.telemetry import build_signal_telemetry
 from dazro_trade.adelin.volume_profile import build_multi_anchor_volume_profiles, find_best_volume_crack_confluence
 from dazro_trade.core.symbols import get_symbol_spec
 from dazro_trade.runtime.sessions import current_session_name
@@ -100,6 +101,14 @@ def run_adelin_scan(
     setup_mode = str(score_detail["setup_mode"])
     signal = None
     if score_detail["verdict"] == "TRIGGERED":
+        telemetry = build_signal_telemetry(
+            symbol=symbol,
+            current_price=price,
+            liquidity=swept_level or sweep,
+            pip_size=pip_size,
+            score_detail=score_detail,
+            continuation_candidate=None,
+        )
         signal = {
             "symbol": symbol,
             "setup_mode": setup_mode,
@@ -120,6 +129,7 @@ def run_adelin_scan(
             "session": session,
             "spread_pips": float(spread_pips or 0.0),
             "paper_demo": True,
+            "telemetry": telemetry,
         }
     rejected.extend(score_detail.get("rejected") or [])
     return _result(now, signal, [] if signal else rejected, score_detail, _vp_summary(profiles), vwap_data, setup_mode, {"session": session, "pip": pip_size, "liquidity_map": liq_map, "profiles": profiles})
