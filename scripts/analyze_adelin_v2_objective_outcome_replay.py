@@ -29,7 +29,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--direction-lookback-minutes", type=int, default=30)
     parser.add_argument("--reaction-fast-minutes", type=int, default=15)
     parser.add_argument("--reaction-slow-minutes", type=int, default=30)
-    parser.add_argument("--include-control-random", type=int, default=40)
+    parser.add_argument("--include-control-random", type=int, default=800)
+    parser.add_argument("--control-match-entry-source", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--control-match-session", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--allow-unmatched-session-controls", action="store_true", default=False)
+    parser.add_argument("--control-random-seed", type=int, default=42)
+    parser.add_argument("--control-max-attempts-per-row", type=int, default=25)
+    parser.add_argument("--sweep-control-lookback-minutes", type=int, default=60)
+    parser.add_argument("--sweep-control-min-anchor-delay-minutes", type=int, default=5)
+    parser.add_argument("--sweep-control-min-rejection-pips", type=float, default=5.0)
     parser.add_argument("--pip-size", type=float, default=None)
     parser.add_argument(
         "--dry-run",
@@ -53,6 +61,14 @@ def config_from_args(args: argparse.Namespace) -> ObjectiveReplayConfig:
         include_control_random=args.include_control_random,
         pip_size_override=args.pip_size,
         dry_run=bool(args.dry_run),
+        random_seed=args.control_random_seed,
+        control_match_entry_source=bool(args.control_match_entry_source),
+        control_match_session=bool(args.control_match_session),
+        allow_unmatched_session_controls=bool(args.allow_unmatched_session_controls),
+        control_max_attempts_per_row=args.control_max_attempts_per_row,
+        sweep_control_lookback_minutes=args.sweep_control_lookback_minutes,
+        sweep_control_min_anchor_delay_minutes=args.sweep_control_min_anchor_delay_minutes,
+        sweep_control_min_rejection_pips=args.sweep_control_min_rejection_pips,
     )
 
 
@@ -77,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
                 "control_unknown_entry_level_count": summary["control_unknown_entry_level_count"],
                 "candidate_entry_level_source_counts": summary["candidate_entry_level_source_counts"],
                 "control_entry_level_source_counts": summary["control_entry_level_source_counts"],
+                "candidate_session_distribution": summary["candidate_session_distribution"],
+                "control_session_distribution": summary["control_session_distribution"],
+                "control_generation_attempts_by_source": summary["control_generation_attempts_by_source"],
+                "control_generation_success_by_source": summary["control_generation_success_by_source"],
+                "control_generation_attempts_by_source_and_session": summary["control_generation_attempts_by_source_and_session"],
+                "control_generation_success_by_source_and_session": summary["control_generation_success_by_source_and_session"],
+                "control_generation_skip_reasons": summary["control_generation_skip_reasons"],
                 "candidate_outcome_label_counts": summary["candidate_outcome_label_counts"],
                 "control_outcome_label_counts": summary["control_outcome_label_counts"],
                 "candidate_outcome_counts_by_entry_level_source": summary["candidate_outcome_counts_by_entry_level_source"],
@@ -85,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
                 "candidate_vs_control_known_entry": summary["candidate_vs_control_known_entry"],
                 "candidate_vs_control_round_level": summary["candidate_vs_control_round_level"],
                 "candidate_vs_control_sweep_extreme": summary["candidate_vs_control_sweep_extreme"],
+                "entry_source_matched_metrics": summary["entry_source_matched_metrics"],
+                "entry_source_and_session_matched_metrics": summary["entry_source_and_session_matched_metrics"],
                 "limitations": summary["limitations"],
             },
             indent=2,

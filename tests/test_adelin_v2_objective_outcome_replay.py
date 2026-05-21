@@ -20,6 +20,7 @@ from dazro_trade.analytics.adelin_v2_objective_outcome_replay import (
     ROUND_LEVEL,
     ROUND_LEVEL_TOUCH_ENTRY,
     SWEEP_EXTREME,
+    SWEPT_LIQUIDITY_LEVEL,
     UNKNOWN_DIRECTION,
     UNKNOWN_ENTRY_LEVEL,
     UNKNOWN_INSUFFICIENT_FORWARD_DATA,
@@ -28,6 +29,7 @@ from dazro_trade.analytics.adelin_v2_objective_outcome_replay import (
     ObjectiveReplayConfig,
     ReplayInputSample,
     build_entry_hypothesis,
+    detect_pre_anchor_sweep_control,
     generate_control_samples,
     infer_reversal_direction,
     replay_forward_path,
@@ -415,6 +417,82 @@ def test_missing_forward_candles_returns_unknown_insufficient_forward_data():
     assert row["automatic_outcome_label"] == UNKNOWN_INSUFFICIENT_FORWARD_DATA
 
 
+def test_sweep_extreme_control_uses_only_pre_anchor_and_infers_short():
+    anchor = datetime(2026, 1, 1, 0, 20, tzinfo=timezone.utc)
+    pre = _frame(
+        [
+            (anchor - timedelta(minutes=20), 4900.0, 4901.0, 4899.8, 4900.5),
+            (anchor - timedelta(minutes=15), 4900.5, 4902.0, 4900.2, 4901.5),
+            (anchor - timedelta(minutes=10), 4901.5, 4904.0, 4901.4, 4903.5),
+            (anchor - timedelta(minutes=5), 4903.5, 4903.6, 4903.0, 4903.1),
+            (anchor, 4903.1, 4915.0, 4902.0, 4910.0),
+        ]
+    )
+    detected = detect_pre_anchor_sweep_control({"M5": pre}, anchor, pip_size=0.1)
+    assert detected is not None
+    direction, entry = detected
+    assert direction.direction_guess == "SHORT"
+    assert direction.sweep_timestamp == anchor - timedelta(minutes=10)
+    assert entry.entry_level_source == SWEEP_EXTREME
+    assert entry.entry_price == 4904.0
+    assert "ANCHOR_CANDLE_EXCLUDED" in direction.direction_reason_codes
+
+
+def test_sweep_extreme_control_downward_sweep_infers_long():
+    anchor = datetime(2026, 1, 1, 0, 20, tzinfo=timezone.utc)
+    pre = _frame(
+        [
+            (anchor - timedelta(minutes=20), 4900.0, 4901.0, 4899.0, 4900.0),
+            (anchor - timedelta(minutes=15), 4900.0, 4900.5, 4898.0, 4899.0),
+            (anchor - timedelta(minutes=10), 4899.0, 4899.2, 4895.0, 4895.5),
+            (anchor - timedelta(minutes=5), 4895.5, 4896.2, 4895.4, 4896.0),
+        ]
+    )
+    detected = detect_pre_anchor_sweep_control({"M5": pre}, anchor, pip_size=0.1)
+    assert detected is not None
+    direction, entry = detected
+    assert direction.direction_guess == "LONG"
+    assert direction.sweep_type == "DOWNWARD_SWEEP"
+    assert entry.entry_price == 4895.0
+
+
+def test_sweep_detection_excludes_anchor_and_post_anchor_candles():
+    anchor = datetime(2026, 1, 1, 0, 20, tzinfo=timezone.utc)
+    anchor_only = _frame(
+        [
+            (anchor - timedelta(minutes=20), 4900.0, 4901.0, 4899.8, 4900.5),
+            (anchor - timedelta(minutes=15), 4900.5, 4901.0, 4900.2, 4901.0),
+            (anchor - timedelta(minutes=10), 4901.0, 4901.0, 4900.8, 4901.0),
+            (anchor - timedelta(minutes=5), 4901.0, 4901.0, 4901.0, 4901.0),
+            (anchor, 4901.2, 4905.0, 4901.0, 4901.5),
+        ]
+    )
+    assert detect_pre_anchor_sweep_control({"M5": anchor_only}, anchor, pip_size=0.1) is None
+
+    post_anchor_rejection = _frame(
+        [
+            (anchor - timedelta(minutes=20), 4900.0, 4901.0, 4899.8, 4900.5),
+            (anchor - timedelta(minutes=15), 4900.5, 4901.0, 4900.2, 4901.0),
+            (anchor - timedelta(minutes=10), 4901.0, 4904.0, 4901.4, 4903.9),
+            (anchor - timedelta(minutes=5), 4903.9, 4904.0, 4903.7, 4904.0),
+            (anchor + timedelta(minutes=1), 4904.0, 4904.1, 4902.0, 4902.5),
+        ]
+    )
+    assert detect_pre_anchor_sweep_control({"M5": post_anchor_rejection}, anchor, pip_size=0.1) is None
+
+
+def test_sweep_control_anchor_delay_is_required():
+    anchor = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
+    frame = _frame(
+        [
+            (anchor - timedelta(minutes=9), 4900.0, 4901.0, 4899.8, 4900.5),
+            (anchor - timedelta(minutes=8), 4900.5, 4901.2, 4900.2, 4901.0),
+            (anchor - timedelta(minutes=1), 4901.0, 4904.0, 4900.8, 4901.2),
+        ]
+    )
+    assert detect_pre_anchor_sweep_control({"M1": frame}, anchor, pip_size=0.1, min_anchor_delay_minutes=5) is None
+
+
 def test_control_group_generation_creates_non_overlapping_rows(tmp_path: Path):
     data_dir = _make_data_dir(tmp_path)
     from dazro_trade.backtest.data_loader import load_csv_timeframes
@@ -424,12 +502,93 @@ def test_control_group_generation_creates_non_overlapping_rows(tmp_path: Path):
         _sample(datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)),
         _sample(datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc), sample_id="sample_002"),
     ]
-    controls, limitations = generate_control_samples(candidates, frames, symbol="XAUUSD", requested=3, forward_hours=4)
+    result = generate_control_samples(candidates, frames, symbol="XAUUSD", requested=3, forward_hours=4)
+    controls = result.samples
     assert len(controls) > 0
     assert all(control.row_type == "CONTROL" for control in controls)
     for control in controls:
-        assert all(abs((control.anchor_timestamp - candidate.anchor_timestamp).total_seconds()) > 30 * 60 for candidate in candidates)
-    assert isinstance(limitations, list)
+        assert all(control.anchor_timestamp != candidate.anchor_timestamp for candidate in candidates)
+    assert isinstance(result.limitations, list)
+    assert "success_by_source" in result.stats
+
+
+def test_entry_source_and_session_matching_defaults_and_seed_are_deterministic(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    from dazro_trade.backtest.data_loader import load_csv_timeframes
+
+    frames = load_csv_timeframes("XAUUSD", ["M1", "M5", "M15", "H1"], data_dir=str(data_dir))
+    anchor = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
+    candidates = [_sample(anchor), _sample(datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc), sample_id="sample_002")]
+    candidate_rows = [
+        {
+            "row_type": "CANDIDATE",
+            "entry_level_source": ROUND_LEVEL,
+            "session": classify_session_for_test(anchor),
+            "anchor_timestamp": anchor.isoformat(),
+        }
+    ]
+    cfg = ObjectiveReplayConfig(include_control_random=5, random_seed=7)
+    first = generate_control_samples(candidates, frames, symbol="XAUUSD", requested=5, candidate_rows=candidate_rows, cfg=cfg)
+    second = generate_control_samples(candidates, frames, symbol="XAUUSD", requested=5, candidate_rows=candidate_rows, cfg=cfg)
+    assert cfg.control_match_entry_source is True
+    assert cfg.control_match_session is True
+    assert [sample.anchor_timestamp for sample in first.samples] == [sample.anchor_timestamp for sample in second.samples]
+    assert all(sample.metadata["matched_control_for_entry_source"] is True for sample in first.samples)
+    assert all(sample.metadata["matched_control_for_session"] is True for sample in first.samples)
+
+
+def classify_session_for_test(ts: datetime) -> str:
+    from dazro_trade.analytics.adelin_v2_objective_outcome_replay import classify_session
+
+    return classify_session(ts)
+
+
+def test_unmatched_session_controls_require_debug_flag(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    from dazro_trade.backtest.data_loader import load_csv_timeframes
+
+    frames = load_csv_timeframes("XAUUSD", ["M1", "M5", "M15", "H1"], data_dir=str(data_dir))
+    anchor = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
+    candidates = [_sample(anchor), _sample(datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc), sample_id="sample_002")]
+    candidate_rows = [{"row_type": "CANDIDATE", "entry_level_source": ROUND_LEVEL, "session": "IMPOSSIBLE_SESSION"}]
+    strict = generate_control_samples(
+        candidates,
+        frames,
+        symbol="XAUUSD",
+        requested=3,
+        candidate_rows=candidate_rows,
+        cfg=ObjectiveReplayConfig(include_control_random=3, control_max_attempts_per_row=3),
+    )
+    assert strict.samples == []
+    assert strict.stats["skip_reasons"].get("SESSION_MISMATCH", 0) > 0
+
+    relaxed = generate_control_samples(
+        candidates,
+        frames,
+        symbol="XAUUSD",
+        requested=3,
+        candidate_rows=candidate_rows,
+        cfg=ObjectiveReplayConfig(include_control_random=3, allow_unmatched_session_controls=True, control_max_attempts_per_row=20),
+    )
+    assert relaxed.samples
+    assert any(sample.metadata["matched_control_for_session"] is False for sample in relaxed.samples)
+
+
+def test_unsupported_swept_liquidity_controls_report_limitation(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    from dazro_trade.backtest.data_loader import load_csv_timeframes
+
+    frames = load_csv_timeframes("XAUUSD", ["M1", "M5", "M15", "H1"], data_dir=str(data_dir))
+    anchor = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
+    result = generate_control_samples(
+        [_sample(anchor)],
+        frames,
+        symbol="XAUUSD",
+        requested=5,
+        candidate_rows=[{"row_type": "CANDIDATE", "entry_level_source": SWEPT_LIQUIDITY_LEVEL, "session": classify_session_for_test(anchor)}],
+    )
+    assert result.samples == []
+    assert any("CONTROL_SOURCE_UNSUPPORTED_SWEPT_LIQUIDITY_LEVEL" in item for item in result.limitations)
 
 
 def test_run_writes_outputs_summary_and_enriched_template(tmp_path: Path):
@@ -459,6 +618,9 @@ def test_run_writes_outputs_summary_and_enriched_template(tmp_path: Path):
     assert "candidate_vs_control_known_entry" in summary
     assert "candidate_fast_reaction_rate" in summary["candidate_vs_control_known_entry"]
     assert "candidate_outcome_counts_by_entry_level_source" in summary
+    assert "entry_source_and_session_matched_metrics" in summary
+    assert "control_generation_method" in (output_dir / "objective_outcome_replay.csv").read_text(encoding="utf-8")
+    assert "control_lookahead_safe" in (output_dir / "objective_outcome_replay.csv").read_text(encoding="utf-8")
     assert (output_dir / "objective_outcome_replay.csv").exists()
     assert (output_dir / "objective_outcome_replay_summary.json").exists()
     assert (output_dir / "objective_outcome_replay.md").exists()

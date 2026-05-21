@@ -68,11 +68,18 @@ class ObjectiveReplayConfig:
     direction_lookback_minutes: int = 30
     reaction_fast_minutes: int = 15
     reaction_slow_minutes: int = 30
-    include_control_random: int = 40
+    include_control_random: int = 800
     pip_size_override: float | None = None
     dry_run: bool = True
     round_level_threshold_pips: float = 5.0
     random_seed: int = 42
+    control_match_entry_source: bool = True
+    control_match_session: bool = True
+    allow_unmatched_session_controls: bool = False
+    control_max_attempts_per_row: int = 25
+    sweep_control_lookback_minutes: int = 60
+    sweep_control_min_anchor_delay_minutes: int = 5
+    sweep_control_min_rejection_pips: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,13 @@ class ReplayInputSample:
     html_path: str | None = None
     chart_path: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ControlGenerationResult:
+    samples: list[ReplayInputSample]
+    limitations: list[str]
+    stats: dict[str, Any]
 
 
 def resolve_pip_size(symbol: str, override: float | None = None) -> PipSizeResolution:
@@ -226,12 +240,27 @@ def _slice_time(df: pd.DataFrame, start: datetime, end: datetime, *, inclusive_e
     return out.sort_values("time").reset_index(drop=True)
 
 
+def _slice_before(df: pd.DataFrame, start: datetime, anchor: datetime) -> pd.DataFrame:
+    return _slice_time(df, start, anchor, inclusive_end=False)
+
+
 def _nearest_candle_close(frames: Mapping[str, pd.DataFrame], anchor: datetime) -> float | None:
     for tf in ("M1", "M5", "M15", "H1"):
         df = frames.get(tf, pd.DataFrame())
         if df.empty:
             continue
         view = _slice_time(df, anchor - timedelta(minutes=30), anchor)
+        if not view.empty:
+            return _parse_float(view.iloc[-1].get("close"))
+    return None
+
+
+def _nearest_pre_anchor_close(frames: Mapping[str, pd.DataFrame], anchor: datetime) -> float | None:
+    for tf in ("M1", "M5", "M15", "H1"):
+        df = frames.get(tf, pd.DataFrame())
+        if df.empty:
+            continue
+        view = _slice_before(df, anchor - timedelta(minutes=30), anchor)
         if not view.empty:
             return _parse_float(view.iloc[-1].get("close"))
     return None
@@ -466,8 +495,9 @@ def _infer_direction_from_frame(
     lookback_minutes: int,
     pip_size: float,
     timeframe: str,
+    include_anchor: bool = True,
 ) -> DirectionInference:
-    window = _slice_time(df, anchor - timedelta(minutes=lookback_minutes), anchor)
+    window = _slice_time(df, anchor - timedelta(minutes=lookback_minutes), anchor, inclusive_end=include_anchor)
     if len(window) < 3:
         return DirectionInference(
             "UNKNOWN_DIRECTION",
@@ -543,6 +573,7 @@ def infer_reversal_direction(
     *,
     lookback_minutes: int = 30,
     pip_size: float = 0.1,
+    include_anchor: bool = True,
 ) -> DirectionInference:
     for timeframe in ("M5", "M1"):
         inference = _infer_direction_from_frame(
@@ -551,6 +582,7 @@ def infer_reversal_direction(
             lookback_minutes=lookback_minutes,
             pip_size=pip_size,
             timeframe=timeframe,
+            include_anchor=include_anchor,
         )
         if inference.direction_guess != "UNKNOWN_DIRECTION":
             return inference
@@ -849,6 +881,14 @@ def _base_row(
         "entry_level_is_heuristic": entry.entry_is_heuristic,
         "entry_direction_conflict": ENTRY_DIRECTION_CONFLICT in entry.entry_level_reason_codes,
         "pip_size": pip_size,
+        "matched_control_for_entry_source": sample.metadata.get("matched_control_for_entry_source"),
+        "matched_control_for_session": sample.metadata.get("matched_control_for_session"),
+        "control_generation_method": sample.metadata.get("control_generation_method"),
+        "control_random_seed": sample.metadata.get("control_random_seed"),
+        "control_lookahead_safe": sample.metadata.get("control_lookahead_safe"),
+        "sweep_control_lookback_minutes": sample.metadata.get("sweep_control_lookback_minutes"),
+        "sweep_control_anchor_delay_minutes": sample.metadata.get("sweep_control_anchor_delay_minutes"),
+        "control_skip_reason": sample.metadata.get("control_skip_reason"),
         "visual_html_path": sample.html_path,
     }
 
@@ -928,6 +968,48 @@ def classify_session(ts: datetime) -> str:
     return "OTHER"
 
 
+def _control_direction_from_metadata(sample: ReplayInputSample) -> DirectionInference | None:
+    if sample.row_type != "CONTROL":
+        return None
+    direction = str(sample.metadata.get("control_direction_guess") or "").strip()
+    if not direction:
+        return None
+    sweep_timestamp = _parse_dt(sample.metadata.get("control_sweep_timestamp"))
+    return DirectionInference(
+        direction_guess=direction,
+        direction_source_timeframe=str(sample.metadata.get("control_direction_source_timeframe") or ""),
+        sweep_type=str(sample.metadata.get("control_sweep_type") or "") or None,
+        swept_level=_parse_float(sample.metadata.get("control_swept_level")),
+        sweep_timestamp=sweep_timestamp,
+        direction_confidence=str(sample.metadata.get("control_direction_confidence") or "UNKNOWN"),
+        direction_reason_codes=tuple(
+            item for item in str(sample.metadata.get("control_direction_reason_codes") or "").split("|") if item
+        )
+        or ("CONTROL_PRE_ANCHOR_DIRECTION_METADATA",),
+        sweep_extreme=_parse_float(sample.metadata.get("control_sweep_extreme")),
+    )
+
+
+def _control_entry_from_metadata(sample: ReplayInputSample) -> EntryHypothesis | None:
+    if sample.row_type != "CONTROL":
+        return None
+    entry_price = _parse_float(sample.metadata.get("control_entry_price"))
+    entry_source = str(sample.metadata.get("control_entry_level_source") or "").strip()
+    if entry_price is None or not entry_source:
+        return None
+    return EntryHypothesis(
+        entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+        entry_price=round(entry_price, 2),
+        entry_level_source=entry_source,
+        entry_is_heuristic=str(sample.metadata.get("control_entry_level_is_heuristic") or "true").lower() != "false",
+        entry_level_confidence=str(sample.metadata.get("control_entry_level_confidence") or "UNKNOWN"),
+        entry_level_reason_codes=tuple(
+            item for item in str(sample.metadata.get("control_entry_level_reason_codes") or "").split("|") if item
+        )
+        or ("CONTROL_PRE_ANCHOR_ENTRY_METADATA",),
+    )
+
+
 def _coverage_ok(frames: Mapping[str, pd.DataFrame], anchor: datetime, forward_hours: float) -> bool:
     context = not _slice_time(frames.get("M15", pd.DataFrame()), anchor - timedelta(minutes=90), anchor + timedelta(minutes=180)).empty
     context = context or not _slice_time(frames.get("H1", pd.DataFrame()), anchor - timedelta(hours=3), anchor + timedelta(hours=1)).empty
@@ -943,77 +1025,376 @@ def _coverage_ok(frames: Mapping[str, pd.DataFrame], anchor: datetime, forward_h
     return (pd.Timestamp(forward.iloc[-1]["time"]).to_pydatetime() - anchor).total_seconds() >= 60 * 60
 
 
+def detect_pre_anchor_sweep_control(
+    frames: Mapping[str, pd.DataFrame],
+    anchor: datetime,
+    *,
+    lookback_minutes: int = 60,
+    min_anchor_delay_minutes: int = 5,
+    min_rejection_pips: float = 5.0,
+    pip_size: float = 0.1,
+) -> tuple[DirectionInference, EntryHypothesis] | None:
+    """Detect a sweep using only candles before the control anchor.
+
+    The anchor candle and all post-anchor candles are intentionally excluded.
+    """
+    min_rejection_price = min_rejection_pips * pip_size
+    latest_allowed_sweep = anchor - timedelta(minutes=min_anchor_delay_minutes)
+    events: list[dict[str, Any]] = []
+    for timeframe in ("M5", "M1"):
+        window = _slice_before(frames.get(timeframe, pd.DataFrame()), anchor - timedelta(minutes=lookback_minutes), anchor)
+        if len(window) < 4:
+            continue
+        for idx in range(1, len(window)):
+            current = window.iloc[idx]
+            when = pd.Timestamp(current["time"]).to_pydatetime()
+            if when > latest_allowed_sweep:
+                continue
+            prior = window.iloc[:idx]
+            subsequent = window.iloc[idx + 1 :]
+            prior_high = float(prior["high"].max())
+            prior_low = float(prior["low"].min())
+            high = float(current["high"])
+            low = float(current["low"])
+            close = float(current["close"])
+            if high > prior_high:
+                penetration_pips = (high - prior_high) / pip_size
+                closed_back = close <= prior_high or (not subsequent.empty and (subsequent["close"].astype(float) <= prior_high).any())
+                moved_away = not subsequent.empty and (subsequent["low"].astype(float) <= high - min_rejection_price).any()
+                if closed_back or moved_away:
+                    events.append(
+                        {
+                            "direction": "SHORT",
+                            "sweep_type": "UPWARD_SWEEP",
+                            "swept_level": prior_high,
+                            "sweep_extreme": high,
+                            "timestamp": when,
+                            "timeframe": timeframe,
+                            "confidence": _sweep_confidence(penetration_pips, bool(closed_back)),
+                            "penetration_pips": penetration_pips,
+                            "reason": "PRE_ANCHOR_UPWARD_SWEEP_REJECTED_OR_MOVED_AWAY",
+                        }
+                    )
+            if low < prior_low:
+                penetration_pips = (prior_low - low) / pip_size
+                closed_back = close >= prior_low or (not subsequent.empty and (subsequent["close"].astype(float) >= prior_low).any())
+                moved_away = not subsequent.empty and (subsequent["high"].astype(float) >= low + min_rejection_price).any()
+                if closed_back or moved_away:
+                    events.append(
+                        {
+                            "direction": "LONG",
+                            "sweep_type": "DOWNWARD_SWEEP",
+                            "swept_level": prior_low,
+                            "sweep_extreme": low,
+                            "timestamp": when,
+                            "timeframe": timeframe,
+                            "confidence": _sweep_confidence(penetration_pips, bool(closed_back)),
+                            "penetration_pips": penetration_pips,
+                            "reason": "PRE_ANCHOR_DOWNWARD_SWEEP_REJECTED_OR_MOVED_AWAY",
+                        }
+                    )
+    if not events:
+        return None
+    chosen = sorted(events, key=lambda item: (item["timestamp"], item["penetration_pips"]))[-1]
+    direction = DirectionInference(
+        direction_guess=str(chosen["direction"]),
+        direction_source_timeframe=str(chosen["timeframe"]),
+        sweep_type=str(chosen["sweep_type"]),
+        swept_level=round(float(chosen["swept_level"]), 2),
+        sweep_timestamp=chosen["timestamp"],
+        direction_confidence=str(chosen["confidence"]),
+        direction_reason_codes=(
+            str(chosen["reason"]),
+            "CONTROL_SWEEP_USED_PRE_ANCHOR_CANDLES_ONLY",
+            "ANCHOR_CANDLE_EXCLUDED",
+            "POST_ANCHOR_CANDLES_EXCLUDED",
+        ),
+        sweep_extreme=round(float(chosen["sweep_extreme"]), 2),
+    )
+    entry = EntryHypothesis(
+        entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+        entry_price=round(float(chosen["sweep_extreme"]), 2),
+        entry_level_source=SWEEP_EXTREME,
+        entry_is_heuristic=True,
+        entry_level_confidence=_sweep_entry_confidence(direction),
+        entry_level_reason_codes=(
+            "PRE_ANCHOR_SWEEP_EXTREME_CONTROL",
+            "CONTROL_ENTRY_USED_PRE_ANCHOR_CANDLES_ONLY",
+        ),
+    )
+    return direction, entry
+
+
+def _increment_counter(counter: dict[str, int], key: str, amount: int = 1) -> None:
+    counter[key] = counter.get(key, 0) + amount
+
+
+def _source_session_key(source: str, session: str) -> str:
+    return f"{source}|{session}"
+
+
+def _session_distribution(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in rows:
+        session = str(row.get("session") or classify_session(_parse_dt(row.get("anchor_timestamp")) or _utc_now()))
+        _increment_counter(out, session)
+    return dict(sorted(out.items()))
+
+
+def _candidate_control_targets(
+    candidate_rows: Sequence[Mapping[str, Any]],
+    *,
+    requested: int,
+    match_entry_source: bool,
+    match_session: bool,
+) -> tuple[dict[tuple[str, str], int], dict[str, int], list[str]]:
+    supported_sources = {ROUND_LEVEL, SWEEP_EXTREME}
+    group_counts: dict[tuple[str, str], int] = {}
+    unsupported_counts: dict[str, int] = {}
+    limitations: list[str] = []
+    for row in candidate_rows:
+        source = str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE)
+        if source == UNKNOWN_ENTRY_SOURCE:
+            continue
+        if source not in supported_sources:
+            _increment_counter(unsupported_counts, source)
+            continue
+        session = str(row.get("session") or "UNKNOWN") if match_session else "ANY"
+        source_key = source if match_entry_source else ROUND_LEVEL
+        group_counts[(source_key, session)] = group_counts.get((source_key, session), 0) + 1
+    for source, count in unsupported_counts.items():
+        limitations.append(f"CONTROL_SOURCE_UNSUPPORTED_{source}_CANDIDATES_{count}")
+    if not group_counts or requested <= 0:
+        return {}, unsupported_counts, limitations
+    total = sum(group_counts.values())
+    raw: list[tuple[tuple[str, str], float]] = [(key, requested * count / total) for key, count in group_counts.items()]
+    quotas = {key: max(1, int(value)) for key, value in raw}
+    while sum(quotas.values()) > requested:
+        key = max(quotas, key=lambda item: quotas[item])
+        if quotas[key] <= 1:
+            break
+        quotas[key] -= 1
+    while sum(quotas.values()) < requested:
+        key = max(raw, key=lambda item: item[1] - int(item[1]))[0]
+        quotas[key] += 1
+    return quotas, unsupported_counts, limitations
+
+
+def _control_metadata_common(
+    *,
+    source: str,
+    target_session: str,
+    actual_session: str,
+    method: str,
+    seed: int,
+    lookahead_safe: bool,
+    cfg: ObjectiveReplayConfig,
+) -> dict[str, Any]:
+    return {
+        "matched_control_for_entry_source": True,
+        "matched_control_for_session": target_session == actual_session,
+        "control_generation_method": method,
+        "control_random_seed": seed,
+        "control_lookahead_safe": lookahead_safe,
+        "sweep_control_lookback_minutes": cfg.sweep_control_lookback_minutes if source == SWEEP_EXTREME else "",
+        "sweep_control_anchor_delay_minutes": cfg.sweep_control_min_anchor_delay_minutes if source == SWEEP_EXTREME else "",
+        "control_target_entry_source": source,
+        "control_target_session": target_session,
+    }
+
+
+def _metadata_from_direction(direction: DirectionInference) -> dict[str, Any]:
+    return {
+        "control_direction_guess": direction.direction_guess,
+        "control_direction_source_timeframe": direction.direction_source_timeframe or "",
+        "control_sweep_type": direction.sweep_type or "",
+        "control_swept_level": direction.swept_level if direction.swept_level is not None else "",
+        "control_sweep_extreme": direction.sweep_extreme if direction.sweep_extreme is not None else "",
+        "control_sweep_timestamp": direction.sweep_timestamp.isoformat() if direction.sweep_timestamp else "",
+        "control_direction_confidence": direction.direction_confidence,
+        "control_direction_reason_codes": "|".join(direction.direction_reason_codes),
+    }
+
+
+def _metadata_from_entry(entry: EntryHypothesis) -> dict[str, Any]:
+    return {
+        "control_entry_price": entry.entry_price if entry.entry_price is not None else "",
+        "control_entry_level_source": entry.entry_level_source or "",
+        "control_entry_level_confidence": entry.entry_level_confidence,
+        "control_entry_level_reason_codes": "|".join(entry.entry_level_reason_codes),
+        "control_entry_level_is_heuristic": entry.entry_is_heuristic,
+    }
+
+
 def generate_control_samples(
     candidate_samples: Sequence[ReplayInputSample],
     frames: Mapping[str, pd.DataFrame],
     *,
     symbol: str,
-    requested: int = 40,
+    requested: int = 800,
     forward_hours: float = 4.0,
     threshold_pips: float = 5.0,
     seed: int = 42,
-) -> tuple[list[ReplayInputSample], list[str]]:
+    candidate_rows: Sequence[Mapping[str, Any]] | None = None,
+    pip_size: float = 0.1,
+    cfg: ObjectiveReplayConfig | None = None,
+) -> ControlGenerationResult:
+    cfg = cfg or ObjectiveReplayConfig(symbol=symbol, include_control_random=requested, random_seed=seed)
+    stats: dict[str, Any] = {
+        "attempts_by_source": {},
+        "success_by_source": {},
+        "attempts_by_source_and_session": {},
+        "success_by_source_and_session": {},
+        "skip_reasons": {},
+        "quota_by_source_and_session": {},
+        "unmatched_session_controls_allowed": bool(cfg.allow_unmatched_session_controls),
+    }
     if requested <= 0:
-        return [], []
+        return ControlGenerationResult([], [], stats)
     m15 = frames.get("M15", pd.DataFrame())
     if m15 is None or m15.empty or not candidate_samples:
-        return [], ["CONTROL_GROUP_INPUTS_MISSING"]
+        return ControlGenerationResult([], ["CONTROL_GROUP_INPUTS_MISSING"], stats)
     candidate_anchors = [sample.anchor_timestamp for sample in candidate_samples]
     min_anchor = min(candidate_anchors)
     max_anchor = max(candidate_anchors)
-    session_targets: dict[str, int] = {}
-    for sample in candidate_samples:
-        session_targets[classify_session(sample.anchor_timestamp)] = session_targets.get(classify_session(sample.anchor_timestamp), 0) + 1
-    rows = _slice_time(m15, min_anchor, max_anchor)
+    rows = _slice_time(frames.get("M1", pd.DataFrame()), min_anchor, max_anchor)
     if rows.empty:
-        return [], ["CONTROL_DATE_RANGE_EMPTY"]
-    candidates: list[ReplayInputSample] = []
-    for row in rows.itertuples(index=False):
-        anchor = pd.Timestamp(getattr(row, "time")).to_pydatetime()
-        if any(abs((anchor - candidate_anchor).total_seconds()) <= 30 * 60 for candidate_anchor in candidate_anchors):
-            continue
-        close = float(getattr(row, "close"))
-        level = _nearest_round_level(close)
-        if _round_level_distance_pips(symbol, close, level) > threshold_pips:
-            continue
-        if not _coverage_ok(frames, anchor, forward_hours):
-            continue
-        candidates.append(
-            ReplayInputSample(
-                row_type="CONTROL",
-                sample_id=f"control_pool_{len(candidates) + 1:04d}",
-                symbol=symbol,
-                anchor_timestamp=anchor,
-                source_mode="MATCHED_RANDOM_CONTROL",
-                metadata={
-                    "number_theory_level": str(round(level, 2)),
-                    "candidate_reason_codes": "MATCHED_RANDOM_ROUND_LEVEL_CONTROL",
-                },
-            )
-        )
+        rows = _slice_time(frames.get("M5", pd.DataFrame()), min_anchor, max_anchor)
+    if rows.empty:
+        return ControlGenerationResult([], ["CONTROL_DATE_RANGE_EMPTY"], stats)
+    if candidate_rows is None:
+        candidate_rows = [
+            {
+                "entry_level_source": ROUND_LEVEL,
+                "session": classify_session(sample.anchor_timestamp),
+                "anchor_timestamp": sample.anchor_timestamp.isoformat(),
+            }
+            for sample in candidate_samples
+        ]
+    quotas, _, quota_limitations = _candidate_control_targets(
+        candidate_rows,
+        requested=requested,
+        match_entry_source=cfg.control_match_entry_source,
+        match_session=cfg.control_match_session,
+    )
+    stats["quota_by_source_and_session"] = {_source_session_key(source, session): quota for (source, session), quota in sorted(quotas.items())}
+    limitations = list(quota_limitations)
+    if not quotas:
+        limitations.append("CONTROL_GROUP_NO_SUPPORTED_ENTRY_SOURCE_TARGETS")
+        return ControlGenerationResult([], limitations, stats)
     rng = random.Random(seed)
-    by_session: dict[str, list[ReplayInputSample]] = {}
-    for item in candidates:
-        by_session.setdefault(classify_session(item.anchor_timestamp), []).append(item)
-    for items in by_session.values():
-        rng.shuffle(items)
+    anchor_times = [pd.Timestamp(row.time).to_pydatetime() for row in rows.itertuples(index=False)]
+    candidate_anchor_set = {pd.Timestamp(anchor).isoformat() for anchor in candidate_anchors}
     selected: list[ReplayInputSample] = []
-    for session, target in session_targets.items():
-        for _ in range(max(1, round(requested * target / max(1, len(candidate_samples))))):
-            bucket = by_session.get(session) or []
-            if bucket and len(selected) < requested:
-                selected.append(bucket.pop())
-    remaining = [item for items in by_session.values() for item in items]
-    rng.shuffle(remaining)
-    while len(selected) < requested and remaining:
-        selected.append(remaining.pop())
-    for idx, sample in enumerate(selected, start=1):
-        sample.metadata["control_selection"] = "same_date_range_same_coverage_round_level"
-        object.__setattr__(sample, "sample_id", f"control_{idx:03d}")
-    limitations = []
+    used: set[tuple[str, str]] = set()
+
+    for (source, target_session), quota in sorted(quotas.items()):
+        attempts = 0
+        successes = 0
+        max_attempts = max(quota, quota * max(1, cfg.control_max_attempts_per_row))
+        while successes < quota and attempts < max_attempts and anchor_times:
+            attempts += 1
+            _increment_counter(stats["attempts_by_source"], source)
+            _increment_counter(stats["attempts_by_source_and_session"], _source_session_key(source, target_session))
+            anchor = rng.choice(anchor_times)
+            anchor_key = pd.Timestamp(anchor).isoformat()
+            actual_session = classify_session(anchor)
+            if anchor_key in candidate_anchor_set or (source, anchor_key) in used:
+                _increment_counter(stats["skip_reasons"], "CONTROL_ANCHOR_OVERLAPS_CANDIDATE_OR_DUPLICATE")
+                continue
+            if cfg.control_match_session and actual_session != target_session and not cfg.allow_unmatched_session_controls:
+                _increment_counter(stats["skip_reasons"], "SESSION_MISMATCH")
+                continue
+            if not _coverage_ok(frames, anchor, forward_hours):
+                _increment_counter(stats["skip_reasons"], "MISSING_EXECUTION_COVERAGE")
+                continue
+
+            direction: DirectionInference
+            entry: EntryHypothesis
+            method: str
+            if source == ROUND_LEVEL:
+                pre_anchor_price = _nearest_pre_anchor_close(frames, anchor)
+                if pre_anchor_price is None:
+                    _increment_counter(stats["skip_reasons"], "ROUND_LEVEL_PRE_ANCHOR_PRICE_MISSING")
+                    continue
+                level = _nearest_round_level(pre_anchor_price)
+                if _round_level_distance_pips(symbol, pre_anchor_price, level) > threshold_pips:
+                    _increment_counter(stats["skip_reasons"], "ROUND_LEVEL_NOT_NEAR_PRE_ANCHOR_PRICE")
+                    continue
+                direction = infer_reversal_direction(
+                    frames,
+                    anchor,
+                    lookback_minutes=cfg.direction_lookback_minutes,
+                    pip_size=pip_size,
+                    include_anchor=False,
+                )
+                entry = EntryHypothesis(
+                    entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+                    entry_price=round(level, 2),
+                    entry_level_source=ROUND_LEVEL,
+                    entry_is_heuristic=True,
+                    entry_level_confidence="MEDIUM",
+                    entry_level_reason_codes=("CONTROL_PRE_ANCHOR_ROUND_LEVEL",),
+                )
+                method = "ROUND_LEVEL_PRE_ANCHOR_RANDOM"
+            elif source == SWEEP_EXTREME:
+                detected = detect_pre_anchor_sweep_control(
+                    frames,
+                    anchor,
+                    lookback_minutes=cfg.sweep_control_lookback_minutes,
+                    min_anchor_delay_minutes=cfg.sweep_control_min_anchor_delay_minutes,
+                    min_rejection_pips=cfg.sweep_control_min_rejection_pips,
+                    pip_size=pip_size,
+                )
+                if detected is None:
+                    _increment_counter(stats["skip_reasons"], "SWEEP_EXTREME_NOT_DETECTED_PRE_ANCHOR")
+                    continue
+                direction, entry = detected
+                method = "SWEEP_EXTREME_PRE_ANCHOR_RANDOM"
+            else:
+                _increment_counter(stats["skip_reasons"], f"UNSUPPORTED_CONTROL_SOURCE_{source}")
+                break
+
+            metadata = {
+                **_control_metadata_common(
+                    source=source,
+                    target_session=target_session,
+                    actual_session=actual_session,
+                    method=method,
+                    seed=seed,
+                    lookahead_safe=True,
+                    cfg=cfg,
+                ),
+                **_metadata_from_direction(direction),
+                **_metadata_from_entry(entry),
+                "candidate_reason_codes": f"{method}|ENTRY_SOURCE_SESSION_MATCHED_CONTROL",
+                "control_skip_reason": "",
+            }
+            if source == ROUND_LEVEL and entry.entry_price is not None:
+                metadata["number_theory_level"] = str(entry.entry_price)
+            selected.append(
+                ReplayInputSample(
+                    row_type="CONTROL",
+                    sample_id=f"control_{len(selected) + 1:04d}",
+                    symbol=symbol,
+                    anchor_timestamp=anchor,
+                    source_mode="ENTRY_SOURCE_SESSION_MATCHED_CONTROL",
+                    metadata=metadata,
+                )
+            )
+            used.add((source, anchor_key))
+            successes += 1
+            _increment_counter(stats["success_by_source"], source)
+            _increment_counter(stats["success_by_source_and_session"], _source_session_key(source, target_session))
+        if successes < quota:
+            limitations.append(f"CONTROL_GROUP_NOT_FILLED_{source}_{target_session}_{successes}_OF_{quota}")
+
     if len(selected) < requested:
         limitations.append("CONTROL_GROUP_NOT_FILLED")
-    return selected, limitations
+    total_attempts = sum(stats["attempts_by_source"].values())
+    total_success = len(selected)
+    stats["session_match_success_rate"] = round(total_success / total_attempts, 4) if total_attempts else 0.0
+    return ControlGenerationResult(selected, limitations, stats)
 
 
 OUTPUT_FIELDS = [
@@ -1040,6 +1421,14 @@ OUTPUT_FIELDS = [
     "entry_level_is_heuristic",
     "entry_direction_conflict",
     "pip_size",
+    "matched_control_for_entry_source",
+    "matched_control_for_session",
+    "control_generation_method",
+    "control_random_seed",
+    "control_lookahead_safe",
+    "sweep_control_lookback_minutes",
+    "sweep_control_anchor_delay_minutes",
+    "control_skip_reason",
     "sl_20_price",
     "sl_40_price",
     "sl_20_hit",
@@ -1139,6 +1528,59 @@ def _comparison_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
     }
 
 
+def _matched_group_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    candidate_rows = [row for row in rows if row.get("row_type") == "CANDIDATE"]
+    control_rows = [row for row in rows if row.get("row_type") == "CONTROL"]
+    metrics = _comparison_metrics(rows)
+    return {
+        "candidate_count": len(candidate_rows),
+        "control_count": len(control_rows),
+        **metrics,
+        "descriptive_effect_size_fast_reaction": round(
+            metrics["candidate_fast_reaction_rate"] - metrics["control_fast_reaction_rate"], 4
+        ),
+        "descriptive_effect_size_fast_sl20": round(
+            metrics["candidate_fast_sl_20_rate"] - metrics["control_fast_sl_20_rate"], 4
+        ),
+        "limitations": [
+            "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+            *([] if len(candidate_rows) >= 20 else ["SMALL_CANDIDATE_SAMPLE"]),
+            *([] if control_rows else ["NO_MATCHED_CONTROLS"]),
+        ],
+    }
+
+
+def _entry_source_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    sources = sorted({str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) for row in rows})
+    return {
+        source: _matched_group_metrics([row for row in rows if str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) == source])
+        for source in sources
+    }
+
+
+def _entry_source_session_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    groups = sorted(
+        {
+            (
+                str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE),
+                str(row.get("session") or "UNKNOWN"),
+            )
+            for row in rows
+        }
+    )
+    return {
+        _source_session_key(source, session): _matched_group_metrics(
+            [
+                row
+                for row in rows
+                if str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) == source
+                and str(row.get("session") or "UNKNOWN") == session
+            ]
+        )
+        for source, session in groups
+    }
+
+
 def build_summary(
     *,
     cfg: ObjectiveReplayConfig,
@@ -1149,7 +1591,9 @@ def build_summary(
     control_generated: int,
     rows: Sequence[Mapping[str, Any]],
     limitations: Sequence[str],
+    control_generation_stats: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    control_generation_stats = dict(control_generation_stats or {})
     candidate_counts = _counts(rows, "CANDIDATE")
     control_counts = _counts(rows, "CONTROL")
     known_entry_rows = [row for row in rows if _is_known_entry(row)]
@@ -1202,6 +1646,16 @@ def build_summary(
         "entry_level_source_counts": _source_counts(rows),
         "candidate_entry_level_source_counts": _source_counts(rows, "CANDIDATE"),
         "control_entry_level_source_counts": _source_counts(rows, "CONTROL"),
+        "candidate_session_distribution": _session_distribution([row for row in rows if row.get("row_type") == "CANDIDATE"]),
+        "control_session_distribution": _session_distribution([row for row in rows if row.get("row_type") == "CONTROL"]),
+        "control_generation_attempts_by_source": dict(control_generation_stats.get("attempts_by_source", {})),
+        "control_generation_success_by_source": dict(control_generation_stats.get("success_by_source", {})),
+        "control_generation_attempts_by_source_and_session": dict(control_generation_stats.get("attempts_by_source_and_session", {})),
+        "control_generation_success_by_source_and_session": dict(control_generation_stats.get("success_by_source_and_session", {})),
+        "control_generation_skip_reasons": dict(control_generation_stats.get("skip_reasons", {})),
+        "control_generation_quota_by_source_and_session": dict(control_generation_stats.get("quota_by_source_and_session", {})),
+        "session_match_success_rate": control_generation_stats.get("session_match_success_rate", 0.0),
+        "unmatched_session_controls_allowed": bool(control_generation_stats.get("unmatched_session_controls_allowed", False)),
         "candidate_outcome_label_counts": candidate_counts,
         "control_outcome_label_counts": control_counts,
         "candidate_outcome_counts_by_entry_level_source": _outcome_counts_by_source(rows, "CANDIDATE"),
@@ -1215,6 +1669,8 @@ def build_summary(
         "candidate_vs_control_known_entry": _comparison_metrics(known_entry_rows),
         "candidate_vs_control_round_level": _comparison_metrics(round_level_rows),
         "candidate_vs_control_sweep_extreme": _comparison_metrics(sweep_extreme_rows),
+        "entry_source_matched_metrics": _entry_source_metrics(rows),
+        "entry_source_and_session_matched_metrics": _entry_source_session_metrics(rows),
         "limitations": sorted(set(summary_limitations)),
         "safety": {
             "live_trading_enabled": False,
@@ -1252,6 +1708,9 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         "",
         "Forward windows above 4h may overstate runner quality on XAUUSD.",
         "",
+        "Entry-source/session-matched controls improve baseline quality but are still descriptive and not validation.",
+        "Candidate sample size remains small; do not interpret as statistically significant. Report effect sizes only.",
+        "",
         "## Counts",
         "",
         f"- candidate samples loaded: `{summary['total_candidate_samples_loaded']}`",
@@ -1274,6 +1733,33 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         "",
         *[f"- `{source}`: `{count}`" for source, count in summary["control_entry_level_source_counts"].items()],
         "",
+        "## Session Distribution",
+        "",
+        "### Candidate",
+        "",
+        *[f"- `{session}`: `{count}`" for session, count in summary["candidate_session_distribution"].items()],
+        "",
+        "### Control",
+        "",
+        *[f"- `{session}`: `{count}`" for session, count in summary["control_session_distribution"].items()],
+        "",
+        "## Control Generation",
+        "",
+        f"- unmatched session controls allowed: `{summary['unmatched_session_controls_allowed']}`",
+        f"- session match success rate: `{summary['session_match_success_rate']}`",
+        "",
+        "### Attempts By Source And Session",
+        "",
+        *[
+            f"- `{key}`: attempts `{summary['control_generation_attempts_by_source_and_session'].get(key, 0)}`, "
+            f"success `{summary['control_generation_success_by_source_and_session'].get(key, 0)}`"
+            for key in sorted(summary["control_generation_attempts_by_source_and_session"])
+        ],
+        "",
+        "### Skip Reasons",
+        "",
+        *[f"- `{reason}`: `{count}`" for reason, count in summary["control_generation_skip_reasons"].items()],
+        "",
         "## Candidate Outcome Counts",
         "",
         *[f"- `{label}`: `{count}`" for label, count in summary["candidate_outcome_label_counts"].items()],
@@ -1289,6 +1775,20 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         "## Candidate Vs Control Known Entry",
         "",
         *[f"- `{key}`: `{value}`" for key, value in summary["candidate_vs_control_known_entry"].items()],
+        "",
+        "## Entry Source Matched Metrics",
+        "",
+        *[
+            f"- `{source}`: {json.dumps(metrics, sort_keys=True)}"
+            for source, metrics in summary["entry_source_matched_metrics"].items()
+        ],
+        "",
+        "## Entry Source And Session Matched Metrics",
+        "",
+        *[
+            f"- `{key}`: {json.dumps(metrics, sort_keys=True)}"
+            for key, metrics in summary["entry_source_and_session_matched_metrics"].items()
+        ],
         "",
         "## Candidate Outcome Counts By Entry Source",
         "",
@@ -1352,12 +1852,19 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
 <body>
   <h1>Adelin v2 Objective Outcome Replay</h1>
   <p class="warning">Diagnostic baseline comparison only. Not validation, not signals, not live trading.</p>
-  <p><strong>Known-entry subset is still descriptive and not validation.</strong></p>
+  <p><strong>Entry-source/session-matched controls improve baseline quality but remain descriptive and not validation. Candidate sample sizes are small; report effect sizes only.</strong></p>
   <h2>Entry Level Source Counts</h2>
   <h3>Candidate</h3>
   {label_table(summary["candidate_entry_level_source_counts"])}
   <h3>Control</h3>
   {label_table(summary["control_entry_level_source_counts"])}
+  <h2>Session Distribution</h2>
+  <h3>Candidate</h3>
+  {label_table(summary["candidate_session_distribution"])}
+  <h3>Control</h3>
+  {label_table(summary["control_session_distribution"])}
+  <h2>Control Generation</h2>
+  {label_table(summary["control_generation_success_by_source_and_session"])}
   <h2>Candidate Outcome Counts</h2>
   {label_table(summary["candidate_outcome_label_counts"])}
   <h2>Control Outcome Counts</h2>
@@ -1366,6 +1873,10 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
   {label_table(summary["candidate_vs_control"])}
   <h2>Candidate Vs Control Known Entry</h2>
   {label_table(summary["candidate_vs_control_known_entry"])}
+  <h2>Entry Source Matched Metrics</h2>
+  <pre>{html.escape(json.dumps(summary["entry_source_matched_metrics"], indent=2, sort_keys=True))}</pre>
+  <h2>Entry Source And Session Matched Metrics</h2>
+  <pre>{html.escape(json.dumps(summary["entry_source_and_session_matched_metrics"], indent=2, sort_keys=True))}</pre>
   <h2>Rows</h2>
   <table><tr><th>type</th><th>sample</th><th>anchor</th><th>direction</th><th>entry</th><th>source</th><th>confidence</th><th>label</th><th>MFE</th><th>MAE</th></tr>
   {''.join(body_rows)}
@@ -1429,18 +1940,8 @@ def run_objective_replay(cfg: ObjectiveReplayConfig) -> dict[str, Any]:
             limitations.append(f"MISSING_TIMEFRAME_{tf}")
     candidate_samples, original_rows, visual_limitations = load_visual_review_samples(cfg.visual_pack_dir, cfg.symbol)
     limitations.extend(visual_limitations)
-    control_samples, control_limitations = generate_control_samples(
-        candidate_samples,
-        frames,
-        symbol=cfg.symbol,
-        requested=cfg.include_control_random,
-        forward_hours=cfg.forward_hours,
-        threshold_pips=cfg.round_level_threshold_pips,
-        seed=cfg.random_seed,
-    )
-    limitations.extend(control_limitations)
     replay_rows: list[dict[str, Any]] = []
-    for sample in [*candidate_samples, *control_samples]:
+    for sample in candidate_samples:
         direction = infer_reversal_direction(
             frames,
             sample.anchor_timestamp,
@@ -1468,15 +1969,58 @@ def run_objective_replay(cfg: ObjectiveReplayConfig) -> dict[str, Any]:
                 reaction_slow_minutes=cfg.reaction_slow_minutes,
             )
         )
+    control_result = generate_control_samples(
+        candidate_samples,
+        frames,
+        symbol=cfg.symbol,
+        requested=cfg.include_control_random,
+        forward_hours=cfg.forward_hours,
+        threshold_pips=cfg.round_level_threshold_pips,
+        seed=cfg.random_seed,
+        candidate_rows=[row for row in replay_rows if row.get("row_type") == "CANDIDATE"],
+        pip_size=pip_resolution.pip_size,
+        cfg=cfg,
+    )
+    limitations.extend(control_result.limitations)
+    for sample in control_result.samples:
+        direction = _control_direction_from_metadata(sample) or infer_reversal_direction(
+            frames,
+            sample.anchor_timestamp,
+            lookback_minutes=cfg.direction_lookback_minutes,
+            pip_size=pip_resolution.pip_size,
+            include_anchor=False,
+        )
+        entry = _control_entry_from_metadata(sample) or build_entry_hypothesis(
+            sample,
+            frames,
+            direction,
+            symbol=cfg.symbol,
+            threshold_pips=cfg.round_level_threshold_pips,
+            pip_size=pip_resolution.pip_size,
+        )
+        replay_rows.append(
+            replay_forward_path(
+                sample,
+                frames,
+                entry,
+                direction,
+                symbol=cfg.symbol,
+                pip_size=pip_resolution.pip_size,
+                forward_hours=cfg.forward_hours,
+                reaction_fast_minutes=cfg.reaction_fast_minutes,
+                reaction_slow_minutes=cfg.reaction_slow_minutes,
+            )
+        )
     summary = build_summary(
         cfg=cfg,
         started=started,
         pip_resolution=pip_resolution,
         candidate_loaded=len(candidate_samples),
         control_requested=cfg.include_control_random,
-        control_generated=len(control_samples),
+        control_generated=len(control_result.samples),
         rows=replay_rows,
         limitations=limitations,
+        control_generation_stats=control_result.stats,
     )
     _write_csv(replay_rows, output_dir)
     _write_json(summary, output_dir)
@@ -1491,6 +2035,7 @@ __all__ = [
     "GOOD_FAST_REACTION",
     "GOOD_SLOW_REACTION",
     "NO_REACTION",
+    "ControlGenerationResult",
     "ObjectiveReplayConfig",
     "ROUND_LEVEL",
     "ROUND_LEVEL_TOUCH_ENTRY",
@@ -1501,6 +2046,7 @@ __all__ = [
     "UNKNOWN_INSUFFICIENT_FORWARD_DATA",
     "build_entry_hypothesis",
     "build_round_level_entry",
+    "detect_pre_anchor_sweep_control",
     "generate_control_samples",
     "infer_reversal_direction",
     "replay_forward_path",

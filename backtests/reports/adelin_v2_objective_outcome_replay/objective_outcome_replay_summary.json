@@ -39,6 +39,15 @@
     "UNKNOWN_INSUFFICIENT_FORWARD_DATA": 1
   },
   "candidate_samples_replayed": 40,
+  "candidate_session_distribution": {
+    "ASIA": 6,
+    "ASIA_OPEN": 5,
+    "LONDON": 5,
+    "LONDON_OPEN": 6,
+    "NEW_YORK": 5,
+    "NEW_YORK_OPEN": 5,
+    "OTHER": 8
+  },
   "candidate_unknown_entry_level_count": 5,
   "candidate_unknown_entry_level_rate": 0.125,
   "candidate_vs_control": {
@@ -46,89 +55,541 @@
     "candidate_fast_sl_20_rate": 0.175,
     "candidate_runner_candidate_rate": 0.025,
     "candidate_unknown_rate": 0.15,
-    "control_fast_reaction_rate": 0.175,
-    "control_fast_sl_20_rate": 0.55,
-    "control_runner_candidate_rate": 0.0,
-    "control_unknown_rate": 0.05
+    "control_fast_reaction_rate": 0.43,
+    "control_fast_sl_20_rate": 0.3066,
+    "control_runner_candidate_rate": 0.0062,
+    "control_unknown_rate": 0.0
   },
   "candidate_vs_control_all_rows": {
     "candidate_fast_reaction_rate": 0.35,
     "candidate_fast_sl_20_rate": 0.175,
     "candidate_runner_candidate_rate": 0.025,
     "candidate_unknown_rate": 0.15,
-    "control_fast_reaction_rate": 0.175,
-    "control_fast_sl_20_rate": 0.55,
-    "control_runner_candidate_rate": 0.0,
-    "control_unknown_rate": 0.05
+    "control_fast_reaction_rate": 0.43,
+    "control_fast_sl_20_rate": 0.3066,
+    "control_runner_candidate_rate": 0.0062,
+    "control_unknown_rate": 0.0
   },
   "candidate_vs_control_known_entry": {
     "candidate_fast_reaction_rate": 0.4,
     "candidate_fast_sl_20_rate": 0.2,
     "candidate_runner_candidate_rate": 0.0286,
     "candidate_unknown_rate": 0.0286,
-    "control_fast_reaction_rate": 0.175,
-    "control_fast_sl_20_rate": 0.55,
-    "control_runner_candidate_rate": 0.0,
-    "control_unknown_rate": 0.05
+    "control_fast_reaction_rate": 0.43,
+    "control_fast_sl_20_rate": 0.3066,
+    "control_runner_candidate_rate": 0.0062,
+    "control_unknown_rate": 0.0
   },
   "candidate_vs_control_round_level": {
     "candidate_fast_reaction_rate": 0.1429,
     "candidate_fast_sl_20_rate": 0.5714,
     "candidate_runner_candidate_rate": 0.0,
     "candidate_unknown_rate": 0.0,
-    "control_fast_reaction_rate": 0.175,
-    "control_fast_sl_20_rate": 0.55,
+    "control_fast_reaction_rate": 0.1304,
+    "control_fast_sl_20_rate": 0.7681,
     "control_runner_candidate_rate": 0.0,
-    "control_unknown_rate": 0.05
+    "control_unknown_rate": 0.0
   },
   "candidate_vs_control_sweep_extreme": {
     "candidate_fast_reaction_rate": 0.4583,
     "candidate_fast_sl_20_rate": 0.0833,
     "candidate_runner_candidate_rate": 0.0417,
     "candidate_unknown_rate": 0.0417,
-    "control_fast_reaction_rate": 0.0,
-    "control_fast_sl_20_rate": 0.0,
-    "control_runner_candidate_rate": 0.0,
+    "control_fast_reaction_rate": 0.4796,
+    "control_fast_sl_20_rate": 0.2302,
+    "control_runner_candidate_rate": 0.0072,
     "control_unknown_rate": 0.0
   },
   "control_entry_level_source_counts": {
-    "ROUND_LEVEL": 40
+    "ROUND_LEVEL": 69,
+    "SWEEP_EXTREME": 417
   },
-  "control_known_entry_count": 40,
+  "control_generation_attempts_by_source": {
+    "ROUND_LEVEL": 4575,
+    "SWEEP_EXTREME": 10132
+  },
+  "control_generation_attempts_by_source_and_session": {
+    "ROUND_LEVEL|ASIA_OPEN": 625,
+    "ROUND_LEVEL|LONDON_OPEN": 750,
+    "ROUND_LEVEL|NEW_YORK": 1925,
+    "ROUND_LEVEL|OTHER": 1275,
+    "SWEEP_EXTREME|ASIA": 271,
+    "SWEEP_EXTREME|ASIA_OPEN": 2575,
+    "SWEEP_EXTREME|LONDON": 245,
+    "SWEEP_EXTREME|LONDON_OPEN": 3225,
+    "SWEEP_EXTREME|NEW_YORK": 267,
+    "SWEEP_EXTREME|NEW_YORK_OPEN": 3225,
+    "SWEEP_EXTREME|OTHER": 324
+  },
+  "control_generation_quota_by_source_and_session": {
+    "ROUND_LEVEL|ASIA_OPEN": 25,
+    "ROUND_LEVEL|LONDON_OPEN": 30,
+    "ROUND_LEVEL|NEW_YORK": 77,
+    "ROUND_LEVEL|OTHER": 51,
+    "SWEEP_EXTREME|ASIA": 51,
+    "SWEEP_EXTREME|ASIA_OPEN": 103,
+    "SWEEP_EXTREME|LONDON": 51,
+    "SWEEP_EXTREME|LONDON_OPEN": 129,
+    "SWEEP_EXTREME|NEW_YORK": 51,
+    "SWEEP_EXTREME|NEW_YORK_OPEN": 129,
+    "SWEEP_EXTREME|OTHER": 103
+  },
+  "control_generation_skip_reasons": {
+    "CONTROL_ANCHOR_OVERLAPS_CANDIDATE_OR_DUPLICATE": 41,
+    "MISSING_EXECUTION_COVERAGE": 2,
+    "ROUND_LEVEL_NOT_NEAR_PRE_ANCHOR_PRICE": 690,
+    "SESSION_MISMATCH": 13486,
+    "SWEEP_EXTREME_NOT_DETECTED_PRE_ANCHOR": 2
+  },
+  "control_generation_success_by_source": {
+    "ROUND_LEVEL": 69,
+    "SWEEP_EXTREME": 417
+  },
+  "control_generation_success_by_source_and_session": {
+    "ROUND_LEVEL|NEW_YORK": 43,
+    "ROUND_LEVEL|OTHER": 26,
+    "SWEEP_EXTREME|ASIA": 51,
+    "SWEEP_EXTREME|ASIA_OPEN": 8,
+    "SWEEP_EXTREME|LONDON": 51,
+    "SWEEP_EXTREME|LONDON_OPEN": 80,
+    "SWEEP_EXTREME|NEW_YORK": 51,
+    "SWEEP_EXTREME|NEW_YORK_OPEN": 73,
+    "SWEEP_EXTREME|OTHER": 103
+  },
+  "control_known_entry_count": 486,
   "control_outcome_counts_by_entry_level_source": {
     "ROUND_LEVEL": {
-      "FAST_SL_20": 22,
-      "GOOD_FAST_REACTION": 5,
-      "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 7,
-      "GOOD_SLOW_REACTION": 4,
-      "UNKNOWN_DIRECTION": 2
+      "FAST_SL_20": 53,
+      "GOOD_FAST_REACTION": 4,
+      "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 1,
+      "GOOD_SLOW_REACTION": 10,
+      "MFE_GOOD_BUT_BE_REQUIRED": 1
+    },
+    "SWEEP_EXTREME": {
+      "FAST_SL_20": 96,
+      "GOOD_FAST_REACTION": 193,
+      "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 35,
+      "GOOD_SLOW_REACTION": 70,
+      "MFE_GOOD_BUT_BE_REQUIRED": 18,
+      "NO_REACTION": 2,
+      "RUNNER_CANDIDATE": 3
     }
   },
   "control_outcome_label_counts": {
-    "FAST_SL_20": 22,
-    "GOOD_FAST_REACTION": 5,
-    "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 7,
-    "GOOD_SLOW_REACTION": 4,
-    "UNKNOWN_DIRECTION": 2
+    "FAST_SL_20": 149,
+    "GOOD_FAST_REACTION": 197,
+    "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 36,
+    "GOOD_SLOW_REACTION": 80,
+    "MFE_GOOD_BUT_BE_REQUIRED": 19,
+    "NO_REACTION": 2,
+    "RUNNER_CANDIDATE": 3
   },
-  "control_random_requested": 40,
-  "control_samples_generated": 40,
-  "control_samples_replayed": 40,
+  "control_random_requested": 800,
+  "control_samples_generated": 486,
+  "control_samples_replayed": 486,
+  "control_session_distribution": {
+    "ASIA": 51,
+    "ASIA_OPEN": 8,
+    "LONDON": 51,
+    "LONDON_OPEN": 80,
+    "NEW_YORK": 94,
+    "NEW_YORK_OPEN": 73,
+    "OTHER": 129
+  },
   "control_unknown_entry_level_count": 0,
   "control_unknown_entry_level_rate": 0.0,
   "direction_lookback_minutes": 30,
   "dry_run": true,
   "entry_level_source_counts": {
-    "ROUND_LEVEL": 47,
-    "SWEEP_EXTREME": 24,
+    "ROUND_LEVEL": 76,
+    "SWEEP_EXTREME": 441,
     "SWEPT_LIQUIDITY_LEVEL": 4,
     "UNKNOWN": 5
+  },
+  "entry_source_and_session_matched_metrics": {
+    "ROUND_LEVEL|ASIA_OPEN": {
+      "candidate_count": 1,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 1.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 1.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "ROUND_LEVEL|LONDON_OPEN": {
+      "candidate_count": 1,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "ROUND_LEVEL|NEW_YORK": {
+      "candidate_count": 3,
+      "candidate_fast_reaction_rate": 0.3333,
+      "candidate_fast_sl_20_rate": 0.6667,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 43,
+      "control_fast_reaction_rate": 0.1628,
+      "control_fast_sl_20_rate": 0.7209,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.1705,
+      "descriptive_effect_size_fast_sl20": -0.0542,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "ROUND_LEVEL|OTHER": {
+      "candidate_count": 2,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.5,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 26,
+      "control_fast_reaction_rate": 0.0769,
+      "control_fast_sl_20_rate": 0.8462,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": -0.0769,
+      "descriptive_effect_size_fast_sl20": -0.3462,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|ASIA": {
+      "candidate_count": 2,
+      "candidate_fast_reaction_rate": 0.5,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 51,
+      "control_fast_reaction_rate": 0.5098,
+      "control_fast_sl_20_rate": 0.1569,
+      "control_runner_candidate_rate": 0.0196,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": -0.0098,
+      "descriptive_effect_size_fast_sl20": -0.1569,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|ASIA_OPEN": {
+      "candidate_count": 4,
+      "candidate_fast_reaction_rate": 1.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 8,
+      "control_fast_reaction_rate": 1.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|LONDON": {
+      "candidate_count": 2,
+      "candidate_fast_reaction_rate": 0.5,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 51,
+      "control_fast_reaction_rate": 0.4118,
+      "control_fast_sl_20_rate": 0.2745,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0882,
+      "descriptive_effect_size_fast_sl20": -0.2745,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|LONDON_OPEN": {
+      "candidate_count": 5,
+      "candidate_fast_reaction_rate": 0.6,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 80,
+      "control_fast_reaction_rate": 0.4,
+      "control_fast_sl_20_rate": 0.25,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.2,
+      "descriptive_effect_size_fast_sl20": -0.25,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|NEW_YORK": {
+      "candidate_count": 2,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 51,
+      "control_fast_reaction_rate": 0.4706,
+      "control_fast_sl_20_rate": 0.2157,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": -0.4706,
+      "descriptive_effect_size_fast_sl20": -0.2157,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|NEW_YORK_OPEN": {
+      "candidate_count": 5,
+      "candidate_fast_reaction_rate": 0.2,
+      "candidate_fast_sl_20_rate": 0.2,
+      "candidate_runner_candidate_rate": 0.2,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 73,
+      "control_fast_reaction_rate": 0.411,
+      "control_fast_sl_20_rate": 0.2192,
+      "control_runner_candidate_rate": 0.0274,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": -0.211,
+      "descriptive_effect_size_fast_sl20": -0.0192,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME|OTHER": {
+      "candidate_count": 4,
+      "candidate_fast_reaction_rate": 0.25,
+      "candidate_fast_sl_20_rate": 0.25,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.25,
+      "control_count": 103,
+      "control_fast_reaction_rate": 0.5728,
+      "control_fast_sl_20_rate": 0.2621,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": -0.3228,
+      "descriptive_effect_size_fast_sl20": -0.0121,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEPT_LIQUIDITY_LEVEL|ASIA": {
+      "candidate_count": 3,
+      "candidate_fast_reaction_rate": 0.6667,
+      "candidate_fast_sl_20_rate": 0.3333,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.6667,
+      "descriptive_effect_size_fast_sl20": 0.3333,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "SWEPT_LIQUIDITY_LEVEL|LONDON": {
+      "candidate_count": 1,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "UNKNOWN|ASIA": {
+      "candidate_count": 1,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 1.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "UNKNOWN|LONDON": {
+      "candidate_count": 2,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 1.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "UNKNOWN|OTHER": {
+      "candidate_count": 2,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 1.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    }
+  },
+  "entry_source_matched_metrics": {
+    "ROUND_LEVEL": {
+      "candidate_count": 7,
+      "candidate_fast_reaction_rate": 0.1429,
+      "candidate_fast_sl_20_rate": 0.5714,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 69,
+      "control_fast_reaction_rate": 0.1304,
+      "control_fast_sl_20_rate": 0.7681,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0125,
+      "descriptive_effect_size_fast_sl20": -0.1967,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE"
+      ]
+    },
+    "SWEEP_EXTREME": {
+      "candidate_count": 24,
+      "candidate_fast_reaction_rate": 0.4583,
+      "candidate_fast_sl_20_rate": 0.0833,
+      "candidate_runner_candidate_rate": 0.0417,
+      "candidate_unknown_rate": 0.0417,
+      "control_count": 417,
+      "control_fast_reaction_rate": 0.4796,
+      "control_fast_sl_20_rate": 0.2302,
+      "control_runner_candidate_rate": 0.0072,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": -0.0213,
+      "descriptive_effect_size_fast_sl20": -0.1469,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION"
+      ]
+    },
+    "SWEPT_LIQUIDITY_LEVEL": {
+      "candidate_count": 4,
+      "candidate_fast_reaction_rate": 0.5,
+      "candidate_fast_sl_20_rate": 0.25,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 0.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.5,
+      "descriptive_effect_size_fast_sl20": 0.25,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    },
+    "UNKNOWN": {
+      "candidate_count": 5,
+      "candidate_fast_reaction_rate": 0.0,
+      "candidate_fast_sl_20_rate": 0.0,
+      "candidate_runner_candidate_rate": 0.0,
+      "candidate_unknown_rate": 1.0,
+      "control_count": 0,
+      "control_fast_reaction_rate": 0.0,
+      "control_fast_sl_20_rate": 0.0,
+      "control_runner_candidate_rate": 0.0,
+      "control_unknown_rate": 0.0,
+      "descriptive_effect_size_fast_reaction": 0.0,
+      "descriptive_effect_size_fast_sl20": 0.0,
+      "limitations": [
+        "DESCRIPTIVE_ONLY_NOT_VALIDATION",
+        "SMALL_CANDIDATE_SAMPLE",
+        "NO_MATCHED_CONTROLS"
+      ]
+    }
   },
   "forward_hours": 4.0,
   "limitations": [
     "CANDIDATE_UNKNOWN_ENTRY_LEVEL_ROWS_5",
-    "CONTROL_SWEEP_EXTREME_ROWS_0_BASELINE_UNAVAILABLE",
-    "CONTROL_UNKNOWN_DIRECTION_ROWS_2"
+    "CONTROL_GROUP_NOT_FILLED",
+    "CONTROL_GROUP_NOT_FILLED_ROUND_LEVEL_ASIA_OPEN_0_OF_25",
+    "CONTROL_GROUP_NOT_FILLED_ROUND_LEVEL_LONDON_OPEN_0_OF_30",
+    "CONTROL_GROUP_NOT_FILLED_ROUND_LEVEL_NEW_YORK_43_OF_77",
+    "CONTROL_GROUP_NOT_FILLED_ROUND_LEVEL_OTHER_26_OF_51",
+    "CONTROL_GROUP_NOT_FILLED_SWEEP_EXTREME_ASIA_OPEN_8_OF_103",
+    "CONTROL_GROUP_NOT_FILLED_SWEEP_EXTREME_LONDON_OPEN_80_OF_129",
+    "CONTROL_GROUP_NOT_FILLED_SWEEP_EXTREME_NEW_YORK_OPEN_73_OF_129",
+    "CONTROL_SOURCE_UNSUPPORTED_SWEPT_LIQUIDITY_LEVEL_CANDIDATES_4"
   ],
   "outcome_counts_by_entry_level_source": {
     "CANDIDATE": {
@@ -156,11 +617,20 @@
     },
     "CONTROL": {
       "ROUND_LEVEL": {
-        "FAST_SL_20": 22,
-        "GOOD_FAST_REACTION": 5,
-        "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 7,
-        "GOOD_SLOW_REACTION": 4,
-        "UNKNOWN_DIRECTION": 2
+        "FAST_SL_20": 53,
+        "GOOD_FAST_REACTION": 4,
+        "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 1,
+        "GOOD_SLOW_REACTION": 10,
+        "MFE_GOOD_BUT_BE_REQUIRED": 1
+      },
+      "SWEEP_EXTREME": {
+        "FAST_SL_20": 96,
+        "GOOD_FAST_REACTION": 193,
+        "GOOD_REACTION_BUT_DIRTY_ACCUMULATION": 35,
+        "GOOD_SLOW_REACTION": 70,
+        "MFE_GOOD_BUT_BE_REQUIRED": 18,
+        "NO_REACTION": 2,
+        "RUNNER_CANDIDATE": 3
       }
     }
   },
@@ -169,9 +639,9 @@
   "pip_size_source": "core.symbols.get_symbol_spec",
   "reaction_fast_minutes": 15,
   "reaction_slow_minutes": 30,
-  "rows_written": 80,
-  "run_finished_at": "2026-05-20T23:41:41.424105+00:00",
-  "run_started_at": "2026-05-20T23:41:15.387292+00:00",
+  "rows_written": 526,
+  "run_finished_at": "2026-05-21T00:00:28.602325+00:00",
+  "run_started_at": "2026-05-20T23:58:23.191546+00:00",
   "safety": {
     "broker_execution_enabled": false,
     "data_modified": false,
@@ -181,7 +651,9 @@
     "strategy_3_touched": false,
     "telegram_enabled": false
   },
+  "session_match_success_rate": 0.033,
   "symbol": "XAUUSD",
   "total_candidate_samples_loaded": 40,
+  "unmatched_session_controls_allowed": false,
   "visual_pack_dir": "backtests\\reports\\adelin_v2_visual_review_pack"
 }

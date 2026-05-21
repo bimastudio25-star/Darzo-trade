@@ -45,7 +45,7 @@ If a future symbol lacks a project convention, a documented fallback can be used
 Default command:
 
 ```bash
-python scripts/analyze_adelin_v2_objective_outcome_replay.py --symbol XAUUSD --data-dir data --visual-pack-dir backtests/reports/adelin_v2_visual_review_pack --output-dir backtests/reports/adelin_v2_objective_outcome_replay --forward-hours 4 --direction-lookback-minutes 30 --reaction-fast-minutes 15 --reaction-slow-minutes 30 --include-control-random 40 --dry-run
+python scripts/analyze_adelin_v2_objective_outcome_replay.py --symbol XAUUSD --data-dir data --visual-pack-dir backtests/reports/adelin_v2_visual_review_pack --output-dir backtests/reports/adelin_v2_objective_outcome_replay --forward-hours 4 --direction-lookback-minutes 30 --reaction-fast-minutes 15 --reaction-slow-minutes 30 --include-control-random 800 --control-match-entry-source --control-match-session --control-random-seed 42 --sweep-control-lookback-minutes 60 --sweep-control-min-anchor-delay-minutes 5 --dry-run
 ```
 
 The default forward window is 4 hours. Forward windows above 4h may overstate runner quality on XAUUSD because large eventual movement can make weak samples look better than they were.
@@ -100,22 +100,47 @@ Key labels include:
 
 ## Control Group
 
-The matched control group uses the same symbol, available date range, M1/M5/M15/H1 coverage requirements, round-level entry hypothesis, and direction-inference rules. It avoids exact overlap with candidate anchors and attempts to preserve session distribution where possible.
+The matched control group uses the same symbol, available date range, M1/M5/M15/H1 coverage requirements, entry-level source type, and session regime. It avoids exact overlap with candidate anchors.
+
+The previous control comparison was structurally weak because candidates were mostly `SWEEP_EXTREME` while controls were all `ROUND_LEVEL`. This branch makes entry-source matching and session matching default behavior.
+
+Session matching is mandatory by default because XAUUSD behavior changes materially across Asia, London, New York, and late-day regimes. If a control cannot match the target candidate session, it is skipped unless `--allow-unmatched-session-controls` is explicitly used for debugging.
+
+`--include-control-random` now defaults to `800` because the candidate groups are small. More controls stabilize descriptive baseline rates, but they do not create statistical proof.
 
 The output compares candidate and control rates for fast reaction, fast 20-pip stop, runner candidates, and unknown rows.
 
 Reports now include:
 
 - entry-level source counts,
+- session distributions,
+- control generation attempts/success by source and session,
+- control skip reasons,
 - unknown entry-level count and rate,
 - candidate/control known-entry counts,
 - outcome counts by entry-level source,
 - candidate-vs-control metrics for all rows,
 - candidate-vs-control metrics for known-entry rows,
-- round-level-only metrics,
-- sweep-extreme-only metrics.
+- entry-source matched metrics,
+- entry-source and session matched metrics,
+- descriptive effect sizes for fast reaction and fast SL20.
 
-Known-entry subset is still descriptive and not validation.
+Entry-source/session-matched controls improve baseline quality but are still descriptive and not validation.
+
+## Anti-Lookahead Controls
+
+For `SWEEP_EXTREME` controls, sweep detection uses only candles in `[anchor - 60 minutes, anchor)`.
+
+The control generator:
+
+- excludes the anchor candle,
+- excludes all post-anchor candles,
+- requires the sweep candle to be at least 5 minutes before the anchor,
+- verifies rejection or move-away using only pre-anchor candles,
+- infers direction from the pre-anchor sweep only,
+- sets the entry to the pre-anchor sweep extreme.
+
+Controls are never selected by future favorable movement.
 
 ## Output Files
 
@@ -136,6 +161,14 @@ Files:
 Candidate windows remain candidate windows, not signals. The control group is only a baseline diagnostic. This branch does not validate profitability, deployability, or live readiness.
 
 Reducing `UNKNOWN_ENTRY_LEVEL` is useful only when the new level is transparent and defensible. Sweep-extreme entries are heuristic replay anchors, not trade recommendations.
+
+Even with matched controls, candidate sample sizes remain small:
+
+- `SWEEP_EXTREME` candidates are roughly two dozen rows,
+- `ROUND_LEVEL` candidates are fewer than ten rows,
+- `SWEPT_LIQUIDITY_LEVEL` candidates are too few and do not yet have a defensible matched-control generator.
+
+Do not report statistical significance. Do not claim edge. Report descriptive rates and effect sizes only.
 
 ## Next Step
 
