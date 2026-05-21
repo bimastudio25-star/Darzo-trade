@@ -1,0 +1,32 @@
+{
+  "phase": "ADELIN_V2_PHASE_3_VISUAL_REVIEW_LABELS",
+  "planning_and_labeling_infrastructure_only": true,
+  "visual_review_pack_found": true,
+  "visual_review_template_path": "backtests\\reports\\adelin_v2_visual_review_pack\\manual_labels_template.csv",
+  "sample_rows_loaded_from_visual_pack": 40,
+  "total_specs": 10,
+  "primary_test_count": 9,
+  "stratification_metadata_spec_count": 1,
+  "spec_005_excluded_from_primary_labels": true,
+  "schema_path": "backtests\\reports\\adelin_v2_phase_3_visual_review_labels\\phase_3_label_schema.json",
+  "manual_labels_template_path": "backtests\\reports\\adelin_v2_phase_3_visual_review_labels\\manual_labels_template.csv",
+  "manual_labels_validation_summary_path": "backtests\\reports\\adelin_v2_phase_3_visual_review_labels\\manual_labels_validation_summary.json",
+  "validation_result": true,
+  "limitations": [
+    "Existing visual review pack may show future candles; reviewer must label only pre-entry/pre-decision information and set pre_entry_only_confirmed accordingly."
+  ],
+  "safety": {
+    "backtest_run": false,
+    "candidate_pack_generated": false,
+    "matched_control_replay_run": false,
+    "detector_executed": false,
+    "runtime_logic_modified": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "data_modified": false,
+    "live_trading_enabled": false,
+    "telegram_trade_alerts_enabled": false,
+    "broker_execution_enabled": false,
+    "order_execution_enabled": false
+  }
+}

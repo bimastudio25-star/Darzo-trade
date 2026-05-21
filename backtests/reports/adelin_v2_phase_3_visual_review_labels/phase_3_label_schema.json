@@ -1,0 +1,429 @@
+{
+  "schema_name": "ADELIN_V2_PHASE_3_VISUAL_REVIEW_LABEL_SCHEMA",
+  "schema_version": 1,
+  "planning_only": true,
+  "labeling_purpose": "Manual pre-entry visual recognizability labels for primary Phase 2 features.",
+  "total_specs": 10,
+  "primary_test_count": 9,
+  "stratification_metadata_spec_count": 1,
+  "primary_feature_fields": [
+    {
+      "test_id": "ADELINV2_CTX_001",
+      "feature_name": "h1_sweep_reaction_context",
+      "concept_name": "H1 liquidity sweep",
+      "prefix": "feature_adelinv2_ctx_001_h1_sweep_reaction_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_001_h1_sweep_reaction_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_001_h1_sweep_reaction_context_label",
+      "confidence": "feature_adelinv2_ctx_001_h1_sweep_reaction_context_confidence",
+      "notes": "feature_adelinv2_ctx_001_h1_sweep_reaction_context_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_002",
+      "feature_name": "m5_m15_fvg_reaction_zone_context",
+      "concept_name": "FVG",
+      "prefix": "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_label",
+      "confidence": "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_confidence",
+      "notes": "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_003",
+      "feature_name": "m5_m15_ifvg_retest_context",
+      "concept_name": "IFVG",
+      "prefix": "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_label",
+      "confidence": "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_confidence",
+      "notes": "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_notes"
+    },
+    {
+      "test_id": "004",
+      "feature_name": "NUMERIC_LEVEL_CONFLUENCE",
+      "concept_name": "number theory",
+      "prefix": "feature_004_numeric_level_confluence",
+      "visible_pre_entry": "feature_004_numeric_level_confluence_visible_pre_entry",
+      "label": "feature_004_numeric_level_confluence_label",
+      "confidence": "feature_004_numeric_level_confluence_confidence",
+      "notes": "feature_004_numeric_level_confluence_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_006",
+      "feature_name": "pre_anchor_rejection_candle_morphology",
+      "concept_name": "wick/body behavior",
+      "prefix": "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology",
+      "visible_pre_entry": "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_label",
+      "confidence": "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_confidence",
+      "notes": "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_007",
+      "feature_name": "pre_anchor_displacement_context",
+      "concept_name": "displacement",
+      "prefix": "feature_adelinv2_ctx_007_pre_anchor_displacement_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_007_pre_anchor_displacement_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_007_pre_anchor_displacement_context_label",
+      "confidence": "feature_adelinv2_ctx_007_pre_anchor_displacement_context_confidence",
+      "notes": "feature_adelinv2_ctx_007_pre_anchor_displacement_context_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_008",
+      "feature_name": "time_of_day_bucket_context",
+      "concept_name": "time-of-day context",
+      "prefix": "feature_adelinv2_ctx_008_time_of_day_bucket_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_008_time_of_day_bucket_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_008_time_of_day_bucket_context_label",
+      "confidence": "feature_adelinv2_ctx_008_time_of_day_bucket_context_confidence",
+      "notes": "feature_adelinv2_ctx_008_time_of_day_bucket_context_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_009",
+      "feature_name": "session_bucket_context",
+      "concept_name": "session context",
+      "prefix": "feature_adelinv2_ctx_009_session_bucket_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_009_session_bucket_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_009_session_bucket_context_label",
+      "confidence": "feature_adelinv2_ctx_009_session_bucket_context_confidence",
+      "notes": "feature_adelinv2_ctx_009_session_bucket_context_notes"
+    },
+    {
+      "test_id": "ADELINV2_CTX_010",
+      "feature_name": "pre_anchor_volatility_bucket_context",
+      "concept_name": "volatility regime",
+      "prefix": "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context",
+      "visible_pre_entry": "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_visible_pre_entry",
+      "label": "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_label",
+      "confidence": "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_confidence",
+      "notes": "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_notes"
+    }
+  ],
+  "stratification_metadata_fields": [
+    {
+      "test_id": "005",
+      "feature_name": "tight_numeric_level_touch_band",
+      "role": "STRATIFICATION_METADATA_ONLY",
+      "columns": [
+        "metadata_005_tight_numeric_level_touch_band",
+        "metadata_005_tight_numeric_level_touch_band_notes"
+      ],
+      "allowed_band_values": [
+        "0-10_PIPS",
+        "10-20_PIPS",
+        "GT_20_PIPS",
+        "NOT_APPLICABLE",
+        "UNCLEAR"
+      ],
+      "forbidden_interpretation": "tight_numeric_level_touch_band must not be interpreted as an independent edge or standalone entry feature."
+    }
+  ],
+  "required_columns": [
+    "sample_id",
+    "candidate_id",
+    "source_mode",
+    "symbol",
+    "candidate_timestamp",
+    "decision_timestamp",
+    "anchor_timeframe",
+    "chart_path",
+    "chart_url",
+    "index_anchor",
+    "execution_data_status",
+    "m1_candles_count",
+    "m5_candles_count",
+    "m15_candles_count",
+    "reviewer",
+    "review_date",
+    "overall_reviewable",
+    "pre_entry_only_confirmed",
+    "leakage_risk_detected",
+    "exclude_from_phase_4",
+    "exclude_reason",
+    "reviewer_notes",
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_visible_pre_entry",
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_label",
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_confidence",
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_notes",
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_visible_pre_entry",
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_label",
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_confidence",
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_notes",
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_visible_pre_entry",
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_label",
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_confidence",
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_notes",
+    "feature_004_numeric_level_confluence_visible_pre_entry",
+    "feature_004_numeric_level_confluence_label",
+    "feature_004_numeric_level_confluence_confidence",
+    "feature_004_numeric_level_confluence_notes",
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_visible_pre_entry",
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_label",
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_confidence",
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_notes",
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_visible_pre_entry",
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_label",
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_confidence",
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_notes",
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_visible_pre_entry",
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_label",
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_confidence",
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_notes",
+    "feature_adelinv2_ctx_009_session_bucket_context_visible_pre_entry",
+    "feature_adelinv2_ctx_009_session_bucket_context_label",
+    "feature_adelinv2_ctx_009_session_bucket_context_confidence",
+    "feature_adelinv2_ctx_009_session_bucket_context_notes",
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_visible_pre_entry",
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_label",
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_confidence",
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_notes",
+    "metadata_005_tight_numeric_level_touch_band",
+    "metadata_005_tight_numeric_level_touch_band_notes"
+  ],
+  "enum_columns": {
+    "overall_reviewable": [
+      "NO",
+      "UNCLEAR",
+      "YES"
+    ],
+    "pre_entry_only_confirmed": [
+      "NO",
+      "YES"
+    ],
+    "leakage_risk_detected": [
+      "NO",
+      "UNCLEAR",
+      "YES"
+    ],
+    "exclude_from_phase_4": [
+      "NO",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_004_numeric_level_confluence_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_004_numeric_level_confluence_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_004_numeric_level_confluence_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_009_session_bucket_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_009_session_bucket_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_009_session_bucket_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_visible_pre_entry": [
+      "NO",
+      "NOT_VISIBLE",
+      "UNCLEAR",
+      "YES"
+    ],
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_label": [
+      "ABSENT",
+      "NOT_APPLICABLE",
+      "PRESENT",
+      "UNCLEAR"
+    ],
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_confidence": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "metadata_005_tight_numeric_level_touch_band": [
+      "0-10_PIPS",
+      "10-20_PIPS",
+      "GT_20_PIPS",
+      "NOT_APPLICABLE",
+      "UNCLEAR"
+    ]
+  },
+  "free_text_columns": [
+    "exclude_reason",
+    "reviewer_notes",
+    "metadata_005_tight_numeric_level_touch_band_notes",
+    "feature_adelinv2_ctx_001_h1_sweep_reaction_context_notes",
+    "feature_adelinv2_ctx_002_m5_m15_fvg_reaction_zone_context_notes",
+    "feature_adelinv2_ctx_003_m5_m15_ifvg_retest_context_notes",
+    "feature_004_numeric_level_confluence_notes",
+    "feature_adelinv2_ctx_006_pre_anchor_rejection_candle_morphology_notes",
+    "feature_adelinv2_ctx_007_pre_anchor_displacement_context_notes",
+    "feature_adelinv2_ctx_008_time_of_day_bucket_context_notes",
+    "feature_adelinv2_ctx_009_session_bucket_context_notes",
+    "feature_adelinv2_ctx_010_pre_anchor_volatility_bucket_context_notes"
+  ],
+  "forbidden_outcome_columns": [
+    "future_mae",
+    "future_mfe",
+    "future_return",
+    "mae",
+    "mfe",
+    "outcome",
+    "outcome_r",
+    "pnl",
+    "pnl_usd",
+    "r_multiple",
+    "result",
+    "sl_hit",
+    "tp_hit",
+    "win_loss"
+  ],
+  "forbidden_label_information": [
+    "final result",
+    "TP hit",
+    "SL hit",
+    "pnl",
+    "R multiple",
+    "future bars after entry",
+    "whether setup later worked",
+    "replay outcome",
+    "matched-control result",
+    "future MFE/MAE",
+    "future liquidity behavior after decision"
+  ],
+  "leakage_guard": "Reviewer must label only what is visible before entry / before decision. If future candles are visible in the visual pack, pre_entry_only_confirmed=YES means the reviewer consciously ignored that future information.",
+  "safety": {
+    "backtest_run": false,
+    "candidate_pack_generated": false,
+    "matched_control_replay_run": false,
+    "detector_executed": false,
+    "runtime_logic_modified": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "data_modified": false,
+    "live_trading_enabled": false,
+    "telegram_trade_alerts_enabled": false,
+    "broker_execution_enabled": false,
+    "order_execution_enabled": false
+  }
+}
