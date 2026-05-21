@@ -1,0 +1,43 @@
+{
+  "plan_type": "ADELIN_V2_PRE_REGISTERED_CONTEXT_FEATURE_TEST_PLAN",
+  "planning_only": true,
+  "feature_test_spec_count": 10,
+  "measurable_now_concepts_used_count": 10,
+  "measurable_now_concepts_used": [
+    "H1 liquidity sweep",
+    "FVG",
+    "IFVG",
+    "number theory",
+    "round levels",
+    "wick/body behavior",
+    "displacement",
+    "time-of-day context",
+    "session context",
+    "volatility regime"
+  ],
+  "excluded_classifications": [
+    "MEASURABLE_WITH_NEW_DATA",
+    "HEURISTIC_ONLY",
+    "DISCRETIONARY_ONLY",
+    "NOT_RELIABLY_MEASURABLE"
+  ],
+  "execution_locked": true,
+  "human_signoff_required": true,
+  "next_phase": "Phase 3 - Visual review labels",
+  "no_empirical_results_generated": true,
+  "safety": {
+    "backtest_run": false,
+    "candidate_pack_generated": false,
+    "matched_control_replay_run": false,
+    "detector_executed": false,
+    "strategy_function_called": false,
+    "runtime_logic_modified": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "data_modified": false,
+    "live_trading_enabled": false,
+    "telegram_trade_alerts_enabled": false,
+    "broker_execution_enabled": false,
+    "order_execution_enabled": false
+  }
+}
