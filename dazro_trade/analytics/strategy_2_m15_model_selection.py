@@ -397,7 +397,7 @@ def model_scorecard(frame: pd.DataFrame, tail: pd.DataFrame, old_new: pd.DataFra
         - float(scorecard[scorecard["m15_filter_model"].eq("approach_window")]["diagnostic_score"].iloc[0])
     )
     if top_score - second_score < 8 or containing_approach_gap < 8:
-        recommendation = "RECOMMEND_HYBRID_OR_VISUAL_REVIEW"
+        recommendation = "INCONCLUSIVE"
         verdict_flags.append("MODEL_SELECTION_INCONCLUSIVE")
     elif top_model == "containing":
         recommendation = "RECOMMEND_CONTAINING_FOR_NEXT_DIAGNOSTIC"
@@ -406,7 +406,7 @@ def model_scorecard(frame: pd.DataFrame, tail: pd.DataFrame, old_new: pd.DataFra
         recommendation = "RECOMMEND_APPROACH_WINDOW_FOR_NEXT_DIAGNOSTIC"
         verdict_flags.append("MODEL_SELECTED_FOR_NEXT_DIAGNOSTIC")
     else:
-        recommendation = "RECOMMEND_HYBRID_OR_VISUAL_REVIEW"
+        recommendation = "INCONCLUSIVE"
         verdict_flags.append("MODEL_SELECTION_INCONCLUSIVE")
     return scorecard, recommendation, verdict_flags
 
@@ -590,7 +590,7 @@ def selection_report_markdown(summary: dict[str, Any]) -> str:
             "## Recommendation",
             "",
             f"- Recommendation: `{summary.get('recommendation')}`",
-            "- Rationale: preceding has materially higher sample and entry counts, but that is not sufficient evidence; it is also more permissive and carries larger tail exposure. Containing and approach_window are more conservative and close enough that targeted disagreement review is the safer next diagnostic.",
+            "- Rationale: preceding has materially higher sample and entry counts, but that is not sufficient evidence; it is also more permissive and carries larger tail exposure. Containing and approach_window are more conservative and close enough that model selection remains inconclusive; targeted disagreement review is the safer next diagnostic.",
             "",
             "## Disagreement Groups",
             "",

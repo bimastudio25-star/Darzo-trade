@@ -55,8 +55,8 @@ The fixed HH:45/x:45 M15 interpretation has been superseded. The mechanical corr
 
 ## Recommendation
 
-- Recommendation: `RECOMMEND_HYBRID_OR_VISUAL_REVIEW`
-- Rationale: preceding has materially higher sample and entry counts, but that is not sufficient evidence; it is also more permissive and carries larger tail exposure. Containing and approach_window are more conservative and close enough that targeted disagreement review is the safer next diagnostic.
+- Recommendation: `INCONCLUSIVE`
+- Rationale: preceding has materially higher sample and entry counts, but that is not sufficient evidence; it is also more permissive and carries larger tail exposure. Containing and approach_window are more conservative and close enough that model selection remains inconclusive; targeted disagreement review is the safer next diagnostic.
 
 ## Disagreement Groups
 
