@@ -11,6 +11,7 @@ import csv
 import html
 import json
 import math
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,14 @@ from dazro_trade.analytics.adelin_v2_operational_audit import (
     number_theory_distance_pips,
     pip_size_for_symbol,
 )
+from dazro_trade.analytics.adelin_v2_objective_outcome_replay import (
+    ROUND_LEVEL,
+    SWEEP_EXTREME,
+    SWEPT_LIQUIDITY_LEVEL,
+    UNKNOWN_ENTRY_SOURCE,
+    classify_session,
+    detect_pre_anchor_sweep_control,
+)
 from dazro_trade.backtest.data_loader import load_csv_timeframes
 
 
@@ -39,24 +48,70 @@ REVIEWABLE_M1_M5 = "REVIEWABLE_M1_M5"
 REVIEWABLE_M5_ONLY = "REVIEWABLE_M5_ONLY"
 WEAK_M1_ONLY = "WEAK_M1_ONLY"
 INSUFFICIENT_EXECUTION_DATA = "INSUFFICIENT_EXECUTION_DATA"
+MULTI_TF_LIQUIDITY_CLUSTER = "MULTI_TF_LIQUIDITY_CLUSTER"
+DECISION_VERDICTS = (
+    "CONTINUE_DETECTOR_REFINEMENT",
+    "STOP_ARCHIVE_ADELIN_V2_DETECTOR",
+    "REPEAT_EXPANSION_ONCE",
+    "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+)
+PRE_REGISTERED_DECISION_CRITERIA = {
+    "useful_source_min_candidate_n": 80,
+    "primary_metrics": ["fast_reaction_rate", "runner_rate", "fast_sl20_rate"],
+    "continue_detector_refinement": {
+        "fast_reaction_improvement_min": 0.07,
+        "runner_improvement_min": 0.05,
+        "fast_sl20_reduction_min": 0.10,
+        "non_worse_fast_reaction_tolerance": -0.03,
+    },
+    "stop_archive_detector": {
+        "flat_fast_reaction_range": [-0.03, 0.03],
+        "flat_runner_range": [-0.03, 0.03],
+        "fast_sl20_worse_all_sources_min": 0.05,
+    },
+    "repeat_expansion_once": {
+        "underpowered_candidate_n": 100,
+        "fast_reaction_visible_effect_min": 0.05,
+        "runner_visible_effect_min": 0.03,
+        "fast_sl20_visible_reduction_min": 0.10,
+    },
+    "warning": "Criteria are descriptive project gates, not statistical proof or profitability validation.",
+}
 
 MANUAL_LABEL_COLUMNS = [
     "sample_id",
     "source_mode",
     "symbol",
     "direction_guess",
+    "direction_confidence",
     "window_start",
     "window_end",
     "anchor_timestamp",
     "anchor_timeframe",
+    "anchor_date",
+    "month",
+    "session",
+    "candidate_source_type",
+    "entry_level_source",
+    "entry_level_confidence",
+    "entry_level_price",
+    "entry_level_is_heuristic",
+    "volatility_bucket",
     "chart_path",
     "html_path",
     "execution_data_status",
     "m1_candles_count",
     "m5_candles_count",
     "m15_candles_count",
+    "h1_candles_count",
+    "m1_count",
+    "m5_count",
+    "m15_count",
+    "h1_count",
     "execution_window_start",
     "execution_window_end",
+    "candidate_reason_codes",
+    "limitations",
     "reviewer_should_skip_due_to_missing_ltf_data_manual",
     "htf_liquidity_class_manual",
     "ltf_liquidity_class_manual",
@@ -104,7 +159,11 @@ class VisualReviewPackConfig:
     audit_path: Path | str | None = None
     from_date: datetime | None = None
     to_date: datetime | None = None
-    max_samples: int = 40
+    max_samples: int = 300
+    min_date_range_days: int = 180
+    max_samples_per_day: int = 5
+    min_sample_spacing_minutes: int = 240
+    target_session_balance: bool = False
     include_candidate_windows: bool = True
     include_trade_review: bool = True
     allow_weak_m1_only: bool = False
@@ -124,6 +183,17 @@ class VisualReviewSample:
     window_start: datetime
     window_end: datetime
     candidate_reason_codes: tuple[str, ...]
+    candidate_source_type: str = UNKNOWN_ENTRY_SOURCE
+    entry_level_source: str = UNKNOWN_ENTRY_SOURCE
+    entry_level_confidence: str = "UNKNOWN"
+    entry_level_price: float | None = None
+    entry_level_is_heuristic: bool = True
+    direction_confidence: str = "UNKNOWN"
+    session: str = "OTHER"
+    anchor_date: str = ""
+    month: str = ""
+    volatility_bucket: str = "UNKNOWN"
+    limitations: tuple[str, ...] = field(default_factory=tuple)
     sweep_level: float | None = None
     number_theory_level: float | None = None
     distance_to_number_level_pips: float | None = None
@@ -155,18 +225,35 @@ class VisualReviewSample:
                 "source_mode": self.source_mode,
                 "symbol": self.symbol,
                 "direction_guess": self.direction_guess,
+                "direction_confidence": self.direction_confidence,
                 "window_start": self.window_start.isoformat(),
                 "window_end": self.window_end.isoformat(),
                 "anchor_timestamp": self.anchor_timestamp.isoformat(),
                 "anchor_timeframe": self.anchor_timeframe,
+                "anchor_date": self.anchor_date or self.anchor_timestamp.date().isoformat(),
+                "month": self.month or self.anchor_timestamp.strftime("%Y-%m"),
+                "session": self.session,
+                "candidate_source_type": self.candidate_source_type,
+                "entry_level_source": self.entry_level_source,
+                "entry_level_confidence": self.entry_level_confidence,
+                "entry_level_price": self.entry_level_price if self.entry_level_price is not None else "",
+                "entry_level_is_heuristic": self.entry_level_is_heuristic,
+                "volatility_bucket": self.volatility_bucket,
                 "chart_path": self.chart_path,
                 "html_path": self.html_path,
                 "execution_data_status": self.execution_data_status,
                 "m1_candles_count": self.m1_candles_count,
                 "m5_candles_count": self.m5_candles_count,
                 "m15_candles_count": self.m15_candles_count,
+                "h1_candles_count": self.h1_candles_count,
+                "m1_count": self.m1_candles_count,
+                "m5_count": self.m5_candles_count,
+                "m15_count": self.m15_candles_count,
+                "h1_count": self.h1_candles_count,
                 "execution_window_start": self.execution_window_start.isoformat() if self.execution_window_start else "",
                 "execution_window_end": self.execution_window_end.isoformat() if self.execution_window_end else "",
+                "candidate_reason_codes": "|".join(self.candidate_reason_codes),
+                "limitations": "|".join(self.limitations),
             }
         )
         return row
@@ -288,30 +375,108 @@ def _coverage_rank(status: str) -> int:
     }.get(status, 4)
 
 
+def _date_key(ts: datetime) -> str:
+    return ts.date().isoformat()
+
+
+def _month_key(ts: datetime) -> str:
+    return ts.strftime("%Y-%m")
+
+
+def _week_key(ts: datetime) -> str:
+    iso = ts.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _passes_spacing(sample: VisualReviewSample, selected: Sequence[VisualReviewSample], min_spacing_minutes: int) -> bool:
+    if min_spacing_minutes <= 0:
+        return True
+    return all(
+        abs((sample.anchor_timestamp - prior.anchor_timestamp).total_seconds()) >= min_spacing_minutes * 60
+        for prior in selected
+    )
+
+
+def _selection_bucket(sample: VisualReviewSample, *, target_session_balance: bool) -> tuple[str, str, str]:
+    session_key = sample.session if target_session_balance else ""
+    return (_month_key(sample.anchor_timestamp), sample.candidate_source_type or UNKNOWN_ENTRY_SOURCE, session_key)
+
+
+def _select_by_regime_constraints(
+    candidates: Sequence[VisualReviewSample],
+    max_samples: int,
+    *,
+    max_samples_per_day: int,
+    min_sample_spacing_minutes: int,
+    target_session_balance: bool,
+) -> tuple[list[VisualReviewSample], int, int]:
+    """Select samples across months/sources without using forward outcomes."""
+    buckets: dict[tuple[str, str, str], list[VisualReviewSample]] = defaultdict(list)
+    for sample in sorted(candidates, key=lambda item: item.anchor_timestamp):
+        buckets[_selection_bucket(sample, target_session_balance=target_session_balance)].append(sample)
+    ordered_keys = sorted(buckets)
+    selected: list[VisualReviewSample] = []
+    per_day: Counter[str] = Counter()
+    skipped_spacing = 0
+    skipped_max_per_day = 0
+    while len(selected) < max_samples and any(buckets.values()):
+        made_progress = False
+        for key in ordered_keys:
+            if len(selected) >= max_samples:
+                break
+            bucket = buckets.get(key) or []
+            while bucket:
+                sample = bucket.pop(0)
+                day = _date_key(sample.anchor_timestamp)
+                if max_samples_per_day > 0 and per_day[day] >= max_samples_per_day:
+                    skipped_max_per_day += 1
+                    continue
+                if not _passes_spacing(sample, selected, min_sample_spacing_minutes):
+                    skipped_spacing += 1
+                    continue
+                selected.append(sample)
+                per_day[day] += 1
+                made_progress = True
+                break
+            buckets[key] = bucket
+        if not made_progress:
+            break
+    return selected[:max_samples], skipped_spacing, skipped_max_per_day
+
+
 def _prefer_reviewable_samples(
     samples: list[VisualReviewSample],
     max_samples: int,
     *,
+    max_samples_per_day: int = 5,
+    min_sample_spacing_minutes: int = 240,
+    target_session_balance: bool = False,
     allow_weak_m1_only: bool = False,
     include_insufficient_execution_debug: bool = False,
-) -> tuple[list[VisualReviewSample], int]:
+) -> tuple[list[VisualReviewSample], int, int, int]:
     ordered: list[VisualReviewSample] = []
-    statuses = [REVIEWABLE_M1_M5, REVIEWABLE_M5_ONLY]
+    statuses = [REVIEWABLE_M1_M5]
     if allow_weak_m1_only:
         statuses.append(WEAK_M1_ONLY)
     if include_insufficient_execution_debug:
-        statuses.append(INSUFFICIENT_EXECUTION_DATA)
+        statuses.extend([REVIEWABLE_M5_ONLY, WEAK_M1_ONLY, INSUFFICIENT_EXECUTION_DATA])
     for status in statuses:
         group = [sample for sample in samples if sample.execution_data_status == status]
-        ordered.extend(_dedupe_round_robin(group, max_samples))
-    selected = ordered[:max_samples]
+        ordered.extend(sorted(group, key=lambda item: (_month_key(item.anchor_timestamp), _coverage_rank(item.execution_data_status), item.anchor_timestamp)))
+    selected, skipped_spacing, skipped_max_per_day = _select_by_regime_constraints(
+        ordered,
+        max_samples,
+        max_samples_per_day=max_samples_per_day,
+        min_sample_spacing_minutes=min_sample_spacing_minutes,
+        target_session_balance=target_session_balance,
+    )
     selected_ids = {id(sample) for sample in selected}
     skipped_insufficient = sum(
         1
         for sample in samples
-        if sample.execution_data_status in {WEAK_M1_ONLY, INSUFFICIENT_EXECUTION_DATA} and id(sample) not in selected_ids
+        if sample.execution_data_status != REVIEWABLE_M1_M5 and id(sample) not in selected_ids
     )
-    return selected, skipped_insufficient
+    return selected, skipped_insufficient, skipped_spacing, skipped_max_per_day
 
 
 def _first(row: Mapping[str, Any], names: Sequence[str]) -> Any:
@@ -435,6 +600,208 @@ def _trade_review_samples(cfg: VisualReviewPackConfig, limitations: list[str]) -
     else:
         limitations.append("NO_TRADES_PATH_AVAILABLE")
     return samples, trades_loaded, audit_rows_loaded
+
+
+def _normalised_ohlc(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty or "time" not in frame.columns:
+        return pd.DataFrame()
+    out = frame.copy()
+    out["time"] = pd.to_datetime(out["time"], utc=True, errors="coerce")
+    for column in ("open", "high", "low", "close"):
+        if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce")
+    return out.dropna(subset=["time", "high", "low"]).sort_values("time").reset_index(drop=True)
+
+
+def _frame_time_bounds(frames: Mapping[str, pd.DataFrame]) -> tuple[datetime | None, datetime | None, int]:
+    starts: list[pd.Timestamp] = []
+    ends: list[pd.Timestamp] = []
+    for timeframe in ("M1", "M5", "M15", "H1", "H4", "D1"):
+        frame = frames.get(timeframe, pd.DataFrame())
+        if frame is None or frame.empty or "time" not in frame.columns:
+            continue
+        times = pd.to_datetime(frame["time"], utc=True, errors="coerce").dropna()
+        if times.empty:
+            continue
+        starts.append(times.min())
+        ends.append(times.max())
+    if not starts or not ends:
+        return None, None, 0
+    start = min(starts).to_pydatetime()
+    end = max(ends).to_pydatetime()
+    coverage_days = max(1, (end.date() - start.date()).days + 1)
+    return start, end, coverage_days
+
+
+def _time_bounds_for(frame: pd.DataFrame) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    if frame is None or frame.empty or "time" not in frame.columns:
+        return None, None
+    times = pd.to_datetime(frame["time"], utc=True, errors="coerce").dropna()
+    if times.empty:
+        return None, None
+    return times.min(), times.max()
+
+
+def _required_execution_time_bounds(frames: Mapping[str, pd.DataFrame]) -> tuple[datetime | None, datetime | None, int]:
+    """Coverage where full M1/M5 plus M15-or-H1 review context can exist."""
+    m1_start, m1_end = _time_bounds_for(frames.get("M1", pd.DataFrame()))
+    m5_start, m5_end = _time_bounds_for(frames.get("M5", pd.DataFrame()))
+    m15_start, m15_end = _time_bounds_for(frames.get("M15", pd.DataFrame()))
+    h1_start, h1_end = _time_bounds_for(frames.get("H1", pd.DataFrame()))
+    context_starts = [value for value in (m15_start, h1_start) if value is not None]
+    context_ends = [value for value in (m15_end, h1_end) if value is not None]
+    if m1_start is None or m1_end is None or m5_start is None or m5_end is None or not context_starts or not context_ends:
+        return None, None, 0
+    start = max(m1_start, m5_start, min(context_starts))
+    end = min(m1_end, m5_end, max(context_ends))
+    if end < start:
+        return None, None, 0
+    start_dt = start.to_pydatetime()
+    end_dt = end.to_pydatetime()
+    coverage_days = max(1, (end_dt.date() - start_dt.date()).days + 1)
+    return start_dt, end_dt, coverage_days
+
+
+def _sample_time_bounds(samples: Sequence[VisualReviewSample]) -> tuple[str | None, str | None, int]:
+    if not samples:
+        return None, None, 0
+    dates = sorted(sample.anchor_timestamp.date() for sample in samples)
+    coverage_days = max(1, (dates[-1] - dates[0]).days + 1)
+    return dates[0].isoformat(), dates[-1].isoformat(), coverage_days
+
+
+def _daily_range_map(frames: Mapping[str, pd.DataFrame]) -> dict[str, float]:
+    source = _normalised_ohlc(frames.get("D1", pd.DataFrame()))
+    if not source.empty:
+        return {
+            pd.Timestamp(row.time).date().isoformat(): float(row.high) - float(row.low)
+            for row in source.itertuples(index=False)
+        }
+    for timeframe in ("H1", "M15"):
+        source = _normalised_ohlc(frames.get(timeframe, pd.DataFrame()))
+        if source.empty:
+            continue
+        source["date"] = source["time"].dt.date.astype(str)
+        grouped = source.groupby("date").agg(high=("high", "max"), low=("low", "min"))
+        return {str(date): float(row.high) - float(row.low) for date, row in grouped.iterrows()}
+    return {}
+
+
+def _volatility_bucket_map(frames: Mapping[str, pd.DataFrame], limitations: list[str]) -> dict[str, str]:
+    daily_ranges = _daily_range_map(frames)
+    if not daily_ranges:
+        limitations.append("VOLATILITY_BUCKETS_UNAVAILABLE")
+        return {}
+    values = pd.Series(list(daily_ranges.values()), dtype="float64").dropna()
+    if values.empty:
+        limitations.append("VOLATILITY_BUCKETS_UNAVAILABLE")
+        return {}
+    if len(values) < 3 or float(values.max()) == float(values.min()):
+        return {date: "MID_VOLATILITY" for date in daily_ranges}
+    low_cut = float(values.quantile(0.33))
+    high_cut = float(values.quantile(0.67))
+    buckets: dict[str, str] = {}
+    for date, value in daily_ranges.items():
+        if value <= low_cut:
+            buckets[date] = "LOW_VOLATILITY"
+        elif value >= high_cut:
+            buckets[date] = "HIGH_VOLATILITY"
+        else:
+            buckets[date] = "MID_VOLATILITY"
+    return buckets
+
+
+def _append_reason(sample: VisualReviewSample, reason: str) -> None:
+    sample.candidate_reason_codes = tuple(dict.fromkeys((*sample.candidate_reason_codes, reason)))
+
+
+def _annotate_sample_metadata(
+    sample: VisualReviewSample,
+    frames: Mapping[str, pd.DataFrame],
+    cfg: VisualReviewPackConfig,
+    volatility_buckets: Mapping[str, str],
+) -> None:
+    sample.anchor_date = _date_key(sample.anchor_timestamp)
+    sample.month = _month_key(sample.anchor_timestamp)
+    sample.session = classify_session(sample.anchor_timestamp)
+    sample.volatility_bucket = volatility_buckets.get(sample.anchor_date, "UNKNOWN")
+    sample.raw_metadata.update(
+        {
+            "session": sample.session,
+            "anchor_date": sample.anchor_date,
+            "month": sample.month,
+            "volatility_bucket": sample.volatility_bucket,
+        }
+    )
+
+    if sample.number_theory_level is not None:
+        sample.candidate_source_type = ROUND_LEVEL
+        sample.entry_level_source = ROUND_LEVEL
+        sample.entry_level_confidence = "HIGH"
+        sample.entry_level_price = round(float(sample.number_theory_level), 2)
+        sample.entry_level_is_heuristic = True
+        sample.direction_confidence = "MEDIUM" if sample.direction_guess != "UNKNOWN" else "UNKNOWN"
+        _append_reason(sample, "ROUND_LEVEL_ENTRY_METADATA_AVAILABLE")
+        return
+
+    pip_size = pip_size_for_symbol(cfg.symbol)
+    sweep = detect_pre_anchor_sweep_control(
+        frames,
+        sample.anchor_timestamp,
+        lookback_minutes=60,
+        min_anchor_delay_minutes=5,
+        min_rejection_pips=5.0,
+        pip_size=pip_size,
+    )
+    if sweep is not None:
+        direction, entry = sweep
+        sample.candidate_source_type = SWEEP_EXTREME
+        sample.entry_level_source = SWEEP_EXTREME
+        sample.entry_level_confidence = entry.entry_level_confidence
+        sample.entry_level_price = entry.entry_price
+        sample.entry_level_is_heuristic = True
+        sample.direction_guess = direction.direction_guess
+        sample.direction_confidence = direction.direction_confidence
+        sample.sweep_level = sample.sweep_level if sample.sweep_level is not None else direction.swept_level
+        sample.raw_metadata.update(
+            {
+                "sweep_type": direction.sweep_type,
+                "swept_level": direction.swept_level,
+                "sweep_extreme": direction.sweep_extreme,
+                "sweep_timestamp": direction.sweep_timestamp.isoformat() if direction.sweep_timestamp else "",
+                "direction_source_timeframe": direction.direction_source_timeframe,
+            }
+        )
+        _append_reason(sample, "PRE_ANCHOR_SWEEP_EXTREME_CANDIDATE")
+        return
+
+    if sample.sweep_level is not None:
+        sample.candidate_source_type = SWEPT_LIQUIDITY_LEVEL
+        sample.entry_level_source = SWEPT_LIQUIDITY_LEVEL
+        sample.entry_level_confidence = "MEDIUM"
+        sample.entry_level_price = round(float(sample.sweep_level), 2)
+        sample.entry_level_is_heuristic = True
+        sample.direction_confidence = "MEDIUM" if sample.direction_guess != "UNKNOWN" else "UNKNOWN"
+        _append_reason(sample, "SWEPT_LIQUIDITY_LEVEL_METADATA_AVAILABLE")
+        return
+
+    sample.candidate_source_type = UNKNOWN_ENTRY_SOURCE
+    sample.entry_level_source = UNKNOWN_ENTRY_SOURCE
+    sample.entry_level_confidence = "UNKNOWN"
+    sample.entry_level_price = None
+    sample.entry_level_is_heuristic = True
+    sample.direction_confidence = "UNKNOWN"
+    sample.limitations = tuple(dict.fromkeys((*sample.limitations, "NO_DEFENSIBLE_ENTRY_LEVEL_METADATA")))
+
+
+def _annotate_samples_metadata(
+    samples: Iterable[VisualReviewSample],
+    frames: Mapping[str, pd.DataFrame],
+    cfg: VisualReviewPackConfig,
+    volatility_buckets: Mapping[str, str],
+) -> None:
+    for sample in samples:
+        _annotate_sample_metadata(sample, frames, cfg, volatility_buckets)
 
 
 def _session_reason(ts: pd.Timestamp, range_pips: float, median_range_pips: float) -> str | None:
@@ -602,9 +969,7 @@ def _candidate_window_samples(
         )
     if not candidates:
         limitations.append("NO_CANDIDATE_WINDOWS_FOUND")
-    candidates = sorted(candidates, key=lambda item: item.anchor_timestamp, reverse=True)
-    pool_limit = max(cfg.max_samples * 100, cfg.max_samples)
-    return candidates[:pool_limit] if pool_limit > 0 else []
+    return sorted(candidates, key=lambda item: item.anchor_timestamp)
 
 
 def _slice_frame(frame: pd.DataFrame, start: datetime, end: datetime, max_rows: int) -> pd.DataFrame:
@@ -652,6 +1017,7 @@ def _panel_svg(
     extra_levels = [
         sample.sweep_level,
         sample.number_theory_level,
+        sample.entry_level_price,
         sample.old_entry_price,
         sample.old_stop_loss,
         sample.old_take_profit,
@@ -696,6 +1062,7 @@ def _panel_svg(
 
     add_level(sample.sweep_level, "sweep", "sweep-line")
     add_level(sample.number_theory_level, "round", "number-line")
+    add_level(sample.entry_level_price, "entry level", "entry-line")
     add_level(sample.old_entry_price, "old entry", "entry-line")
     add_level(sample.old_stop_loss, "old SL", "sl-line")
     add_level(sample.old_take_profit, "old TP", "tp-line")
@@ -738,8 +1105,18 @@ def _metadata_table(sample: VisualReviewSample) -> str:
         "source_mode": sample.source_mode,
         "symbol": sample.symbol,
         "direction_guess": sample.direction_guess,
+        "direction_confidence": sample.direction_confidence,
         "anchor_timestamp": sample.anchor_timestamp.isoformat(),
         "anchor_timeframe": sample.anchor_timeframe,
+        "anchor_date": sample.anchor_date,
+        "month": sample.month,
+        "session": sample.session,
+        "candidate_source_type": sample.candidate_source_type,
+        "entry_level_source": sample.entry_level_source,
+        "entry_level_confidence": sample.entry_level_confidence,
+        "entry_level_price": sample.entry_level_price,
+        "entry_level_is_heuristic": sample.entry_level_is_heuristic,
+        "volatility_bucket": sample.volatility_bucket,
         "execution_data_status": sample.execution_data_status,
         "m1_candles_count": sample.m1_candles_count,
         "m5_candles_count": sample.m5_candles_count,
@@ -839,6 +1216,11 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
             f"<td>{html.escape(sample.source_mode)}</td>"
             f"<td>{html.escape(sample.anchor_timestamp.isoformat())}</td>"
             f"<td>{html.escape(sample.direction_guess)}</td>"
+            f"<td>{html.escape(sample.candidate_source_type)}</td>"
+            f"<td>{html.escape(sample.entry_level_source)}</td>"
+            f"<td>{html.escape(sample.session)}</td>"
+            f"<td>{html.escape(sample.month)}</td>"
+            f"<td>{html.escape(sample.volatility_bucket)}</td>"
             f"<td>{html.escape(sample.execution_data_status)}</td>"
             f"<td>{sample.m1_candles_count}</td>"
             f"<td>{sample.m5_candles_count}</td>"
@@ -849,14 +1231,21 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
             "<td>Fill liquidity, reaction zone, target, SL, management, confidence, notes</td>"
             "</tr>"
         )
-    table_body = "\n".join(rows) if rows else "<tr><td colspan=\"12\">No samples generated.</td></tr>"
+    table_body = "\n".join(rows) if rows else "<tr><td colspan=\"17\">No samples generated.</td></tr>"
     summary_boxes = "\n".join(
         f"<div><strong>{html.escape(key)}</strong><br>{html.escape(str(value))}</div>"
         for key, value in {
             "total_samples": summary.get("total_samples"),
+            "date_range_coverage_days": summary.get("date_range_coverage_days"),
+            "samples_per_day_max_observed": summary.get("samples_per_day_max_observed"),
             "reviewable_samples": summary.get("reviewable_samples"),
             "reviewable_m1_m5_count": summary.get("reviewable_m1_m5_count"),
             "insufficient_execution_data_count": summary.get("insufficient_execution_data_count"),
+            "candidate_source_counts": summary.get("candidate_source_counts"),
+            "entry_level_source_counts": summary.get("entry_level_source_counts"),
+            "session_distribution": summary.get("session_distribution"),
+            "volatility_bucket_distribution": summary.get("volatility_bucket_distribution"),
+            "expanded_pack_generation_verdict": summary.get("expanded_pack_generation_verdict"),
             "source_modes_used": ", ".join(summary.get("source_modes_used", [])),
             "candidate_windows_generated": summary.get("candidate_windows_generated"),
             "charts_generated": summary.get("charts_generated"),
@@ -871,12 +1260,13 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
         )
     body = f"""
 <p class="warning">Research-only. {html.escape(RESEARCH_WARNING)} Adelin live remains disabled.</p>
+<p class="warning">Not validation. Not live. Not profitability evidence. Expanded candidate windows are sampled for diagnostic replay and manual review only.</p>
 {coverage_warning}
 <div class="summary">{summary_boxes}</div>
 <p><a href="manual_labels_template.csv">manual_labels_template.csv</a> | <a href="README_manual_review.md">README_manual_review.md</a> | <a href="review_pack_summary.json">review_pack_summary.json</a></p>
 <table>
   <thead>
-    <tr><th>sample_id</th><th>source_mode</th><th>anchor timestamp</th><th>direction guess</th><th>execution_data_status</th><th>M1 count</th><th>M5 count</th><th>M15 count</th><th>candidate reason codes</th><th>chart</th><th>sample page</th><th>recommended manual labels to fill</th></tr>
+    <tr><th>sample_id</th><th>source_mode</th><th>anchor timestamp</th><th>direction guess</th><th>candidate source</th><th>entry source</th><th>session</th><th>month</th><th>volatility</th><th>execution_data_status</th><th>M1 count</th><th>M5 count</th><th>M15 count</th><th>candidate reason codes</th><th>chart</th><th>sample page</th><th>recommended manual labels to fill</th></tr>
   </thead>
   <tbody>{table_body}</tbody>
 </table>
@@ -922,15 +1312,33 @@ def _write_readme(samples: Sequence[VisualReviewSample], summary: Mapping[str, A
         "- Would a 20 pip normal / 40 pip max stop fit behind local structure?",
         "- Did price react quickly, accumulate, or engulf against the setup?",
         "- Check `execution_data_status` first. Skip or down-rank samples with insufficient M1/M5 execution data.",
+        "- Review `candidate_source_type`, `entry_level_source`, session, month, and volatility bucket before comparing outcomes.",
         "",
         "## Summary",
         "",
         f"- total_samples: `{summary.get('total_samples')}`",
+        f"- date_range_coverage_days: `{summary.get('date_range_coverage_days')}`",
+        f"- max_samples_per_day: `{summary.get('max_samples_per_day')}`",
+        f"- min_sample_spacing_minutes: `{summary.get('min_sample_spacing_minutes')}`",
+        f"- candidate_source_counts: `{summary.get('candidate_source_counts')}`",
+        f"- entry_level_source_counts: `{summary.get('entry_level_source_counts')}`",
+        f"- session_distribution: `{summary.get('session_distribution')}`",
+        f"- volatility_bucket_distribution: `{summary.get('volatility_bucket_distribution')}`",
         f"- reviewable_samples: `{summary.get('reviewable_samples')}`",
         f"- reviewable_m1_m5_count: `{summary.get('reviewable_m1_m5_count')}`",
         f"- insufficient_execution_data_count: `{summary.get('insufficient_execution_data_count')}`",
         f"- source_modes_used: `{', '.join(summary.get('source_modes_used', []))}`",
+        f"- expanded_pack_generation_verdict: `{summary.get('expanded_pack_generation_verdict')}`",
+        f"- expanded_pack_generation_verdict_reason: `{summary.get('expanded_pack_generation_verdict_reason')}`",
         f"- limitations: `{', '.join(summary.get('limitations', []))}`",
+        "",
+        "## Pre-Registered Decision Criteria",
+        "",
+        "Decision criteria are recorded before expanded outcome replay. They are descriptive project gates, not proof of edge.",
+        "",
+        "- continue refinement if a useful source group clears a fast-reaction, runner, or fast-SL-reduction threshold against matched controls.",
+        "- stop/archive if useful source groups are flat and fast SL is not better, or if fast SL is materially worse across all useful sources.",
+        "- repeat expansion once only for visible but underpowered effects with fewer than 300 generated candidates due to data constraints.",
     ]
     (output_dir / "README_manual_review.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -946,6 +1354,75 @@ def _write_summary(summary: Mapping[str, Any], output_dir: Path) -> None:
     (output_dir / "review_pack_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
 
+def _count_attr(samples: Sequence[VisualReviewSample], attr: str) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for sample in samples:
+        value = getattr(sample, attr, None)
+        counts[str(value) if value not in {None, ""} else "UNKNOWN"] += 1
+    return dict(sorted(counts.items()))
+
+
+def _nested_count(samples: Sequence[VisualReviewSample], outer_attr: str, inner_attr: str) -> dict[str, dict[str, int]]:
+    out: dict[str, Counter[str]] = defaultdict(Counter)
+    for sample in samples:
+        outer = getattr(sample, outer_attr, None) or "UNKNOWN"
+        inner = getattr(sample, inner_attr, None) or "UNKNOWN"
+        out[str(outer)][str(inner)] += 1
+    return {outer: dict(sorted(counter.items())) for outer, counter in sorted(out.items())}
+
+
+def _month_distribution(samples: Sequence[VisualReviewSample]) -> dict[str, int]:
+    return dict(sorted(Counter(sample.month or _month_key(sample.anchor_timestamp) for sample in samples).items()))
+
+
+def _week_distribution(samples: Sequence[VisualReviewSample]) -> dict[str, int]:
+    return dict(sorted(Counter(_week_key(sample.anchor_timestamp) for sample in samples).items()))
+
+
+def _max_samples_per_day_observed(samples: Sequence[VisualReviewSample]) -> int:
+    if not samples:
+        return 0
+    counts = Counter(_date_key(sample.anchor_timestamp) for sample in samples)
+    return max(counts.values())
+
+
+def _expanded_pack_generation_verdict(
+    samples: Sequence[VisualReviewSample],
+    cfg: VisualReviewPackConfig,
+    *,
+    date_range_coverage_days: int,
+    local_data_coverage_days: int,
+) -> tuple[str, str]:
+    if not samples:
+        return "INCONCLUSIVE_DATA_QUALITY_LIMITATION", "NO_EXPANDED_CANDIDATE_SAMPLES_GENERATED"
+    if local_data_coverage_days < cfg.min_date_range_days:
+        return (
+            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            f"LOCAL_DATA_COVERAGE_{local_data_coverage_days}_DAYS_BELOW_REQUESTED_{cfg.min_date_range_days}",
+        )
+    if date_range_coverage_days < cfg.min_date_range_days:
+        return (
+            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            f"SAMPLE_DATE_RANGE_{date_range_coverage_days}_DAYS_BELOW_REQUESTED_{cfg.min_date_range_days}",
+        )
+    if len(samples) < cfg.max_samples:
+        return (
+            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            f"ONLY_{len(samples)}_OF_{cfg.max_samples}_REQUESTED_SAMPLES_GENERATED_UNDER_SPACING_AND_COVERAGE_RULES",
+        )
+    source_counts = Counter(sample.entry_level_source or UNKNOWN_ENTRY_SOURCE for sample in samples)
+    useful_sources = {source: count for source, count in source_counts.items() if source != UNKNOWN_ENTRY_SOURCE and count >= 80}
+    if not useful_sources:
+        return (
+            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            "NO_ENTRY_SOURCE_GROUP_REACHED_USEFUL_SOURCE_MIN_CANDIDATE_N_80",
+        )
+    return (
+        "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+        "OBJECTIVE_REPLAY_AND_MATCHED_CONTROLS_REQUIRED_TO_APPLY_PRIMARY_DECISION_CRITERIA",
+    )
+
+
 def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
     started = _utc_now()
     output_dir = _to_path(cfg.output_dir) or DEFAULT_OUTPUT_DIR
@@ -959,6 +1436,10 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         from_date=cfg.from_date,
         to_date=cfg.to_date,
         max_samples=max(0, int(cfg.max_samples)),
+        min_date_range_days=max(0, int(cfg.min_date_range_days)),
+        max_samples_per_day=max(1, int(cfg.max_samples_per_day)),
+        min_sample_spacing_minutes=max(0, int(cfg.min_sample_spacing_minutes)),
+        target_session_balance=bool(cfg.target_session_balance),
         include_candidate_windows=cfg.include_candidate_windows,
         include_trade_review=cfg.include_trade_review,
         allow_weak_m1_only=cfg.allow_weak_m1_only,
@@ -972,6 +1453,9 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
     (output_dir / "charts").mkdir(parents=True, exist_ok=True)
 
     frames = _load_market_frames(normalized_cfg, limitations)
+    all_data_start, all_data_end, all_data_coverage_days = _frame_time_bounds(frames)
+    data_start, data_end, local_data_coverage_days = _required_execution_time_bounds(frames)
+    volatility_buckets = _volatility_bucket_map(frames, limitations)
     samples: list[VisualReviewSample] = []
     trades_loaded = 0
     audit_rows_loaded = 0
@@ -988,6 +1472,10 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
             from_date=normalized_cfg.from_date,
             to_date=normalized_cfg.to_date,
             max_samples=normalized_cfg.max_samples,
+            min_date_range_days=normalized_cfg.min_date_range_days,
+            max_samples_per_day=normalized_cfg.max_samples_per_day,
+            min_sample_spacing_minutes=normalized_cfg.min_sample_spacing_minutes,
+            target_session_balance=normalized_cfg.target_session_balance,
             include_candidate_windows=True,
             include_trade_review=False,
             allow_weak_m1_only=normalized_cfg.allow_weak_m1_only,
@@ -997,18 +1485,24 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         )
         samples.extend(_candidate_window_samples(candidate_cfg, frames, limitations))
 
+    _annotate_samples_metadata(samples, frames, normalized_cfg, volatility_buckets)
     _set_all_execution_coverage(samples, frames)
     raw_samples_count = len(samples)
-    samples, skipped_missing_ltf = _prefer_reviewable_samples(
+    samples, skipped_missing_ltf, skipped_duplicate_spacing, skipped_max_per_day = _prefer_reviewable_samples(
         samples,
         normalized_cfg.max_samples,
+        max_samples_per_day=normalized_cfg.max_samples_per_day,
+        min_sample_spacing_minutes=normalized_cfg.min_sample_spacing_minutes,
+        target_session_balance=normalized_cfg.target_session_balance,
         allow_weak_m1_only=normalized_cfg.allow_weak_m1_only,
         include_insufficient_execution_debug=normalized_cfg.include_insufficient_execution_debug,
     )
     if skipped_missing_ltf:
         limitations.append("INSUFFICIENT_EXECUTION_DATA_SAMPLES_SKIPPED")
     if len(samples) < normalized_cfg.max_samples and raw_samples_count > len(samples):
-        limitations.append("PACK_NOT_FILLED_DUE_TO_EXECUTION_COVERAGE_FILTER")
+        limitations.append("PACK_NOT_FILLED_DUE_TO_COVERAGE_OR_REGIME_CONSTRAINTS")
+    if local_data_coverage_days and local_data_coverage_days < normalized_cfg.min_date_range_days:
+        limitations.append("LOCAL_DATA_COVERAGE_BELOW_REQUESTED_MIN_DATE_RANGE")
     _assign_paths(samples, output_dir)
     charts_generated = 0
     pages_generated = 0
@@ -1027,6 +1521,15 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         1 for sample in samples if sample.execution_data_status == INSUFFICIENT_EXECUTION_DATA
     )
     reviewable_samples = reviewable_m1_m5_count + reviewable_m5_only_count + weak_m1_only_count
+    date_range_start, date_range_end, date_range_coverage_days = _sample_time_bounds(samples)
+    if local_data_coverage_days >= normalized_cfg.min_date_range_days and date_range_coverage_days < normalized_cfg.min_date_range_days and samples:
+        limitations.append("GENERATED_SAMPLE_DATE_RANGE_BELOW_REQUESTED_MIN_DATE_RANGE")
+    generation_verdict, generation_verdict_reason = _expanded_pack_generation_verdict(
+        samples,
+        normalized_cfg,
+        date_range_coverage_days=date_range_coverage_days,
+        local_data_coverage_days=local_data_coverage_days,
+    )
     _write_manual_template(samples, output_dir)
     discovered_trades_path = _discover_existing_path(normalized_cfg.trades_path, DEFAULT_TRADES_PATH)
     discovered_audit_path = _discover_existing_path(normalized_cfg.audit_path, DEFAULT_AUDIT_PATH)
@@ -1037,8 +1540,45 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "output_dir": str(output_dir),
         "data_dir": str(data_dir),
         "dry_run": normalized_cfg.dry_run,
+        "max_samples_requested": normalized_cfg.max_samples,
+        "min_date_range_days_requested": normalized_cfg.min_date_range_days,
+        "max_samples_per_day": normalized_cfg.max_samples_per_day,
+        "min_sample_spacing_minutes": normalized_cfg.min_sample_spacing_minutes,
+        "target_session_balance": normalized_cfg.target_session_balance,
         "allow_weak_m1_only": normalized_cfg.allow_weak_m1_only,
         "include_insufficient_execution_debug": normalized_cfg.include_insufficient_execution_debug,
+        "date_range_start": date_range_start,
+        "date_range_end": date_range_end,
+        "date_range_coverage_days": date_range_coverage_days,
+        "local_data_range_start": data_start.isoformat() if data_start else None,
+        "local_data_range_end": data_end.isoformat() if data_end else None,
+        "local_data_coverage_days": local_data_coverage_days,
+        "all_loaded_data_range_start": all_data_start.isoformat() if all_data_start else None,
+        "all_loaded_data_range_end": all_data_end.isoformat() if all_data_end else None,
+        "all_loaded_data_coverage_days": all_data_coverage_days,
+        "samples_per_day_max_observed": _max_samples_per_day_observed(samples),
+        "samples_per_month_distribution": _month_distribution(samples),
+        "samples_per_week_distribution": _week_distribution(samples),
+        "candidate_source_counts": _count_attr(samples, "candidate_source_type"),
+        "entry_level_source_counts": _count_attr(samples, "entry_level_source"),
+        "candidate_source_counts_by_month": _nested_count(samples, "month", "candidate_source_type"),
+        "session_distribution": _count_attr(samples, "session"),
+        "session_distribution_by_month": _nested_count(samples, "month", "session"),
+        "volatility_bucket_distribution": _count_attr(samples, "volatility_bucket"),
+        "candidate_source_counts_by_volatility_bucket": _nested_count(samples, "volatility_bucket", "candidate_source_type"),
+        "session_counts_by_volatility_bucket": _nested_count(samples, "volatility_bucket", "session"),
+        "direction_distribution": _count_attr(samples, "direction_guess"),
+        "execution_data_status_counts": _count_attr(samples, "execution_data_status"),
+        "m1_m5_full_coverage_count": reviewable_m1_m5_count,
+        "samples_skipped_missing_execution": skipped_missing_ltf,
+        "samples_skipped_duplicate_spacing": skipped_duplicate_spacing,
+        "samples_skipped_max_per_day": skipped_max_per_day,
+        "samples_skipped_outside_date_range_goal": 0,
+        "decision_criteria_preregistered": True,
+        "decision_criteria": PRE_REGISTERED_DECISION_CRITERIA,
+        "expanded_pack_generation_verdict": generation_verdict,
+        "expanded_pack_generation_verdict_reason": generation_verdict_reason,
+        "objective_replay_required_before_final_decision": True,
         "source_modes_used": source_modes,
         "trades_path": str(discovered_trades_path) if discovered_trades_path is not None else None,
         "audit_path": str(discovered_audit_path) if discovered_audit_path is not None else None,
@@ -1046,6 +1586,7 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "audit_rows_loaded": audit_rows_loaded,
         "candidate_windows_generated": candidate_count,
         "total_samples": len(samples),
+        "total_samples_generated": len(samples),
         "raw_samples_considered": raw_samples_count,
         "reviewable_samples": reviewable_samples,
         "reviewable_m1_m5_count": reviewable_m1_m5_count,

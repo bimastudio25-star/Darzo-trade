@@ -35,7 +35,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--audit-path", default=None)
     parser.add_argument("--from-date", default=None)
     parser.add_argument("--to-date", default=None)
-    parser.add_argument("--max-samples", type=int, default=40)
+    parser.add_argument("--max-samples", type=int, default=300)
+    parser.add_argument("--min-date-range-days", type=int, default=180)
+    parser.add_argument("--max-samples-per-day", type=int, default=5)
+    parser.add_argument("--min-sample-spacing-minutes", type=int, default=240)
+    parser.add_argument(
+        "--target-session-balance",
+        action="store_true",
+        default=False,
+        help="Try to round-robin candidate selection across sessions. Disabled by default to avoid fake balance.",
+    )
     parser.add_argument("--include-candidate-windows", action="store_true", default=True)
     parser.add_argument("--include-trade-review", action="store_true", default=True)
     parser.add_argument(
@@ -69,6 +78,10 @@ def config_from_args(args: argparse.Namespace) -> VisualReviewPackConfig:
         from_date=_parse_datetime(args.from_date),
         to_date=_parse_datetime(args.to_date),
         max_samples=args.max_samples,
+        min_date_range_days=args.min_date_range_days,
+        max_samples_per_day=args.max_samples_per_day,
+        min_sample_spacing_minutes=args.min_sample_spacing_minutes,
+        target_session_balance=bool(args.target_session_balance),
         include_candidate_windows=bool(args.include_candidate_windows),
         include_trade_review=bool(args.include_trade_review),
         allow_weak_m1_only=bool(args.allow_weak_m1_only),
@@ -89,6 +102,18 @@ def main(argv: list[str] | None = None) -> int:
                 "audit_rows_loaded": summary["audit_rows_loaded"],
                 "candidate_windows_generated": summary["candidate_windows_generated"],
                 "total_samples": summary["total_samples"],
+                "total_samples_generated": summary["total_samples_generated"],
+                "date_range_coverage_days": summary["date_range_coverage_days"],
+                "candidate_source_counts": summary["candidate_source_counts"],
+                "entry_level_source_counts": summary["entry_level_source_counts"],
+                "session_distribution": summary["session_distribution"],
+                "samples_per_month_distribution": summary["samples_per_month_distribution"],
+                "volatility_bucket_distribution": summary["volatility_bucket_distribution"],
+                "samples_skipped_missing_execution": summary["samples_skipped_missing_execution"],
+                "samples_skipped_duplicate_spacing": summary["samples_skipped_duplicate_spacing"],
+                "samples_skipped_max_per_day": summary["samples_skipped_max_per_day"],
+                "expanded_pack_generation_verdict": summary["expanded_pack_generation_verdict"],
+                "expanded_pack_generation_verdict_reason": summary["expanded_pack_generation_verdict_reason"],
                 "reviewable_samples": summary["reviewable_samples"],
                 "reviewable_m1_m5_count": summary["reviewable_m1_m5_count"],
                 "reviewable_m5_only_count": summary["reviewable_m5_only_count"],

@@ -176,6 +176,7 @@ def test_index_html_contains_research_only_no_signal_warning(tmp_path: Path):
     html = (output_dir / "index.html").read_text(encoding="utf-8")
     assert "Research-only" in html
     assert RESEARCH_WARNING in html
+    assert "Not validation" in html
     assert "execution_data_status" in html
     assert "M1 count" in html
 
@@ -271,10 +272,10 @@ def test_default_generator_excludes_insufficient_execution_samples(tmp_path: Pat
     )
     assert summary["total_samples"] == 0
     assert summary["samples_skipped_due_to_missing_ltf_data"] > 0
-    assert "PACK_NOT_FILLED_DUE_TO_EXECUTION_COVERAGE_FILTER" in summary["limitations"]
+    assert "PACK_NOT_FILLED_DUE_TO_COVERAGE_OR_REGIME_CONSTRAINTS" in summary["limitations"]
 
 
-def test_m5_only_is_accepted_as_lower_quality_reviewable(tmp_path: Path):
+def test_m5_only_is_skipped_by_default_for_expanded_review_quality(tmp_path: Path):
     data_dir = _make_m5_only_data_dir(tmp_path)
     output_dir = tmp_path / "pack"
     summary = create_visual_review_pack(
@@ -284,6 +285,23 @@ def test_m5_only_is_accepted_as_lower_quality_reviewable(tmp_path: Path):
             trades_path=tmp_path / "missing.csv",
             audit_path=tmp_path / "missing_audit.csv",
             max_samples=3,
+        )
+    )
+    assert summary["total_samples"] == 0
+    assert summary["samples_skipped_due_to_missing_ltf_data"] > 0
+
+
+def test_m5_only_can_be_included_as_debug_insufficient_context(tmp_path: Path):
+    data_dir = _make_m5_only_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    summary = create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=3,
+            include_insufficient_execution_debug=True,
         )
     )
     assert summary["total_samples"] == 3
@@ -334,11 +352,117 @@ def test_generator_prefers_samples_with_m1_m5_coverage(tmp_path: Path):
             trades_path=tmp_path / "missing.csv",
             audit_path=tmp_path / "missing_audit.csv",
             max_samples=5,
+            min_sample_spacing_minutes=0,
         )
     )
     assert summary["total_samples"] == 5
     assert summary["reviewable_m1_m5_count"] == 5
     assert summary["insufficient_execution_data_count"] == 0
+
+
+def test_expanded_spacing_rule_is_enforced(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=4,
+            min_sample_spacing_minutes=240,
+        )
+    )
+    with (output_dir / "manual_labels_template.csv").open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    anchors = [datetime.fromisoformat(row["anchor_timestamp"]) for row in rows]
+    assert all(
+        abs((right - left).total_seconds()) >= 240 * 60
+        for index, left in enumerate(anchors)
+        for right in anchors[index + 1 :]
+    )
+
+
+def test_expanded_max_samples_per_day_is_enforced(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    summary = create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=10,
+            max_samples_per_day=1,
+            min_sample_spacing_minutes=0,
+        )
+    )
+    assert summary["samples_per_day_max_observed"] <= 1
+    assert summary["samples_skipped_max_per_day"] >= 0
+
+
+def test_expanded_summary_includes_regime_metadata_and_decision_criteria(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    summary = create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=3,
+            min_sample_spacing_minutes=0,
+        )
+    )
+    assert "date_range_coverage_days" in summary
+    assert "LOCAL_DATA_COVERAGE_BELOW_REQUESTED_MIN_DATE_RANGE" in summary["limitations"]
+    assert isinstance(summary["candidate_source_counts"], dict)
+    assert isinstance(summary["entry_level_source_counts"], dict)
+    assert isinstance(summary["session_distribution"], dict)
+    assert isinstance(summary["samples_per_month_distribution"], dict)
+    assert isinstance(summary["volatility_bucket_distribution"], dict)
+    assert summary["decision_criteria_preregistered"] is True
+    assert summary["expanded_pack_generation_verdict"] in {
+        "CONTINUE_DETECTOR_REFINEMENT",
+        "STOP_ARCHIVE_ADELIN_V2_DETECTOR",
+        "REPEAT_EXPANSION_ONCE",
+        "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+    }
+
+
+def test_manual_template_includes_entry_source_metadata(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=2,
+            min_sample_spacing_minutes=0,
+        )
+    )
+    with (output_dir / "manual_labels_template.csv").open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert {"candidate_source_type", "entry_level_source", "entry_level_confidence", "session", "month", "volatility_bucket"}.issubset(rows[0].keys())
+
+
+def test_visual_pack_generation_does_not_modify_input_candle_data(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    m1_path = data_dir / "XAUUSD" / "M1.csv"
+    before = m1_path.read_bytes()
+    create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=tmp_path / "pack",
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=2,
+            min_sample_spacing_minutes=0,
+        )
+    )
+    assert m1_path.read_bytes() == before
 
 
 def test_number_theory_helper_detects_prices_near_levels_ending_in_zero():

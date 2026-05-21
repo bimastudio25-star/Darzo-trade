@@ -53,12 +53,22 @@ The generated summary includes explicit safety flags, all false.
 python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir data --output-dir backtests/reports/adelin_v2_visual_review_pack --max-samples 40 --dry-run
 ```
 
+Expanded regime pack:
+
+```powershell
+python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir data --output-dir backtests/reports/adelin_v2_expanded_candidate_window_pack --max-samples 300 --min-date-range-days 180 --max-samples-per-day 5 --min-sample-spacing-minutes 240 --dry-run
+```
+
 Optional inputs:
 
 - `--trades-path` for an old executed-trades export,
 - `--audit-path` for an Adelin v2 operational audit CSV,
 - `--from-date` and `--to-date` to restrict candle windows,
-- `--max-samples` to cap the pack size.
+- `--max-samples` to cap the pack size,
+- `--min-date-range-days` to request broad historical coverage,
+- `--max-samples-per-day` to avoid over-sampling one event/day,
+- `--min-sample-spacing-minutes` to reduce duplicate/correlated anchors,
+- `--target-session-balance` to round-robin across sessions without forcing fake samples.
 
 Default behavior is safe and research-only.
 
@@ -82,7 +92,9 @@ The pack records lower-timeframe execution coverage for every sample:
 - `WEAK_M1_ONLY`: M15 or H1 context exists and M1 execution candles exist, but M5 reaction candles are missing.
 - `INSUFFICIENT_EXECUTION_DATA`: M15/H1 context is absent, both M5 and M1 are absent, or the sample cannot show reaction quality.
 
-Default sample selection prefers `REVIEWABLE_M1_M5`, then `REVIEWABLE_M5_ONLY`. `WEAK_M1_ONLY` is excluded unless `--allow-weak-m1-only` is passed. `INSUFFICIENT_EXECUTION_DATA` is excluded unless `--include-insufficient-execution-debug` is passed, and those samples are not labelable as A+.
+Default expanded sample selection requires `REVIEWABLE_M1_M5`: M15 or H1 context, M5 reaction candles, and M1 execution candles. Lower-quality missing-M1/M5 samples are excluded unless debug flags are passed, and those samples are not labelable as A+.
+
+The expanded summary also reports candidate source, entry source, session, month, volatility bucket, date coverage, max samples per day, and spacing skips. Candidate windows remain visual review samples, not signals.
 
 ## 6. How The User Should Label
 
@@ -121,9 +133,25 @@ Candidate windows are not signals.
 
 They are qualitative hypothesis-generation samples. They do not prove profitability, deployability, or live readiness.
 
-The correct next human action is to fill the manual label CSV and return it for profile comparison.
+For the expanded pack, the correct next research action is objective outcome replay with entry-source/session-matched controls. Manual review can still be used later, but the expanded pack is designed to reduce sample-size noise before deeper qualitative work.
 
-## 8. Next Branches
+## 8. Pre-Registered Decision Criteria
+
+The expanded pack records decision criteria before outcome replay. These are descriptive project gates, not statistical proof.
+
+Useful source group: candidate `N >= 80`.
+
+Continue detector refinement if at least one useful source meets one of:
+
+- candidate fast reaction rate is at least control + `0.07`,
+- candidate runner rate is at least control + `0.05`,
+- candidate fast SL20 rate is at least `0.10` lower than control and fast reaction is not worse than control by more than `0.03`.
+
+Stop/archive the detector if all useful sources are flat on fast reaction and runner behavior and candidate fast SL20 is not better, or if fast SL20 is worse by `0.05` or more on all useful sources.
+
+Repeat expansion once only for visible but underpowered effects with fewer than 300 generated candidates due to data constraints.
+
+## 9. Next Branches
 
 Possible next branches:
 
