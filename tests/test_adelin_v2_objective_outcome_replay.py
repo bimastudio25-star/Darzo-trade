@@ -27,11 +27,19 @@ from dazro_trade.analytics.adelin_v2_objective_outcome_replay import (
     DirectionInference,
     EntryHypothesis,
     ObjectiveReplayConfig,
+    PRE_REGISTERED_VERDICT_CONTINUE,
+    PRE_REGISTERED_VERDICT_INCONCLUSIVE,
+    PRE_REGISTERED_VERDICT_STOP,
     ReplayInputSample,
+    apply_pre_registered_decision,
+    build_source_metrics_with_confidence,
     build_entry_hypothesis,
     detect_pre_anchor_sweep_control,
+    effect_size_ci95,
     generate_control_samples,
     infer_reversal_direction,
+    load_pre_registered_criteria,
+    normal_proportion_ci95,
     replay_forward_path,
     resolve_pip_size,
     run_objective_replay,
@@ -203,6 +211,48 @@ def _direction(value: str) -> DirectionInference:
     )
 
 
+def _decision_rows(
+    *,
+    source: str,
+    candidate_n: int,
+    control_n: int,
+    candidate_fast: int = 0,
+    control_fast: int = 0,
+    candidate_sl20: int = 0,
+    control_sl20: int = 0,
+    candidate_runner: int = 0,
+    control_runner: int = 0,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for i in range(candidate_n):
+        label = FAST_SL_20 if i < candidate_sl20 else ("RUNNER_CANDIDATE" if i < candidate_runner else NO_REACTION)
+        rows.append(
+            {
+                "row_type": "CANDIDATE",
+                "sample_id": f"c_{source}_{i}",
+                "entry_level_source": source,
+                "entry_price": 4900.0,
+                "fast_reaction_100pips_15m": i < candidate_fast,
+                "automatic_outcome_label": label,
+                "hit_500_pips": i < candidate_runner,
+            }
+        )
+    for i in range(control_n):
+        label = FAST_SL_20 if i < control_sl20 else ("RUNNER_CANDIDATE" if i < control_runner else NO_REACTION)
+        rows.append(
+            {
+                "row_type": "CONTROL",
+                "sample_id": f"k_{source}_{i}",
+                "entry_level_source": source,
+                "entry_price": 4900.0,
+                "fast_reaction_100pips_15m": i < control_fast,
+                "automatic_outcome_label": label,
+                "hit_500_pips": i < control_runner,
+            }
+        )
+    return rows
+
+
 def test_module_import_is_safe():
     module = importlib.import_module("dazro_trade.analytics.adelin_v2_objective_outcome_replay")
     assert hasattr(module, "run_objective_replay")
@@ -241,6 +291,83 @@ def test_pip_size_resolver_uses_project_symbol_registry():
     assert resolution.source == "core.symbols.get_symbol_spec"
 
 
+def test_pre_registered_criteria_can_be_loaded(tmp_path: Path):
+    criteria = tmp_path / "decision_criteria.md"
+    criteria.write_text("locked criteria", encoding="utf-8")
+    loaded = load_pre_registered_criteria(tmp_path)
+    assert loaded["loaded"] is True
+    assert loaded["verbatim"] == "locked criteria"
+    assert loaded["source_path"].endswith("decision_criteria.md")
+
+
+def test_ci95_helpers_and_effect_excludes_zero():
+    lower, upper = normal_proportion_ci95(50, 100)
+    assert 0 <= lower <= upper <= 1
+    effect_lower, effect_upper = effect_size_ci95(0.8, 100, 0.5, 100)
+    assert effect_lower > 0
+    assert effect_upper > effect_lower
+    noisy_lower, noisy_upper = effect_size_ci95(0.17, 100, 0.10, 100)
+    assert noisy_lower < 0 < noisy_upper
+
+
+def test_pre_registered_verdict_continue_for_fast_reaction_plus_7pp():
+    rows = _decision_rows(source=ROUND_LEVEL, candidate_n=100, control_n=100, candidate_fast=20, control_fast=10)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["pre_registered_verdict"] == PRE_REGISTERED_VERDICT_CONTINUE
+    assert decision["decision_metric"] == "fast_reaction"
+
+
+def test_pre_registered_verdict_continue_for_runner_plus_5pp():
+    rows = _decision_rows(source=ROUND_LEVEL, candidate_n=100, control_n=100, candidate_runner=10, control_runner=4)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["pre_registered_verdict"] == PRE_REGISTERED_VERDICT_CONTINUE
+    assert decision["decision_metric"] == "runner"
+
+
+def test_pre_registered_verdict_continue_for_fast_sl20_minus_10pp():
+    rows = _decision_rows(source=SWEEP_EXTREME, candidate_n=100, control_n=100, candidate_sl20=10, control_sl20=25)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["pre_registered_verdict"] == PRE_REGISTERED_VERDICT_CONTINUE
+    assert decision["decision_metric"] == "fast_sl20"
+
+
+def test_ci95_metadata_does_not_alter_pre_registered_verdict():
+    rows = _decision_rows(source=ROUND_LEVEL, candidate_n=100, control_n=100, candidate_fast=17, control_fast=10)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["pre_registered_verdict"] == PRE_REGISTERED_VERDICT_CONTINUE
+    assert decision["decision_effect_size_excludes_zero"] is False
+    assert "robustness is weak" in decision["decision_robustness_note"]
+
+
+def test_pre_registered_verdict_stop_when_all_useful_sources_flat_or_worse():
+    rows = []
+    rows += _decision_rows(source=ROUND_LEVEL, candidate_n=60, control_n=100, candidate_fast=6, control_fast=10, candidate_sl20=21, control_sl20=35)
+    rows += _decision_rows(source=SWEEP_EXTREME, candidate_n=90, control_n=100, candidate_fast=9, control_fast=10, candidate_sl20=32, control_sl20=35)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["pre_registered_verdict"] == PRE_REGISTERED_VERDICT_STOP
+
+
+def test_pre_registered_verdict_inconclusive_for_mixed_non_threshold_case():
+    rows = _decision_rows(source=ROUND_LEVEL, candidate_n=100, control_n=100, candidate_fast=14, control_fast=10, candidate_sl20=20, control_sl20=25)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["pre_registered_verdict"] == PRE_REGISTERED_VERDICT_INCONCLUSIVE
+
+
+def test_ineligible_sources_under_min_n_are_excluded():
+    rows = _decision_rows(source=ROUND_LEVEL, candidate_n=49, control_n=100, candidate_fast=20, control_fast=1)
+    decision = apply_pre_registered_decision(build_source_metrics_with_confidence(rows))
+    assert decision["eligible_sources"] == []
+    assert "ROUND_LEVEL" in decision["ineligible_sources"]
+
+
+def test_summary_metrics_with_ci95_include_expected_fields():
+    rows = _decision_rows(source=ROUND_LEVEL, candidate_n=100, control_n=100, candidate_fast=15, control_fast=10)
+    metrics = build_source_metrics_with_confidence(rows)
+    assert "candidate_fast_reaction_ci95_lower" in metrics[ROUND_LEVEL]
+    assert "fast_reaction_effect_size_ci95_upper" in metrics[ROUND_LEVEL]
+    assert metrics[ROUND_LEVEL]["fast_reaction_effect_size_excludes_zero"] is False
+
+
 def test_round_level_entry_source_works():
     anchor = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
     sample = ReplayInputSample(
@@ -256,6 +383,27 @@ def test_round_level_entry_source_works():
     assert entry.entry_level_source == ROUND_LEVEL
     assert entry.entry_level_confidence == "HIGH"
     assert "EXPLICIT_ROUND_LEVEL_METADATA" in entry.entry_level_reason_codes
+
+
+def test_visual_pack_entry_metadata_source_is_preserved():
+    anchor = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    frames = {"M1": _frame([(anchor, 4914.0, 4914.2, 4913.8, 4914.0)])}
+    sample = ReplayInputSample(
+        "CANDIDATE",
+        "explicit_sweep",
+        "XAUUSD",
+        anchor,
+        "CANDIDATE_WINDOW_MODE",
+        metadata={
+            "entry_level_source": SWEEP_EXTREME,
+            "entry_level_price": "4913.5",
+            "entry_level_confidence": "LOW",
+        },
+    )
+    entry = build_entry_hypothesis(sample, frames, _direction("SHORT"), symbol="XAUUSD", pip_size=0.1)
+    assert entry.entry_price == 4913.5
+    assert entry.entry_level_source == SWEEP_EXTREME
+    assert "EXPLICIT_ENTRY_LEVEL_METADATA_FROM_VISUAL_PACK" in entry.entry_level_reason_codes
 
 
 def test_sweep_extreme_entry_source_works_when_round_level_missing():
@@ -619,6 +767,14 @@ def test_run_writes_outputs_summary_and_enriched_template(tmp_path: Path):
     assert "candidate_fast_reaction_rate" in summary["candidate_vs_control_known_entry"]
     assert "candidate_outcome_counts_by_entry_level_source" in summary
     assert "entry_source_and_session_matched_metrics" in summary
+    assert "source_metrics_with_confidence" in summary
+    assert "pre_registered_verdict" in summary
+    assert summary["pre_registered_verdict"] in {
+        "CONTINUE_DETECTOR_REFINEMENT",
+        "STOP_ARCHIVE_DETECTOR",
+        "REPEAT_EXPANSION_ONCE",
+        "INCONCLUSIVE",
+    }
     assert "control_generation_method" in (output_dir / "objective_outcome_replay.csv").read_text(encoding="utf-8")
     assert "control_lookahead_safe" in (output_dir / "objective_outcome_replay.csv").read_text(encoding="utf-8")
     assert (output_dir / "objective_outcome_replay.csv").exists()

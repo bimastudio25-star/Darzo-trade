@@ -56,6 +56,27 @@ OUTPUT_JSON = "objective_outcome_replay_summary.json"
 OUTPUT_MD = "objective_outcome_replay.md"
 OUTPUT_HTML = "index.html"
 OUTPUT_ENRICHED_LABELS = "enriched_manual_labels_template.csv"
+PRE_REGISTERED_CRITERIA_FILE = "decision_criteria.md"
+PRE_REGISTERED_VERDICT_CONTINUE = "CONTINUE_DETECTOR_REFINEMENT"
+PRE_REGISTERED_VERDICT_STOP = "STOP_ARCHIVE_DETECTOR"
+PRE_REGISTERED_VERDICT_REPEAT = "REPEAT_EXPANSION_ONCE"
+PRE_REGISTERED_VERDICT_INCONCLUSIVE = "INCONCLUSIVE"
+PRE_REGISTERED_VERDICTS = (
+    PRE_REGISTERED_VERDICT_CONTINUE,
+    PRE_REGISTERED_VERDICT_STOP,
+    PRE_REGISTERED_VERDICT_REPEAT,
+    PRE_REGISTERED_VERDICT_INCONCLUSIVE,
+)
+SOURCE_MINIMUM_SAMPLE_SIZES = {
+    SWEEP_EXTREME: 80,
+    ROUND_LEVEL: 50,
+    SWEPT_LIQUIDITY_LEVEL: 50,
+}
+KEY_DECISION_METRICS = ("fast_reaction", "fast_sl20", "runner")
+ROBUST_CI_EXCLUDES_ZERO = "DIRECTIONAL_AND_CI95_EXCLUDES_ZERO"
+ROBUST_CI_INCLUDES_ZERO = "DIRECTIONAL_NOT_STATISTICALLY_ROBUST_AT_CURRENT_N"
+ROBUST_FLAT = "FLAT_OR_NO_DIRECTIONAL_EFFECT"
+ROBUST_INELIGIBLE = "INELIGIBLE_UNDERPOWERED_SOURCE"
 
 
 @dataclass(frozen=True)
@@ -393,6 +414,37 @@ def _sweep_entry_confidence(direction: DirectionInference) -> str:
     return "UNKNOWN"
 
 
+def _explicit_entry_level_from_metadata(sample: ReplayInputSample) -> EntryHypothesis | None:
+    explicit_source = str(
+        sample.metadata.get("entry_level_source")
+        or sample.metadata.get("candidate_source_type")
+        or ""
+    ).strip()
+    explicit_price = _parse_float(
+        sample.metadata.get("entry_level_price")
+        or sample.metadata.get("entry_price")
+        or sample.metadata.get("entry_level")
+    )
+    if explicit_price is None or explicit_source in {"", UNKNOWN_ENTRY_SOURCE}:
+        return None
+    if explicit_source not in {ROUND_LEVEL, SWEEP_EXTREME, SWEPT_LIQUIDITY_LEVEL}:
+        return None
+    confidence = str(sample.metadata.get("entry_level_confidence") or "").strip() or (
+        "HIGH" if explicit_source == ROUND_LEVEL else "MEDIUM"
+    )
+    return EntryHypothesis(
+        entry_hypothesis_type=ROUND_LEVEL_TOUCH_ENTRY,
+        entry_price=round(float(explicit_price), 2),
+        entry_level_source=explicit_source,
+        entry_is_heuristic=True,
+        entry_level_confidence=confidence,
+        entry_level_reason_codes=(
+            "EXPLICIT_ENTRY_LEVEL_METADATA_FROM_VISUAL_PACK",
+            f"EXPLICIT_SOURCE_{explicit_source}",
+        ),
+    )
+
+
 def build_entry_hypothesis(
     sample: ReplayInputSample,
     frames: Mapping[str, pd.DataFrame],
@@ -402,6 +454,17 @@ def build_entry_hypothesis(
     threshold_pips: float = 5.0,
     pip_size: float = 0.1,
 ) -> EntryHypothesis:
+    explicit_entry = _explicit_entry_level_from_metadata(sample)
+    if explicit_entry is not None:
+        return _with_conflict_check(
+            explicit_entry,
+            direction=direction,
+            frames=frames,
+            anchor=sample.anchor_timestamp,
+            pip_size=pip_size,
+            check_conflict=explicit_entry.entry_level_source != ROUND_LEVEL,
+        )
+
     round_entry = _round_level_entry(sample, frames, symbol=symbol, threshold_pips=threshold_pips)
     if round_entry.entry_price is not None:
         return _with_conflict_check(
@@ -864,6 +927,8 @@ def _base_row(
         "anchor_timestamp": sample.anchor_timestamp.isoformat(),
         "source_mode": sample.source_mode,
         "session": classify_session(sample.anchor_timestamp),
+        "volatility_bucket": sample.metadata.get("volatility_bucket"),
+        "daily_atr_at_anchor": sample.metadata.get("daily_atr_at_anchor"),
         "direction_guess": direction.direction_guess,
         "direction_confidence": direction.direction_confidence,
         "direction_source_timeframe": direction.direction_source_timeframe,
@@ -1404,6 +1469,8 @@ OUTPUT_FIELDS = [
     "anchor_timestamp",
     "source_mode",
     "session",
+    "volatility_bucket",
+    "daily_atr_at_anchor",
     "direction_guess",
     "direction_confidence",
     "direction_source_timeframe",
@@ -1503,6 +1570,16 @@ def _source_counts(rows: Sequence[Mapping[str, Any]], row_type: str | None = Non
     return dict(sorted(out.items()))
 
 
+def _value_distribution(rows: Sequence[Mapping[str, Any]], field: str, row_type: str | None = None) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in rows:
+        if row_type is not None and row.get("row_type") != row_type:
+            continue
+        value = str(row.get(field) or "UNKNOWN")
+        out[value] = out.get(value, 0) + 1
+    return dict(sorted(out.items()))
+
+
 def _outcome_counts_by_source(rows: Sequence[Mapping[str, Any]], row_type: str) -> dict[str, dict[str, int]]:
     out: dict[str, dict[str, int]] = {}
     for row in rows:
@@ -1513,6 +1590,319 @@ def _outcome_counts_by_source(rows: Sequence[Mapping[str, Any]], row_type: str) 
         out.setdefault(source, {})
         out[source][label] = out[source].get(label, 0) + 1
     return {source: dict(sorted(counts.items())) for source, counts in sorted(out.items())}
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _metric_success(row: Mapping[str, Any], metric: str) -> bool:
+    if metric == "fast_reaction":
+        return _truthy(row.get("fast_reaction_100pips_15m"))
+    if metric == "fast_sl20":
+        return row.get("automatic_outcome_label") == FAST_SL_20
+    if metric == "runner":
+        return row.get("automatic_outcome_label") in {RUNNER_CANDIDATE, STRONG_RUNNER} or _truthy(row.get("hit_500_pips"))
+    raise ValueError(f"Unsupported metric: {metric}")
+
+
+def normal_proportion_ci95(successes: int, n: int) -> tuple[float, float]:
+    if n <= 0:
+        return 0.0, 0.0
+    p = successes / n
+    se = math.sqrt(max(p * (1.0 - p), 0.0) / n)
+    lower = max(0.0, p - 1.96 * se)
+    upper = min(1.0, p + 1.96 * se)
+    return round(lower, 6), round(upper, 6)
+
+
+def effect_size_ci95(candidate_rate: float, candidate_n: int, control_rate: float, control_n: int) -> tuple[float, float]:
+    if candidate_n <= 0 or control_n <= 0:
+        return 0.0, 0.0
+    cand_se = math.sqrt(max(candidate_rate * (1.0 - candidate_rate), 0.0) / candidate_n)
+    ctrl_se = math.sqrt(max(control_rate * (1.0 - control_rate), 0.0) / control_n)
+    effect = candidate_rate - control_rate
+    se = math.sqrt(cand_se * cand_se + ctrl_se * ctrl_se)
+    return round(effect - 1.96 * se, 6), round(effect + 1.96 * se, 6)
+
+
+def _effect_excludes_zero(lower: float, upper: float) -> bool:
+    return (lower > 0 and upper > 0) or (lower < 0 and upper < 0)
+
+
+def _robustness_label(*, eligible: bool, effect: float, lower: float, upper: float) -> str:
+    if not eligible:
+        return ROBUST_INELIGIBLE
+    if abs(effect) < 0.01:
+        return ROBUST_FLAT
+    if _effect_excludes_zero(lower, upper):
+        return ROBUST_CI_EXCLUDES_ZERO
+    return ROBUST_CI_INCLUDES_ZERO
+
+
+def build_source_metrics_with_confidence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    present_sources = {
+        str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE)
+        for row in rows
+        if str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) != UNKNOWN_ENTRY_SOURCE
+    }
+    ordered_sources = [source for source in (ROUND_LEVEL, SWEEP_EXTREME, SWEPT_LIQUIDITY_LEVEL) if source in present_sources or source in SOURCE_MINIMUM_SAMPLE_SIZES]
+    out: dict[str, Any] = {}
+    for source in ordered_sources:
+        candidate_rows = [
+            row for row in rows if row.get("row_type") == "CANDIDATE" and str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) == source
+        ]
+        control_rows = [
+            row for row in rows if row.get("row_type") == "CONTROL" and str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) == source
+        ]
+        candidate_n = len(candidate_rows)
+        control_n = len(control_rows)
+        min_n = SOURCE_MINIMUM_SAMPLE_SIZES.get(source)
+        eligible = min_n is not None and candidate_n >= min_n and control_n > 0
+        metrics: dict[str, Any] = {
+            "candidate_n": candidate_n,
+            "control_n": control_n,
+            "required_candidate_min_n": min_n,
+            "eligible_for_pre_registered_verdict": eligible,
+        }
+        for metric in KEY_DECISION_METRICS:
+            cand_successes = sum(1 for row in candidate_rows if _metric_success(row, metric))
+            ctrl_successes = sum(1 for row in control_rows if _metric_success(row, metric))
+            cand_rate = round(cand_successes / candidate_n, 6) if candidate_n else 0.0
+            ctrl_rate = round(ctrl_successes / control_n, 6) if control_n else 0.0
+            cand_lower, cand_upper = normal_proportion_ci95(cand_successes, candidate_n)
+            ctrl_lower, ctrl_upper = normal_proportion_ci95(ctrl_successes, control_n)
+            effect = round(cand_rate - ctrl_rate, 6)
+            effect_lower, effect_upper = effect_size_ci95(cand_rate, candidate_n, ctrl_rate, control_n)
+            excludes_zero = _effect_excludes_zero(effect_lower, effect_upper)
+            metrics.update(
+                {
+                    f"candidate_{metric}_successes": cand_successes,
+                    f"control_{metric}_successes": ctrl_successes,
+                    f"candidate_{metric}_rate": cand_rate,
+                    f"candidate_{metric}_ci95_lower": cand_lower,
+                    f"candidate_{metric}_ci95_upper": cand_upper,
+                    f"control_{metric}_rate": ctrl_rate,
+                    f"control_{metric}_ci95_lower": ctrl_lower,
+                    f"control_{metric}_ci95_upper": ctrl_upper,
+                    f"{metric}_effect_size": effect,
+                    f"{metric}_effect_size_ci95_lower": effect_lower,
+                    f"{metric}_effect_size_ci95_upper": effect_upper,
+                    f"{metric}_effect_size_excludes_zero": excludes_zero,
+                    f"{metric}_robustness_label": _robustness_label(
+                        eligible=eligible,
+                        effect=effect,
+                        lower=effect_lower,
+                        upper=effect_upper,
+                    ),
+                }
+            )
+        out[source] = metrics
+    unknown_candidate_n = sum(
+        1 for row in rows if row.get("row_type") == "CANDIDATE" and str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) == UNKNOWN_ENTRY_SOURCE
+    )
+    if unknown_candidate_n:
+        out[UNKNOWN_ENTRY_SOURCE] = {
+            "candidate_n": unknown_candidate_n,
+            "control_n": sum(
+                1
+                for row in rows
+                if row.get("row_type") == "CONTROL" and str(row.get("entry_level_source") or UNKNOWN_ENTRY_SOURCE) == UNKNOWN_ENTRY_SOURCE
+            ),
+            "required_candidate_min_n": None,
+            "eligible_for_pre_registered_verdict": False,
+            "limitation": "UNKNOWN_ENTRY_SOURCE_EXCLUDED_FROM_PRE_REGISTERED_VERDICT",
+        }
+    return out
+
+
+def _source_metrics_without_confidence(source_metrics: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for source, metrics in source_metrics.items():
+        out[source] = {
+            "candidate_n": metrics.get("candidate_n", 0),
+            "control_n": metrics.get("control_n", 0),
+            "required_candidate_min_n": metrics.get("required_candidate_min_n"),
+            "eligible_for_pre_registered_verdict": metrics.get("eligible_for_pre_registered_verdict", False),
+        }
+        for metric in KEY_DECISION_METRICS:
+            for suffix in ("rate",):
+                out[source][f"candidate_{metric}_{suffix}"] = metrics.get(f"candidate_{metric}_{suffix}", 0.0)
+                out[source][f"control_{metric}_{suffix}"] = metrics.get(f"control_{metric}_{suffix}", 0.0)
+            out[source][f"{metric}_effect_size"] = metrics.get(f"{metric}_effect_size", 0.0)
+    return out
+
+
+def load_pre_registered_criteria(visual_pack_dir: Path | str) -> dict[str, Any]:
+    path = _to_path(visual_pack_dir) / PRE_REGISTERED_CRITERIA_FILE
+    if not path.exists():
+        return {
+            "loaded": False,
+            "source_path": str(path),
+            "verbatim": "",
+            "limitation": "PRE_REGISTERED_CRITERIA_FILE_MISSING",
+        }
+    return {
+        "loaded": True,
+        "source_path": str(path),
+        "verbatim": path.read_text(encoding="utf-8"),
+        "limitation": None,
+    }
+
+
+def apply_pre_registered_decision(source_metrics: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    eligible_sources = [
+        source
+        for source, metrics in source_metrics.items()
+        if source != UNKNOWN_ENTRY_SOURCE and bool(metrics.get("eligible_for_pre_registered_verdict"))
+    ]
+    ineligible_sources = {
+        source: {
+            "candidate_n": metrics.get("candidate_n", 0),
+            "control_n": metrics.get("control_n", 0),
+            "required_candidate_min_n": metrics.get("required_candidate_min_n"),
+            "reason": (
+                "UNKNOWN_SOURCE_EXCLUDED"
+                if source == UNKNOWN_ENTRY_SOURCE
+                else "BELOW_MIN_N_OR_NO_CONTROL_BASELINE"
+            ),
+        }
+        for source, metrics in source_metrics.items()
+        if source == UNKNOWN_ENTRY_SOURCE or not bool(metrics.get("eligible_for_pre_registered_verdict"))
+    }
+
+    for source in (ROUND_LEVEL, SWEEP_EXTREME, SWEPT_LIQUIDITY_LEVEL):
+        if source not in eligible_sources:
+            continue
+        metrics = source_metrics[source]
+        continue_checks = (
+            ("fast_reaction", float(metrics.get("fast_reaction_effect_size", 0.0)), 0.07, ">="),
+            ("runner", float(metrics.get("runner_effect_size", 0.0)), 0.05, ">="),
+            ("fast_sl20", float(metrics.get("fast_sl20_effect_size", 0.0)), -0.10, "<="),
+        )
+        for metric, effect, threshold, operator in continue_checks:
+            fired = effect >= threshold if operator == ">=" else effect <= threshold
+            if fired:
+                lower = metrics.get(f"{metric}_effect_size_ci95_lower")
+                upper = metrics.get(f"{metric}_effect_size_ci95_upper")
+                excludes_zero = bool(metrics.get(f"{metric}_effect_size_excludes_zero", False))
+                if excludes_zero:
+                    robustness_note = (
+                        f"{PRE_REGISTERED_VERDICT_CONTINUE} per pre-registered criteria; "
+                        f"triggering {source} {metric} effect CI95 excludes zero."
+                    )
+                else:
+                    robustness_note = (
+                        f"{PRE_REGISTERED_VERDICT_CONTINUE} per pre-registered criteria, "
+                        "but robustness is weak at current N because the triggering effect CI95 includes zero."
+                    )
+                return {
+                    "pre_registered_verdict": PRE_REGISTERED_VERDICT_CONTINUE,
+                    "verdict_reason": f"{source}_{metric}_effect_{effect:.4f}_meets_{operator}_{threshold:.2f}",
+                    "decision_source": source,
+                    "decision_metric": metric,
+                    "decision_effect_size": effect,
+                    "decision_effect_size_ci95_lower": lower,
+                    "decision_effect_size_ci95_upper": upper,
+                    "decision_effect_size_excludes_zero": excludes_zero,
+                    "decision_robustness_note": robustness_note,
+                    "candidate_n": metrics.get("candidate_n", 0),
+                    "control_n": metrics.get("control_n", 0),
+                    "eligible_sources": eligible_sources,
+                    "ineligible_sources": ineligible_sources,
+                }
+
+    if eligible_sources:
+        stop_fires = all(
+            abs(float(source_metrics[source].get("fast_reaction_effect_size", 0.0))) <= 0.03
+            and float(source_metrics[source].get("fast_sl20_effect_size", 0.0)) >= -0.03
+            and float(source_metrics[source].get("runner_effect_size", 0.0)) <= 0.02
+            for source in eligible_sources
+        )
+        if stop_fires:
+            return {
+                "pre_registered_verdict": PRE_REGISTERED_VERDICT_STOP,
+                "verdict_reason": "ALL_ELIGIBLE_SOURCES_FLAT_OR_WORSE_BY_PRE_REGISTERED_STOP_RULE",
+                "decision_source": "ALL_ELIGIBLE_SOURCES",
+                "decision_metric": "COMPOSITE_STOP_RULE",
+                "decision_effect_size": None,
+                "decision_effect_size_ci95_lower": None,
+                "decision_effect_size_ci95_upper": None,
+                "decision_effect_size_excludes_zero": None,
+                "decision_robustness_note": "STOP_ARCHIVE_DETECTOR fired by locked descriptive criteria; CI95 metadata does not alter this verdict.",
+                "candidate_n": sum(int(source_metrics[source].get("candidate_n", 0)) for source in eligible_sources),
+                "control_n": sum(int(source_metrics[source].get("control_n", 0)) for source in eligible_sources),
+                "eligible_sources": eligible_sources,
+                "ineligible_sources": ineligible_sources,
+            }
+    else:
+        visible_effect = None
+        for source, metrics in source_metrics.items():
+            if source == UNKNOWN_ENTRY_SOURCE:
+                continue
+            for metric in KEY_DECISION_METRICS:
+                effect = float(metrics.get(f"{metric}_effect_size", 0.0))
+                if abs(effect) >= 0.05:
+                    visible_effect = (source, metric, effect)
+                    break
+            if visible_effect:
+                break
+        if visible_effect:
+            source, metric, effect = visible_effect
+            metrics = source_metrics[source]
+            return {
+                "pre_registered_verdict": PRE_REGISTERED_VERDICT_REPEAT,
+                "verdict_reason": "VISIBLE_EFFECT_WITHOUT_ANY_SOURCE_MEETING_MIN_N",
+                "decision_source": source,
+                "decision_metric": metric,
+                "decision_effect_size": effect,
+                "decision_effect_size_ci95_lower": metrics.get(f"{metric}_effect_size_ci95_lower"),
+                "decision_effect_size_ci95_upper": metrics.get(f"{metric}_effect_size_ci95_upper"),
+                "decision_effect_size_excludes_zero": metrics.get(f"{metric}_effect_size_excludes_zero"),
+                "decision_robustness_note": "REPEAT_EXPANSION_ONCE fired by locked underpowered-source criterion; CI95 metadata does not alter this verdict.",
+                "candidate_n": metrics.get("candidate_n", 0),
+                "control_n": metrics.get("control_n", 0),
+                "eligible_sources": eligible_sources,
+                "ineligible_sources": ineligible_sources,
+            }
+
+    return {
+        "pre_registered_verdict": PRE_REGISTERED_VERDICT_INCONCLUSIVE,
+        "verdict_reason": "NO_PRE_REGISTERED_RULE_FIRED",
+        "decision_source": None,
+        "decision_metric": None,
+        "decision_effect_size": None,
+        "decision_effect_size_ci95_lower": None,
+        "decision_effect_size_ci95_upper": None,
+        "decision_effect_size_excludes_zero": None,
+        "decision_robustness_note": "INCONCLUSIVE by locked criteria; pause Adelin v2 and do not iterate ad hoc.",
+        "candidate_n": sum(int(metrics.get("candidate_n", 0)) for metrics in source_metrics.values()),
+        "control_n": sum(int(metrics.get("control_n", 0)) for metrics in source_metrics.values()),
+        "eligible_sources": eligible_sources,
+        "ineligible_sources": ineligible_sources,
+    }
+
+
+def _read_visual_pack_summary(visual_pack_dir: Path | str) -> dict[str, Any]:
+    path = _to_path(visual_pack_dir) / "review_pack_summary.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"limitation": "VISUAL_PACK_SUMMARY_JSON_INVALID"}
+
+
+def _recommended_next_action(verdict: str) -> str:
+    if verdict == PRE_REGISTERED_VERDICT_CONTINUE:
+        return "Proceed to detector refinement, still research-only and no live deployment."
+    if verdict == PRE_REGISTERED_VERDICT_STOP:
+        return "Pause/archive the Adelin v2 detector."
+    if verdict == PRE_REGISTERED_VERDICT_REPEAT:
+        return "Run one final 500-sample expansion only, then stop ad-hoc iteration."
+    return "Pause Adelin v2; do not keep iterating without a new pre-registered plan."
 
 
 def _comparison_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
@@ -1618,9 +2008,25 @@ def build_summary(
         row.get("entry_level_source") == SWEEP_EXTREME and row.get("row_type") == "CONTROL" for row in rows
     ):
         summary_limitations.append("CONTROL_SWEEP_EXTREME_ROWS_0_BASELINE_UNAVAILABLE")
+    criteria = load_pre_registered_criteria(cfg.visual_pack_dir)
+    if criteria.get("limitation"):
+        summary_limitations.append(str(criteria["limitation"]))
+    visual_pack_summary = _read_visual_pack_summary(cfg.visual_pack_dir)
+    for item in visual_pack_summary.get("limitations", []):
+        summary_limitations.append(f"VISUAL_PACK_{item}")
+    date_range_coverage = visual_pack_summary.get("date_range_coverage", {})
+    if date_range_coverage and not date_range_coverage.get("meets_min_date_range_days", True):
+        summary_limitations.append("VISUAL_PACK_DATE_RANGE_BELOW_REQUESTED_MINIMUM")
+    source_metrics_with_confidence = build_source_metrics_with_confidence(rows)
+    source_metrics = _source_metrics_without_confidence(source_metrics_with_confidence)
+    decision = apply_pre_registered_decision(source_metrics_with_confidence)
+    finished = _utc_now()
+    runtime_seconds = round((finished - started).total_seconds(), 3)
+    entry_source_session_metrics = _entry_source_session_metrics(rows)
     return {
         "run_started_at": started.isoformat(),
-        "run_finished_at": _utc_now().isoformat(),
+        "run_finished_at": finished.isoformat(),
+        "runtime_seconds": runtime_seconds,
         "symbol": cfg.symbol,
         "visual_pack_dir": str(cfg.visual_pack_dir),
         "output_dir": str(cfg.output_dir),
@@ -1633,9 +2039,11 @@ def build_summary(
         "reaction_slow_minutes": cfg.reaction_slow_minutes,
         "total_candidate_samples_loaded": candidate_loaded,
         "candidate_samples_replayed": candidate_replayed,
+        "candidate_count": candidate_replayed,
         "control_random_requested": control_requested,
         "control_samples_generated": control_generated,
         "control_samples_replayed": control_replayed,
+        "control_count": control_replayed,
         "rows_written": len(rows),
         "candidate_known_entry_count": candidate_known_count,
         "control_known_entry_count": control_known_count,
@@ -1644,10 +2052,15 @@ def build_summary(
         "candidate_unknown_entry_level_rate": round(candidate_unknown_entry_count / candidate_replayed, 4) if candidate_replayed else 0.0,
         "control_unknown_entry_level_rate": round(control_unknown_entry_count / control_replayed, 4) if control_replayed else 0.0,
         "entry_level_source_counts": _source_counts(rows),
+        "candidate_source_counts": _source_counts(rows, "CANDIDATE"),
+        "control_source_counts": _source_counts(rows, "CONTROL"),
         "candidate_entry_level_source_counts": _source_counts(rows, "CANDIDATE"),
         "control_entry_level_source_counts": _source_counts(rows, "CONTROL"),
         "candidate_session_distribution": _session_distribution([row for row in rows if row.get("row_type") == "CANDIDATE"]),
         "control_session_distribution": _session_distribution([row for row in rows if row.get("row_type") == "CONTROL"]),
+        "candidate_volatility_bucket_distribution": _value_distribution(rows, "volatility_bucket", "CANDIDATE"),
+        "control_volatility_bucket_distribution": _value_distribution(rows, "volatility_bucket", "CONTROL"),
+        "visual_pack_date_range_coverage": date_range_coverage,
         "control_generation_attempts_by_source": dict(control_generation_stats.get("attempts_by_source", {})),
         "control_generation_success_by_source": dict(control_generation_stats.get("success_by_source", {})),
         "control_generation_attempts_by_source_and_session": dict(control_generation_stats.get("attempts_by_source_and_session", {})),
@@ -1670,7 +2083,27 @@ def build_summary(
         "candidate_vs_control_round_level": _comparison_metrics(round_level_rows),
         "candidate_vs_control_sweep_extreme": _comparison_metrics(sweep_extreme_rows),
         "entry_source_matched_metrics": _entry_source_metrics(rows),
-        "entry_source_and_session_matched_metrics": _entry_source_session_metrics(rows),
+        "entry_source_and_session_matched_metrics": entry_source_session_metrics,
+        "source_session_matched_metrics": entry_source_session_metrics,
+        "source_metrics": source_metrics,
+        "source_metrics_with_confidence": source_metrics_with_confidence,
+        "pre_registered_criteria_loaded": bool(criteria.get("loaded")),
+        "pre_registered_criteria_source_path": criteria.get("source_path"),
+        "pre_registered_criteria": criteria.get("verbatim", ""),
+        "pre_registered_verdict": decision["pre_registered_verdict"],
+        "verdict_reason": decision["verdict_reason"],
+        "decision_source": decision["decision_source"],
+        "decision_metric": decision["decision_metric"],
+        "decision_effect_size": decision["decision_effect_size"],
+        "decision_effect_size_ci95_lower": decision["decision_effect_size_ci95_lower"],
+        "decision_effect_size_ci95_upper": decision["decision_effect_size_ci95_upper"],
+        "decision_effect_size_excludes_zero": decision["decision_effect_size_excludes_zero"],
+        "decision_robustness_note": decision["decision_robustness_note"],
+        "candidate_n": decision["candidate_n"],
+        "control_n": decision["control_n"],
+        "eligible_sources": decision["eligible_sources"],
+        "ineligible_sources": decision["ineligible_sources"],
+        "recommended_next_action": _recommended_next_action(decision["pre_registered_verdict"]),
         "limitations": sorted(set(summary_limitations)),
         "safety": {
             "live_trading_enabled": False,
@@ -1708,8 +2141,26 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         "",
         "Forward windows above 4h may overstate runner quality on XAUUSD.",
         "",
+        "CI95 robustness metadata annotates noise and directionality only. It does not change the locked pre-registered verdict.",
+        "",
         "Entry-source/session-matched controls improve baseline quality but are still descriptive and not validation.",
         "Candidate sample size remains small; do not interpret as statistically significant. Report effect sizes only.",
+        "",
+        "## Pre-Registered Verdict",
+        "",
+        f"- criteria loaded: `{summary['pre_registered_criteria_loaded']}`",
+        f"- criteria source: `{summary['pre_registered_criteria_source_path']}`",
+        f"- verdict: `{summary['pre_registered_verdict']}`",
+        f"- verdict reason: `{summary['verdict_reason']}`",
+        f"- decision source: `{summary['decision_source']}`",
+        f"- decision metric: `{summary['decision_metric']}`",
+        f"- decision effect size: `{summary['decision_effect_size']}`",
+        f"- decision effect CI95: `{summary['decision_effect_size_ci95_lower']}` to `{summary['decision_effect_size_ci95_upper']}`",
+        f"- triggering effect CI95 excludes zero: `{summary['decision_effect_size_excludes_zero']}`",
+        f"- robustness note: {summary['decision_robustness_note']}",
+        f"- recommended next action: {summary['recommended_next_action']}",
+        "",
+        "The decision criteria were loaded from the expanded pack and are not changed by this replay branch.",
         "",
         "## Counts",
         "",
@@ -1742,6 +2193,16 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         "### Control",
         "",
         *[f"- `{session}`: `{count}`" for session, count in summary["control_session_distribution"].items()],
+        "",
+        "## Volatility Bucket Distribution",
+        "",
+        "### Candidate",
+        "",
+        *[f"- `{bucket}`: `{count}`" for bucket, count in summary["candidate_volatility_bucket_distribution"].items()],
+        "",
+        "### Control",
+        "",
+        *[f"- `{bucket}`: `{count}`" for bucket, count in summary["control_volatility_bucket_distribution"].items()],
         "",
         "## Control Generation",
         "",
@@ -1781,6 +2242,13 @@ def _write_markdown(summary: Mapping[str, Any], output_dir: Path) -> None:
         *[
             f"- `{source}`: {json.dumps(metrics, sort_keys=True)}"
             for source, metrics in summary["entry_source_matched_metrics"].items()
+        ],
+        "",
+        "## Source Metrics With CI95",
+        "",
+        *[
+            f"- `{source}`: {json.dumps(metrics, sort_keys=True)}"
+            for source, metrics in summary["source_metrics_with_confidence"].items()
         ],
         "",
         "## Entry Source And Session Matched Metrics",
@@ -1853,6 +2321,22 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
   <h1>Adelin v2 Objective Outcome Replay</h1>
   <p class="warning">Diagnostic baseline comparison only. Not validation, not signals, not live trading.</p>
   <p><strong>Entry-source/session-matched controls improve baseline quality but remain descriptive and not validation. Candidate sample sizes are small; report effect sizes only.</strong></p>
+  <p><strong>CI95 robustness metadata annotates the locked verdict only; it does not change the pre-registered decision.</strong></p>
+  <h2>Pre-Registered Verdict</h2>
+  <table>
+    <tr><th>field</th><th>value</th></tr>
+    <tr><td>criteria loaded</td><td>{html.escape(str(summary["pre_registered_criteria_loaded"]))}</td></tr>
+    <tr><td>criteria source</td><td>{html.escape(str(summary["pre_registered_criteria_source_path"]))}</td></tr>
+    <tr><td>verdict</td><td>{html.escape(str(summary["pre_registered_verdict"]))}</td></tr>
+    <tr><td>reason</td><td>{html.escape(str(summary["verdict_reason"]))}</td></tr>
+    <tr><td>decision source</td><td>{html.escape(str(summary["decision_source"]))}</td></tr>
+    <tr><td>decision metric</td><td>{html.escape(str(summary["decision_metric"]))}</td></tr>
+    <tr><td>decision effect</td><td>{html.escape(str(summary["decision_effect_size"]))}</td></tr>
+    <tr><td>effect CI95</td><td>{html.escape(str(summary["decision_effect_size_ci95_lower"]))} to {html.escape(str(summary["decision_effect_size_ci95_upper"]))}</td></tr>
+    <tr><td>effect CI95 excludes zero</td><td>{html.escape(str(summary["decision_effect_size_excludes_zero"]))}</td></tr>
+    <tr><td>robustness note</td><td>{html.escape(str(summary["decision_robustness_note"]))}</td></tr>
+    <tr><td>recommended next action</td><td>{html.escape(str(summary["recommended_next_action"]))}</td></tr>
+  </table>
   <h2>Entry Level Source Counts</h2>
   <h3>Candidate</h3>
   {label_table(summary["candidate_entry_level_source_counts"])}
@@ -1863,6 +2347,11 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
   {label_table(summary["candidate_session_distribution"])}
   <h3>Control</h3>
   {label_table(summary["control_session_distribution"])}
+  <h2>Volatility Bucket Distribution</h2>
+  <h3>Candidate</h3>
+  {label_table(summary["candidate_volatility_bucket_distribution"])}
+  <h3>Control</h3>
+  {label_table(summary["control_volatility_bucket_distribution"])}
   <h2>Control Generation</h2>
   {label_table(summary["control_generation_success_by_source_and_session"])}
   <h2>Candidate Outcome Counts</h2>
@@ -1875,6 +2364,8 @@ def _write_html(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], o
   {label_table(summary["candidate_vs_control_known_entry"])}
   <h2>Entry Source Matched Metrics</h2>
   <pre>{html.escape(json.dumps(summary["entry_source_matched_metrics"], indent=2, sort_keys=True))}</pre>
+  <h2>Source Metrics With CI95</h2>
+  <pre>{html.escape(json.dumps(summary["source_metrics_with_confidence"], indent=2, sort_keys=True))}</pre>
   <h2>Entry Source And Session Matched Metrics</h2>
   <pre>{html.escape(json.dumps(summary["entry_source_and_session_matched_metrics"], indent=2, sort_keys=True))}</pre>
   <h2>Rows</h2>
@@ -2037,6 +2528,10 @@ __all__ = [
     "NO_REACTION",
     "ControlGenerationResult",
     "ObjectiveReplayConfig",
+    "PRE_REGISTERED_VERDICT_CONTINUE",
+    "PRE_REGISTERED_VERDICT_INCONCLUSIVE",
+    "PRE_REGISTERED_VERDICT_REPEAT",
+    "PRE_REGISTERED_VERDICT_STOP",
     "ROUND_LEVEL",
     "ROUND_LEVEL_TOUCH_ENTRY",
     "SWEEP_EXTREME",
@@ -2044,11 +2539,16 @@ __all__ = [
     "UNKNOWN_DIRECTION",
     "UNKNOWN_ENTRY_LEVEL",
     "UNKNOWN_INSUFFICIENT_FORWARD_DATA",
+    "apply_pre_registered_decision",
     "build_entry_hypothesis",
     "build_round_level_entry",
+    "build_source_metrics_with_confidence",
     "detect_pre_anchor_sweep_control",
+    "effect_size_ci95",
     "generate_control_samples",
     "infer_reversal_direction",
+    "load_pre_registered_criteria",
+    "normal_proportion_ci95",
     "replay_forward_path",
     "resolve_pip_size",
     "run_objective_replay",

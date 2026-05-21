@@ -156,6 +156,37 @@ Files:
 - `index.html`
 - `enriched_manual_labels_template.csv`
 
+For the expanded 300-sample pack, use:
+
+```bash
+python scripts/analyze_adelin_v2_objective_outcome_replay.py --symbol XAUUSD --data-dir data --visual-pack-dir backtests/reports/adelin_v2_expanded_candidate_window_pack --output-dir backtests/reports/adelin_v2_expanded_objective_outcome_replay --forward-hours 4 --direction-lookback-minutes 30 --reaction-fast-minutes 15 --reaction-slow-minutes 30 --include-control-random 800 --control-match-entry-source --control-match-session --control-random-seed 42 --sweep-control-lookback-minutes 60 --sweep-control-min-anchor-delay-minutes 5 --dry-run
+```
+
+The expanded replay loads the pre-registered criteria from `backtests/reports/adelin_v2_expanded_candidate_window_pack/decision_criteria.md`. Those thresholds are locked before replay and must not be changed after seeing results.
+
+## Pre-Registered Verdict
+
+The expanded replay writes `pre_registered_verdict` using only the locked criteria:
+
+- `CONTINUE_DETECTOR_REFINEMENT`
+- `STOP_ARCHIVE_DETECTOR`
+- `REPEAT_EXPANSION_ONCE`
+- `INCONCLUSIVE`
+
+Eligible sources must meet the registered minimum candidate N and have controls:
+
+- `SWEEP_EXTREME`: N >= 80
+- `ROUND_LEVEL`: N >= 50
+- `SWEPT_LIQUIDITY_LEVEL`: N >= 50
+
+The verdict is deterministic. CI95 metadata, manual interpretation, and visual impressions do not move the decision thresholds.
+
+## CI95 Metadata
+
+Expanded replay reports CI95 robustness metadata for `fast_reaction`, `fast_sl20`, and `runner` by entry source. It includes candidate/control proportion intervals, candidate-control effect-size intervals, and a robustness label.
+
+This CI95 layer is metadata only. It may say a triggering effect is directional but noisy at current N, but it does not change `pre_registered_verdict`.
+
 ## Interpretation
 
 Candidate windows remain candidate windows, not signals. The control group is only a baseline diagnostic. This branch does not validate profitability, deployability, or live readiness.
