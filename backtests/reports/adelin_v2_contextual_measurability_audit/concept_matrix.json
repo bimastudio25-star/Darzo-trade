@@ -1,0 +1,699 @@
+{
+  "audit_type": "ADELIN_V2_CONTEXTUAL_MEASURABILITY_AUDIT",
+  "verdict_flags": [
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION",
+    "NO_BACKTEST_RUN",
+    "NO_RUNTIME_LOGIC_CHANGE",
+    "CONTINUATION_POSITIVE_FEATURE_BANNED",
+    "CONTEXTUAL_MEASURABILITY_AUDIT_COMPLETE"
+  ],
+  "category_summary": {
+    "DISCRETIONARY_ONLY": 0,
+    "HEURISTIC_ONLY": 14,
+    "MEASURABLE_NOW": 10,
+    "MEASURABLE_WITH_NEW_DATA": 2,
+    "NOT_RELIABLY_MEASURABLE": 3
+  },
+  "concept_count": 29,
+  "concepts": [
+    {
+      "concept_name": "HTF liquidity",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor D1/H4/H1 swing highs/lows with age and untouched-state rules.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "D1",
+        "H4",
+        "H1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Swing definitions can overfit; liquidity relevance depends on range structure and discretionary importance.",
+      "possible_metric_formula": "aged_swing_level_exists and not pre_anchor_taken",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Pre-register swing rules, then test with temporal split and OOS replay.",
+      "notes": "Measurable only as a proxy; human liquidity importance is richer than a swing rule."
+    },
+    {
+      "concept_name": "LTF liquidity",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor M15/M5/M1 local swing points and recent range extremes.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M15",
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Short lookbacks create noisy micro-swings; same event can be counted repeatedly.",
+      "possible_metric_formula": "local_swing_count_near_anchor / recent_range_width",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Pre-register lookback and spacing; compare against matched controls.",
+      "notes": "Useful for context, but not sufficient as a standalone Adelin feature."
+    },
+    {
+      "concept_name": "internal liquidity",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Swing point inside a higher-timeframe range whose outer high/low remains untaken before anchor.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "H4",
+        "H1",
+        "M15"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "range state"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Range boundaries are subjective; naive definitions can leak if future range completion is used.",
+      "possible_metric_formula": "swing_inside_pre_anchor_range and range_extremes_not_taken",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Freeze range construction rules before any outcome replay.",
+      "notes": "Must use only already formed ranges, never future range boundaries."
+    },
+    {
+      "concept_name": "external liquidity",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Swing point outside the recent pre-anchor range using a fixed lookback window.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "H1",
+        "M15",
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "range state"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "External classification changes with lookback; shallow external levels can be low quality.",
+      "possible_metric_formula": "swing_high > max(previous_n_highs) or swing_low < min(previous_n_lows)",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Test only after fixed lookback and depth gates are registered.",
+      "notes": "Should be a context feature, not an entry trigger by itself."
+    },
+    {
+      "concept_name": "H1 liquidity sweep",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "An H1 swing high/low is taken by pre-anchor candles and closes back inside or stalls beyond it.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "H1",
+        "M15",
+        "M5"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Close-back and stall definitions can be tuned; wick-only sweeps can be over-counted.",
+      "possible_metric_formula": "sweep_distance_pips and close_back_flag before anchor",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Temporal split with source/session matched controls.",
+      "notes": "Measurable now, but old simple sweep evidence is not sufficient for deployability."
+    },
+    {
+      "concept_name": "M15 sequence validity",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Ordered pre-anchor M15 structure: approach, sweep, displacement or stall.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M15",
+        "M5"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Sequence grammar can become discretionary or tuned to outcomes.",
+      "possible_metric_formula": "ordered_event_flags = approach_then_sweep_then_reaction_zone_touch",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use locked grammar and visual spot-checking before replay.",
+      "notes": "Requires strict anti-leakage because post-entry reaction is tempting to include."
+    },
+    {
+      "concept_name": "FVG",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Three-candle imbalance with gap between candle 1 and candle 3 on a fixed timeframe.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M15"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Mitigation rules and gap-size thresholds can be overfit.",
+      "possible_metric_formula": "bullish: low_c3 > high_c1; bearish: high_c3 < low_c1; gap_size_pips >= threshold",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Pre-register timeframe, min gap, mitigation state, and replay split.",
+      "notes": "Deterministic if timeframe and mitigation rules are locked."
+    },
+    {
+      "concept_name": "IFVG",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Previously formed FVG that is mitigated pre-anchor and retested from the opposite side pre-anchor.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M15"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Retest quality can become subjective; anchor-candle-only retests are leakage-prone.",
+      "possible_metric_formula": "fvg_exists and mitigated_before_anchor and last_completed_candle_touches_zone",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use completed pre-anchor candles only; run OOS replay after fixed definition.",
+      "notes": "Measurable, but stricter than generic FVG and easy to mislabel if anchor candle is used."
+    },
+    {
+      "concept_name": "volume profile",
+      "category": "MEASURABLE_WITH_NEW_DATA",
+      "deterministic_definition_candidate": "Rolling pre-anchor volume-at-price profile with HVN/LVN bins.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "tick volume",
+        "volume-at-price bins or approximated candle volume"
+      ],
+      "requires_tick_data": true,
+      "requires_real_volume": true,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Broker tick volume may not represent real volume; bin size and lookback change labels.",
+      "possible_metric_formula": "rolling_24h_volume_by_price_bin with HVN/LVN quantiles",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Validate with fixed binning and broker-data sensitivity checks.",
+      "notes": "Needs better volume data before it should carry much weight."
+    },
+    {
+      "concept_name": "volume cracks",
+      "category": "MEASURABLE_WITH_NEW_DATA",
+      "deterministic_definition_candidate": "Pre-anchor candle with exceptional volume and body dominance breaking through a level.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "tick or real volume"
+      ],
+      "requires_tick_data": true,
+      "requires_real_volume": true,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Volume source quality varies; large candles during news may distort interpretation.",
+      "possible_metric_formula": "volume >= 2.5 * rolling_volume_avg and body / range >= 0.70",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Register volume source and compare against news/session buckets.",
+      "notes": "Potentially measurable, but only after volume data quality is audited."
+    },
+    {
+      "concept_name": "number theory",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Distance from swept or reaction level to round-number prices ending in 0.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M1",
+        "M5",
+        "M15",
+        "H1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "price levels"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "Can be over-weighted despite being only confluence; too many nearby levels reduce selectivity.",
+      "possible_metric_formula": "abs(level - nearest_round_ending_0) / pip_size <= threshold",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Test only as pre-registered confluence, not as standalone signal.",
+      "notes": "Measurable now, but must never be treated as sufficient by itself."
+    },
+    {
+      "concept_name": "round levels",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Static price grid where significant digits end in zero, measured by distance to candidate level.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M1",
+        "M5",
+        "M15",
+        "H1"
+      ],
+      "required_data": [
+        "price levels"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "Threshold choice can inflate matches; grid alone has no edge evidence.",
+      "possible_metric_formula": "nearest_round_level and distance_pips",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use source-matched controls around the same grid.",
+      "notes": "Round levels are context only, not entry evidence."
+    },
+    {
+      "concept_name": "reaction zones",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor confluence zone from FVG, IFVG, volume crack, profile, or old rejection definitions.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M15",
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "optional volume",
+        "optional volume profile"
+      ],
+      "requires_tick_data": true,
+      "requires_real_volume": true,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Zone boundaries and age rules can become discretionary; overlap logic can be tuned.",
+      "possible_metric_formula": "union_of_registered_zone_types within max_distance_pips of swept_level",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Validate each zone subtype separately before using composite labels.",
+      "notes": "The concept is central to Adelin, but only proxy-zone definitions are objectively measurable."
+    },
+    {
+      "concept_name": "rejection quality",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-entry wick/body and close-location behavior at a level before anchor.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Humans judge rejection with context; wick ratios alone misread news and spread artifacts.",
+      "possible_metric_formula": "wick_ratio, close_location_value, rejection_candle_range_pips",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use locked candle morphology features plus manual review calibration.",
+      "notes": "Potential feature, but previous rejection subset was not robust OOS."
+    },
+    {
+      "concept_name": "reclaim quality",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor close back above/below swept level after taking liquidity.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Waiting for reclaim can change the intended early-entry idea; late reclaim may be post-entry confirmation.",
+      "possible_metric_formula": "close_back_distance_pips and candles_since_sweep",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Register whether reclaim is context-only or a separate late-entry hypothesis.",
+      "notes": "Useful for risk tagging, but may conflict with Adelin's no-full-confirmation entry concept."
+    },
+    {
+      "concept_name": "accumulation before expansion",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor narrow range around a level for a fixed number of candles before directional expansion.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "HIGH",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Expansion is often known only after anchor; pre-entry accumulation definitions can leak.",
+      "possible_metric_formula": "pre_anchor_range_pips <= threshold over n candles",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Separate pre-anchor compression from post-anchor expansion outcome.",
+      "notes": "Only the accumulation part is pre-entry; expansion must be measured later."
+    },
+    {
+      "concept_name": "immediate expansion",
+      "category": "NOT_RELIABLY_MEASURABLE",
+      "deterministic_definition_candidate": "Post-entry movement speed after anchor, measured as an outcome rather than a pre-entry feature.",
+      "pre_entry_available": false,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "HIGH",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "Using this before entry would be direct leakage; it is valid only as replay outcome.",
+      "possible_metric_formula": "mfe_pips_within_5_15_30_minutes",
+      "minimum_sample_size_for_future_test": 100,
+      "future_validation_method": "Measure only in forward replay after pre-registered entry hypothesis.",
+      "notes": "Outcome metric, not a valid pre-entry feature."
+    },
+    {
+      "concept_name": "runner expansion",
+      "category": "NOT_RELIABLY_MEASURABLE",
+      "deterministic_definition_candidate": "Large favorable movement after entry, treated only as replay outcome.",
+      "pre_entry_available": false,
+      "required_timeframes": [
+        "M5",
+        "M1",
+        "H1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "HIGH",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "Cannot be known pre-entry; long windows can overstate quality on XAUUSD.",
+      "possible_metric_formula": "max_favorable_pips within fixed forward window",
+      "minimum_sample_size_for_future_test": 100,
+      "future_validation_method": "Measure with capped forward replay and matched controls.",
+      "notes": "Never use as an entry filter."
+    },
+    {
+      "concept_name": "wick/body behavior",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Pre-anchor candle morphology: wick ratios, body ratio, close location, and range.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Morphology ignores context and spread; thresholds can be tuned.",
+      "possible_metric_formula": "body/range, upper_wick/range, lower_wick/range, close_location_value",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use fixed feature bins and OOS profile comparison.",
+      "notes": "Measurable, but should be contextual metadata rather than standalone signal."
+    },
+    {
+      "concept_name": "displacement",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Large pre-anchor candle or sequence with body and range above rolling baseline.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Large news candles can look like displacement; baseline choice matters.",
+      "possible_metric_formula": "range_pips / rolling_median_range and body_ratio",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Temporal split by session and volatility regime.",
+      "notes": "Measurable now as a candle feature."
+    },
+    {
+      "concept_name": "compression before expansion",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor decline in range/ATR before a candidate level interaction.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M15",
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Expansion half of the phrase is post-anchor; compression thresholds are regime-sensitive.",
+      "possible_metric_formula": "rolling_range_percentile <= threshold before anchor",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use only pre-anchor compression; test outcomes separately.",
+      "notes": "Useful as regime/context metadata, not proof of setup quality."
+    },
+    {
+      "concept_name": "time-of-day context",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Anchor timestamp bucketed by UTC/local hour.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "timestamp"
+      ],
+      "required_data": [
+        "timestamps"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "DST/session calendar mistakes can misbucket events.",
+      "possible_metric_formula": "hour_bucket(anchor_timestamp_utc)",
+      "minimum_sample_size_for_future_test": 100,
+      "future_validation_method": "Compare metrics by fixed hour buckets.",
+      "notes": "Measurable now and safe as metadata."
+    },
+    {
+      "concept_name": "session context",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Anchor timestamp mapped to Asia, London, New York, opens, or other.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "timestamp"
+      ],
+      "required_data": [
+        "timestamps",
+        "session calendar"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "DST and broker-time conversion mistakes can create false session effects.",
+      "possible_metric_formula": "session_bucket(anchor_timestamp_utc)",
+      "minimum_sample_size_for_future_test": 100,
+      "future_validation_method": "Use session-matched controls.",
+      "notes": "Measurable now and required for fair baseline comparison."
+    },
+    {
+      "concept_name": "multi-timeframe alignment",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Distance and directional agreement among pre-anchor HTF and LTF levels.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "D1",
+        "H4",
+        "H1",
+        "M15",
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "derived swing levels"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Alignment can be made too broad; level source mismatch can create false positives.",
+      "possible_metric_formula": "min_distance_between_htf_ltf_levels_pips <= threshold and direction_agrees",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Pre-register source hierarchy and distance thresholds.",
+      "notes": "Composite alignment is promising only if all sub-definitions are locked first."
+    },
+    {
+      "concept_name": "candle close quality",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor close location relative to swept level, zone edge, and candle range.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Close quality is often judged visually; late confirmation may conflict with early entry.",
+      "possible_metric_formula": "close_location_value and close_relative_to_level_pips",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Lock whether close quality is context-only or an entry gate.",
+      "notes": "Measurable as proxy, but subjective as a discretionary phrase."
+    },
+    {
+      "concept_name": "continuation behavior",
+      "category": "NOT_RELIABLY_MEASURABLE",
+      "deterministic_definition_candidate": "Continuation patterns after old Adelin signals are tracked only as risk/negative context.",
+      "pre_entry_available": false,
+      "required_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "old signal exports if audited"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "HIGH",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Old continuation behavior was toxic; positive use invites selection bias and strategy drift.",
+      "possible_metric_formula": "negative_risk_flag_only; no positive feature score",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "If studied, test as a banned/blocked risk label, never as positive feature.",
+      "notes": "BANNED_AS_POSITIVE_FEATURE; may only be reframed as risk or no-trade context."
+    },
+    {
+      "concept_name": "failed continuation",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor failed attempt to continue toward target after liquidity was taken.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "M15",
+        "M5",
+        "M1"
+      ],
+      "required_data": [
+        "OHLC candles",
+        "derived liquidity targets"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "HIGH",
+      "expected_failure_modes": "Failure is hard to know before the move has played out; target definition can leak.",
+      "possible_metric_formula": "attempted_target_move_then_rejection_before_anchor",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Use only completed pre-anchor failure structure and matched controls.",
+      "notes": "Can be a reversal-risk context, not evidence for generic continuation."
+    },
+    {
+      "concept_name": "volatility regime",
+      "category": "MEASURABLE_NOW",
+      "deterministic_definition_candidate": "Pre-anchor ATR/range percentile bucket using only completed candles.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "D1",
+        "H1",
+        "M15"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "LOW",
+      "subjectivity_risk": "LOW",
+      "expected_failure_modes": "Small samples can collapse in one regime; ATR lookback must be fixed.",
+      "possible_metric_formula": "pre_anchor_atr_percentile_bucket",
+      "minimum_sample_size_for_future_test": 100,
+      "future_validation_method": "Require no single regime bucket collapse in OOS validation.",
+      "notes": "Measurable now and important for stratification."
+    },
+    {
+      "concept_name": "trend/range regime",
+      "category": "HEURISTIC_ONLY",
+      "deterministic_definition_candidate": "Pre-anchor directional slope and range compression/expansion state.",
+      "pre_entry_available": true,
+      "required_timeframes": [
+        "H4",
+        "H1",
+        "M15"
+      ],
+      "required_data": [
+        "OHLC candles"
+      ],
+      "requires_tick_data": false,
+      "requires_real_volume": false,
+      "leakage_risk": "MEDIUM",
+      "subjectivity_risk": "MEDIUM",
+      "expected_failure_modes": "Trend/range definitions vary and can overfit; regime labels can lag.",
+      "possible_metric_formula": "adx_proxy, ma_slope, range_width_percentile",
+      "minimum_sample_size_for_future_test": 300,
+      "future_validation_method": "Freeze regime definition and report performance by regime bucket.",
+      "notes": "Measurable as a proxy, but not a discretionary truth label."
+    }
+  ],
+  "safety": {
+    "live_trading_enabled": false,
+    "telegram_trade_alerts_enabled": false,
+    "broker_execution_enabled": false,
+    "order_execution_enabled": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "adelin_runtime_logic_modified": false,
+    "backtest_run": false,
+    "data_modified": false
+  }
+}
