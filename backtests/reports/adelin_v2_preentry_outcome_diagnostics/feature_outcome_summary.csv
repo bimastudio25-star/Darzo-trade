@@ -1,0 +1,9 @@
+feature,present_count,present_good_count,present_bad_count,absent_count,absent_good_count,absent_bad_count,note
+clean_target_space_proxy,20,5,15,20,0,20,Descriptive only; no edge claim and no matched controls in this branch.
+compression_overlap_proxy,5,0,5,35,5,30,Descriptive only; no edge claim and no matched controls in this branch.
+fvg_ifvg_near_20p,29,0,29,11,5,6,Descriptive only; no edge claim and no matched controls in this branch.
+high_volatility_context,4,0,4,36,5,31,Descriptive only; no edge claim and no matched controls in this branch.
+m5_displacement_proxy,2,1,1,38,4,34,Descriptive only; no edge claim and no matched controls in this branch.
+numeric_level_confluence_20p,19,1,18,21,4,17,Descriptive only; no edge claim and no matched controls in this branch.
+premium_session_open,4,0,4,36,5,31,Descriptive only; no edge claim and no matched controls in this branch.
+volume_crack_proxy,0,0,0,40,5,35,Descriptive only; no edge claim and no matched controls in this branch.

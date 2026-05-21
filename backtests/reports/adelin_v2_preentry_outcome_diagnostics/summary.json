@@ -1,0 +1,113 @@
+{
+  "run_started_at": "2026-05-21T23:28:16.412418+00:00",
+  "symbol": "XAUUSD",
+  "output_dir": "backtests\\reports\\adelin_v2_preentry_outcome_diagnostics",
+  "visual_pack_dir": "backtests\\reports\\adelin_v2_visual_review_pack",
+  "phase3_schema_path": "backtests\\reports\\adelin_v2_phase_3_visual_review_labels\\phase_3_label_schema.json",
+  "feature_specs_path": "backtests\\reports\\adelin_v2_pre_registered_context_feature_test_plan\\feature_test_specs.json",
+  "ohlc_data_read": true,
+  "forward_minutes": 240,
+  "pip_size": 0.1,
+  "verdict_flags": [
+    "STATIC_LABELING_NOT_USABLE",
+    "OBJECTIVE_REPLAY_DIAGNOSTICS_COMPLETE",
+    "PRE_ENTRY_OUTCOME_SEPARATION_REPORTED",
+    "FAILURE_MODES_REPORTED",
+    "NO_PHASE_4_MATCHED_CONTROL_YET",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ],
+  "total_samples_analyzed": 40,
+  "samples_with_sufficient_data": 21,
+  "samples_with_insufficient_data": 19,
+  "outcome_distribution": {
+    "INSUFFICIENT_DATA": 19,
+    "FAST_FAILURE": 16,
+    "GOOD_FAST_REACTION": 5
+  },
+  "top_failure_modes": [
+    {
+      "tag": "INSUFFICIENT_DATA",
+      "count": 19
+    },
+    {
+      "tag": "CONTINUATION_AGAINST_ENTRY",
+      "count": 15
+    },
+    {
+      "tag": "PRICE_CHOP_AFTER_ENTRY",
+      "count": 12
+    },
+    {
+      "tag": "REACTION_TOO_LATE",
+      "count": 8
+    },
+    {
+      "tag": "NO_IMMEDIATE_REACTION",
+      "count": 6
+    },
+    {
+      "tag": "STOP_TOO_WIDE",
+      "count": 4
+    },
+    {
+      "tag": "VOLUME_NOT_CONFIRMING_REVERSAL",
+      "count": 4
+    },
+    {
+      "tag": "TARGET_TOO_FAR",
+      "count": 1
+    }
+  ],
+  "top_win_modes": [
+    {
+      "tag": "CLEAN_TARGET_SPACE",
+      "count": 17
+    },
+    {
+      "tag": "FVG_IFVG_REACTION",
+      "count": 9
+    },
+    {
+      "tag": "ROUND_LEVEL_REACTION",
+      "count": 6
+    },
+    {
+      "tag": "FAST_REACTION",
+      "count": 5
+    },
+    {
+      "tag": "STRONG_MFE_LOW_MAE",
+      "count": 4
+    },
+    {
+      "tag": "CLEAN_SWEEP_REJECTION",
+      "count": 3
+    }
+  ],
+  "feature_presence_vs_outcome_rows": 8,
+  "human_review_priority_rows": 40,
+  "limitations": [
+    "UNKNOWN_DIRECTION_NO_DIRECTIONAL_REPLAY"
+  ],
+  "pre_entry_outcome_separation": {
+    "pre_entry_features": "computed only from data at or before decision timestamp",
+    "post_entry_outcomes": "computed only after decision timestamp for diagnostics",
+    "diagnostic_tags": "assigned after replay; not used to redefine pre-entry features"
+  },
+  "safety": {
+    "old_adelin_runtime_modified": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "live_trading_enabled": false,
+    "telegram_trade_alerts_enabled": false,
+    "broker_execution_enabled": false,
+    "order_execution_enabled": false,
+    "candidate_pack_generated": false,
+    "matched_control_replay_run": false,
+    "phase_4_started": false,
+    "thresholds_tuned": false,
+    "v3_stash_applied_or_popped": false
+  },
+  "run_finished_at": "2026-05-21T23:28:16.412418+00:00"
+}
