@@ -10,20 +10,26 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from dazro_trade.analysis.strategy_2_manual_sample_labels import write_template
+from dazro_trade.analytics.strategy_2_manual_benchmark import write_manual_benchmark_doc, write_manual_benchmark_template
 from dazro_trade.analytics.strategy_2_manual_sample_label_audit import write_research_doc
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create Strategy 2 manual sample label templates.")
-    parser.add_argument("--output-dir", default="backtests/reports/strategy_2_manual_sample_label_pack")
+    parser = argparse.ArgumentParser(description="Create Strategy 2 manual label templates.")
+    parser.add_argument("--schema", choices=["manual_benchmark", "sample_label_pack"], default="manual_benchmark")
+    parser.add_argument("--output-dir", default="backtests/reports/strategy_2_manual_benchmark")
     parser.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
-    parser.add_argument("--docs-path", default="docs/research/strategy_2_manual_sample_label_pack.md")
+    parser.add_argument("--docs-path", default="docs/research/strategy_2_manual_benchmark.md")
     return parser.parse_args(argv)
 
 
 def run(args: argparse.Namespace) -> dict[str, str]:
-    paths = write_template(Path(args.output_dir), output_format=args.format)
-    paths["docs_md"] = write_research_doc(Path(args.docs_path))
+    if args.schema == "sample_label_pack":
+        paths = write_template(Path(args.output_dir), output_format=args.format)
+        paths["docs_md"] = write_research_doc(Path(args.docs_path))
+        return paths
+    paths = write_manual_benchmark_template(Path(args.output_dir))
+    paths["docs_md"] = write_manual_benchmark_doc(Path(args.docs_path))
     return paths
 
 
