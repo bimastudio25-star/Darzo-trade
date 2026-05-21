@@ -56,7 +56,7 @@ python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir
 Expanded regime pack:
 
 ```powershell
-python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir data --output-dir backtests/reports/adelin_v2_expanded_candidate_window_pack --max-samples 300 --min-date-range-days 180 --max-samples-per-day 5 --min-sample-spacing-minutes 240 --dry-run
+python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir data --output-dir backtests/reports/adelin_v2_expanded_candidate_window_pack --max-samples 300 --min-date-range-days 180 --min-sample-spacing-minutes 240 --max-samples-per-day 5 --max-samples-per-week 20 --dry-run
 ```
 
 Optional inputs:
@@ -67,6 +67,7 @@ Optional inputs:
 - `--max-samples` to cap the pack size,
 - `--min-date-range-days` to request broad historical coverage,
 - `--max-samples-per-day` to avoid over-sampling one event/day,
+- `--max-samples-per-week` to avoid over-sampling one ISO week,
 - `--min-sample-spacing-minutes` to reduce duplicate/correlated anchors,
 - `--target-session-balance` to round-robin across sessions without forcing fake samples.
 
@@ -94,7 +95,7 @@ The pack records lower-timeframe execution coverage for every sample:
 
 Default expanded sample selection requires `REVIEWABLE_M1_M5`: M15 or H1 context, M5 reaction candles, and M1 execution candles. Lower-quality missing-M1/M5 samples are excluded unless debug flags are passed, and those samples are not labelable as A+.
 
-The expanded summary also reports candidate source, entry source, session, month, volatility bucket, date coverage, max samples per day, and spacing skips. Candidate windows remain visual review samples, not signals.
+The expanded summary also reports candidate source, entry source, session, month, ATR(14) volatility bucket, date coverage, max samples per day/week, and spacing skips. Candidate windows remain visual review samples, not signals.
 
 ## 6. How The User Should Label
 
@@ -139,17 +140,43 @@ For the expanded pack, the correct next research action is objective outcome rep
 
 The expanded pack records decision criteria before outcome replay. These are descriptive project gates, not statistical proof.
 
-Useful source group: candidate `N >= 80`.
+These criteria are copied verbatim into `decision_criteria.md` before replay:
 
-Continue detector refinement if at least one useful source meets one of:
+----- BEGIN PRE-REGISTERED CRITERIA -----
 
-- candidate fast reaction rate is at least control + `0.07`,
-- candidate runner rate is at least control + `0.05`,
-- candidate fast SL20 rate is at least `0.10` lower than control and fast reaction is not worse than control by more than `0.03`.
+CONTEXT:
+We will evaluate Adelin v2 candidate detector quality by comparing
+candidate metrics vs entry-source-matched + session-matched controls,
+stratified by entry source.
 
-Stop/archive the detector if all useful sources are flat on fast reaction and runner behavior and candidate fast SL20 is not better, or if fast SL20 is worse by `0.05` or more on all useful sources.
+Required minimum sample sizes per source for inference:
+- SWEEP_EXTREME: candidate N >= 80
+- ROUND_LEVEL:   candidate N >= 50
+- SWEPT_LIQUIDITY_LEVEL: candidate N >= 50
 
-Repeat expansion once only for visible but underpowered effects with fewer than 300 generated candidates due to data constraints.
+VERDICT = CONTINUE_DETECTOR_REFINEMENT
+IF AT LEAST ONE of the following holds on any source meeting min N:
+  (a) candidate fast_reaction_rate >= control fast_reaction_rate + 0.07
+  (b) candidate runner_rate (>= 500 pips MFE) >= control runner_rate + 0.05
+  (c) candidate fast_sl20_rate <= control fast_sl20_rate - 0.10
+
+VERDICT = STOP_ARCHIVE_DETECTOR
+IF FOR ALL sources meeting min N:
+  |candidate_fast_reaction - control_fast_reaction| <= 0.03
+  AND candidate_fast_sl20_rate >= control_fast_sl20_rate - 0.03
+  AND candidate_runner_rate <= control_runner_rate + 0.02
+
+VERDICT = REPEAT_EXPANSION_ONCE
+IF effect size (|candidate - control|) >= 0.05 on at least one metric
+BUT no source has candidate N >= min N required.
+Maximum one repeat. Target on repeat: 500 samples.
+
+VERDICT = INCONCLUSIVE
+For any other case. Default action: pause Adelin v2, document, do not iterate.
+
+----- END PRE-REGISTERED CRITERIA -----
+
+Hard rule: do not reinterpret replay results ad hoc after seeing them.
 
 ## 9. Next Branches
 

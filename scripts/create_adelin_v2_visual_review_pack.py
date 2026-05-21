@@ -38,6 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=300)
     parser.add_argument("--min-date-range-days", type=int, default=180)
     parser.add_argument("--max-samples-per-day", type=int, default=5)
+    parser.add_argument("--max-samples-per-week", type=int, default=20)
     parser.add_argument("--min-sample-spacing-minutes", type=int, default=240)
     parser.add_argument(
         "--target-session-balance",
@@ -80,6 +81,7 @@ def config_from_args(args: argparse.Namespace) -> VisualReviewPackConfig:
         max_samples=args.max_samples,
         min_date_range_days=args.min_date_range_days,
         max_samples_per_day=args.max_samples_per_day,
+        max_samples_per_week=args.max_samples_per_week,
         min_sample_spacing_minutes=args.min_sample_spacing_minutes,
         target_session_balance=bool(args.target_session_balance),
         include_candidate_windows=bool(args.include_candidate_windows),
@@ -103,15 +105,22 @@ def main(argv: list[str] | None = None) -> int:
                 "candidate_windows_generated": summary["candidate_windows_generated"],
                 "total_samples": summary["total_samples"],
                 "total_samples_generated": summary["total_samples_generated"],
+                "samples_attempted": summary["samples_attempted"],
                 "date_range_coverage_days": summary["date_range_coverage_days"],
+                "date_range_coverage": summary["date_range_coverage"],
                 "candidate_source_counts": summary["candidate_source_counts"],
                 "entry_level_source_counts": summary["entry_level_source_counts"],
                 "session_distribution": summary["session_distribution"],
                 "samples_per_month_distribution": summary["samples_per_month_distribution"],
                 "volatility_bucket_distribution": summary["volatility_bucket_distribution"],
+                "atr_p25": summary["atr_p25"],
+                "atr_p75": summary["atr_p75"],
+                "volatility_imbalance_warning": summary["volatility_imbalance_warning"],
                 "samples_skipped_missing_execution": summary["samples_skipped_missing_execution"],
                 "samples_skipped_duplicate_spacing": summary["samples_skipped_duplicate_spacing"],
                 "samples_skipped_max_per_day": summary["samples_skipped_max_per_day"],
+                "samples_skipped_max_per_week": summary["samples_skipped_max_per_week"],
+                "samples_skipped_other": summary["samples_skipped_other"],
                 "expanded_pack_generation_verdict": summary["expanded_pack_generation_verdict"],
                 "expanded_pack_generation_verdict_reason": summary["expanded_pack_generation_verdict_reason"],
                 "reviewable_samples": summary["reviewable_samples"],

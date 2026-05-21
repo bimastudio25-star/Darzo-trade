@@ -3,11 +3,35 @@
   "all_loaded_data_range_end": "2026-05-19T19:55:00+00:00",
   "all_loaded_data_range_start": "2024-05-14T01:00:00+00:00",
   "allow_weak_m1_only": false,
+  "anti_lookahead_guarantees_by_source": {
+    "MULTI_TF_LIQUIDITY_CLUSTER": [
+      "Unsupported in this branch; no rows are labeled this way unless a future lookahead-safe detector is added."
+    ],
+    "ROUND_LEVEL": [
+      "Uses number-theory level metadata derived from anchor or pre-anchor price only.",
+      "Does not use post-anchor movement to decide sample inclusion."
+    ],
+    "SWEEP_EXTREME": [
+      "Uses only [anchor - 60m, anchor) candles for sweep validation.",
+      "Excludes the anchor candle from sweep validation.",
+      "Excludes all post-anchor candles from sweep validation.",
+      "Requires sweep candle at least 5 minutes before anchor."
+    ],
+    "SWEPT_LIQUIDITY_LEVEL": [
+      "Uses explicit swept level metadata from the pre-anchor candidate definition only.",
+      "Does not use post-anchor movement to decide sample inclusion."
+    ],
+    "UNKNOWN": [
+      "No defensible source is inferred; sample remains unknown instead of inventing metadata."
+    ]
+  },
+  "atr_p25": 122.9614,
+  "atr_p75": 193.8825,
   "audit_path": "backtests\\reports\\adelin_v2_operational_audit\\adelin_v2_trade_audit.csv",
   "audit_rows_loaded": 0,
   "candidate_source_counts": {
-    "ROUND_LEVEL": 128,
-    "SWEEP_EXTREME": 126,
+    "ROUND_LEVEL": 127,
+    "SWEEP_EXTREME": 127,
     "SWEPT_LIQUIDITY_LEVEL": 22,
     "UNKNOWN": 24
   },
@@ -18,103 +42,94 @@
       "SWEPT_LIQUIDITY_LEVEL": 1
     },
     "2026-02": {
-      "ROUND_LEVEL": 33,
-      "SWEEP_EXTREME": 33,
+      "ROUND_LEVEL": 32,
+      "SWEEP_EXTREME": 32,
       "SWEPT_LIQUIDITY_LEVEL": 7,
       "UNKNOWN": 9
     },
     "2026-03": {
-      "ROUND_LEVEL": 33,
-      "SWEEP_EXTREME": 32,
+      "ROUND_LEVEL": 34,
+      "SWEEP_EXTREME": 34,
       "SWEPT_LIQUIDITY_LEVEL": 7,
       "UNKNOWN": 8
     },
     "2026-04": {
-      "ROUND_LEVEL": 32,
-      "SWEEP_EXTREME": 32,
+      "ROUND_LEVEL": 34,
+      "SWEEP_EXTREME": 34,
       "SWEPT_LIQUIDITY_LEVEL": 2,
       "UNKNOWN": 6
     },
     "2026-05": {
-      "ROUND_LEVEL": 27,
-      "SWEEP_EXTREME": 26,
+      "ROUND_LEVEL": 24,
+      "SWEEP_EXTREME": 24,
       "SWEPT_LIQUIDITY_LEVEL": 5,
       "UNKNOWN": 1
     }
   },
   "candidate_source_counts_by_volatility_bucket": {
-    "HIGH_VOLATILITY": {
-      "ROUND_LEVEL": 97,
-      "SWEEP_EXTREME": 94,
-      "SWEPT_LIQUIDITY_LEVEL": 16,
-      "UNKNOWN": 16
+    "HIGH": {
+      "ROUND_LEVEL": 37,
+      "SWEEP_EXTREME": 36,
+      "SWEPT_LIQUIDITY_LEVEL": 7,
+      "UNKNOWN": 6
     },
-    "LOW_VOLATILITY": {
-      "ROUND_LEVEL": 2,
-      "SWEEP_EXTREME": 2
+    "LOW": {
+      "ROUND_LEVEL": 30,
+      "SWEEP_EXTREME": 31,
+      "SWEPT_LIQUIDITY_LEVEL": 5,
+      "UNKNOWN": 3
     },
-    "MID_VOLATILITY": {
-      "ROUND_LEVEL": 29,
-      "SWEEP_EXTREME": 30,
-      "SWEPT_LIQUIDITY_LEVEL": 6,
-      "UNKNOWN": 8
+    "MID": {
+      "ROUND_LEVEL": 60,
+      "SWEEP_EXTREME": 60,
+      "SWEPT_LIQUIDITY_LEVEL": 10,
+      "UNKNOWN": 15
     }
   },
   "candidate_windows_generated": 300,
   "charts_generated": 300,
   "data_dir": "data",
+  "date_range_coverage": {
+    "calendar_days_covered": 111,
+    "first_anchor": "2026-01-29",
+    "last_anchor": "2026-05-19",
+    "meets_min_date_range_days": false
+  },
   "date_range_coverage_days": 111,
   "date_range_end": "2026-05-19",
   "date_range_start": "2026-01-29",
   "decision_criteria": {
-    "continue_detector_refinement": {
-      "fast_reaction_improvement_min": 0.07,
-      "fast_sl20_reduction_min": 0.1,
-      "non_worse_fast_reaction_tolerance": -0.03,
-      "runner_improvement_min": 0.05
-    },
-    "primary_metrics": [
-      "fast_reaction_rate",
-      "runner_rate",
-      "fast_sl20_rate"
+    "allowed_verdicts": [
+      "CONTINUE_DETECTOR_REFINEMENT",
+      "STOP_ARCHIVE_DETECTOR",
+      "REPEAT_EXPANSION_ONCE",
+      "INCONCLUSIVE"
     ],
-    "repeat_expansion_once": {
-      "fast_reaction_visible_effect_min": 0.05,
-      "fast_sl20_visible_reduction_min": 0.1,
-      "runner_visible_effect_min": 0.03,
-      "underpowered_candidate_n": 100
+    "required_minimum_sample_sizes_per_source": {
+      "ROUND_LEVEL": 50,
+      "SWEEP_EXTREME": 80,
+      "SWEPT_LIQUIDITY_LEVEL": 50
     },
-    "stop_archive_detector": {
-      "fast_sl20_worse_all_sources_min": 0.05,
-      "flat_fast_reaction_range": [
-        -0.03,
-        0.03
-      ],
-      "flat_runner_range": [
-        -0.03,
-        0.03
-      ]
-    },
-    "useful_source_min_candidate_n": 80,
-    "warning": "Criteria are descriptive project gates, not statistical proof or profitability validation."
+    "verbatim": "----- BEGIN PRE-REGISTERED CRITERIA -----\n\nCONTEXT:\nWe will evaluate Adelin v2 candidate detector quality by comparing\ncandidate metrics vs entry-source-matched + session-matched controls,\nstratified by entry source.\n\nRequired minimum sample sizes per source for inference:\n- SWEEP_EXTREME: candidate N >= 80\n- ROUND_LEVEL:   candidate N >= 50\n- SWEPT_LIQUIDITY_LEVEL: candidate N >= 50\n\nVERDICT = CONTINUE_DETECTOR_REFINEMENT\nIF AT LEAST ONE of the following holds on any source meeting min N:\n  (a) candidate fast_reaction_rate >= control fast_reaction_rate + 0.07\n  (b) candidate runner_rate (>= 500 pips MFE) >= control runner_rate + 0.05\n  (c) candidate fast_sl20_rate <= control fast_sl20_rate - 0.10\n\nVERDICT = STOP_ARCHIVE_DETECTOR\nIF FOR ALL sources meeting min N:\n  |candidate_fast_reaction - control_fast_reaction| <= 0.03\n  AND candidate_fast_sl20_rate >= control_fast_sl20_rate - 0.03\n  AND candidate_runner_rate <= control_runner_rate + 0.02\n\nVERDICT = REPEAT_EXPANSION_ONCE\nIF effect size (|candidate - control|) >= 0.05 on at least one metric\nBUT no source has candidate N >= min N required.\nMaximum one repeat. Target on repeat: 500 samples.\n\nVERDICT = INCONCLUSIVE\nFor any other case. Default action: pause Adelin v2, document, do not iterate.\n\n----- END PRE-REGISTERED CRITERIA -----"
   },
+  "decision_criteria_path": "backtests\\reports\\adelin_v2_expanded_candidate_window_pack\\decision_criteria.md",
   "decision_criteria_preregistered": true,
   "direction_distribution": {
-    "LONG": 89,
-    "SHORT": 105,
-    "UNKNOWN": 106
+    "LONG": 95,
+    "SHORT": 95,
+    "UNKNOWN": 110
   },
   "dry_run": true,
   "entry_level_source_counts": {
-    "ROUND_LEVEL": 128,
-    "SWEEP_EXTREME": 126,
+    "ROUND_LEVEL": 127,
+    "SWEEP_EXTREME": 127,
     "SWEPT_LIQUIDITY_LEVEL": 22,
     "UNKNOWN": 24
   },
   "execution_data_status_counts": {
     "REVIEWABLE_M1_M5": 300
   },
-  "expanded_pack_generation_verdict": "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+  "expanded_pack_generation_verdict": "INCONCLUSIVE",
   "expanded_pack_generation_verdict_reason": "LOCAL_DATA_COVERAGE_111_DAYS_BELOW_REQUESTED_180",
   "html_pages_generated": 300,
   "include_insufficient_execution_debug": false,
@@ -132,18 +147,44 @@
   "m1_m5_full_coverage_count": 300,
   "manual_label_template_path": "backtests\\reports\\adelin_v2_expanded_candidate_window_pack\\manual_labels_template.csv",
   "max_samples_per_day": 5,
+  "max_samples_per_week": 20,
   "max_samples_requested": 300,
   "min_date_range_days_requested": 180,
   "min_sample_spacing_minutes": 240,
   "objective_replay_required_before_final_decision": true,
   "output_dir": "backtests\\reports\\adelin_v2_expanded_candidate_window_pack",
+  "per_day_sample_distribution_top_10": {
+    "2026-01-30": 5,
+    "2026-02-03": 5,
+    "2026-02-12": 5,
+    "2026-02-17": 5,
+    "2026-02-19": 5,
+    "2026-02-23": 5,
+    "2026-02-25": 5,
+    "2026-02-26": 5,
+    "2026-03-04": 5,
+    "2026-03-05": 5
+  },
+  "per_iso_week_sample_distribution_top_10": {
+    "2026-W06": 20,
+    "2026-W07": 20,
+    "2026-W08": 20,
+    "2026-W09": 20,
+    "2026-W10": 20,
+    "2026-W11": 20,
+    "2026-W12": 20,
+    "2026-W13": 20,
+    "2026-W15": 20,
+    "2026-W16": 20
+  },
+  "pre_registered_decision_criteria": "----- BEGIN PRE-REGISTERED CRITERIA -----\n\nCONTEXT:\nWe will evaluate Adelin v2 candidate detector quality by comparing\ncandidate metrics vs entry-source-matched + session-matched controls,\nstratified by entry source.\n\nRequired minimum sample sizes per source for inference:\n- SWEEP_EXTREME: candidate N >= 80\n- ROUND_LEVEL:   candidate N >= 50\n- SWEPT_LIQUIDITY_LEVEL: candidate N >= 50\n\nVERDICT = CONTINUE_DETECTOR_REFINEMENT\nIF AT LEAST ONE of the following holds on any source meeting min N:\n  (a) candidate fast_reaction_rate >= control fast_reaction_rate + 0.07\n  (b) candidate runner_rate (>= 500 pips MFE) >= control runner_rate + 0.05\n  (c) candidate fast_sl20_rate <= control fast_sl20_rate - 0.10\n\nVERDICT = STOP_ARCHIVE_DETECTOR\nIF FOR ALL sources meeting min N:\n  |candidate_fast_reaction - control_fast_reaction| <= 0.03\n  AND candidate_fast_sl20_rate >= control_fast_sl20_rate - 0.03\n  AND candidate_runner_rate <= control_runner_rate + 0.02\n\nVERDICT = REPEAT_EXPANSION_ONCE\nIF effect size (|candidate - control|) >= 0.05 on at least one metric\nBUT no source has candidate N >= min N required.\nMaximum one repeat. Target on repeat: 500 samples.\n\nVERDICT = INCONCLUSIVE\nFor any other case. Default action: pause Adelin v2, document, do not iterate.\n\n----- END PRE-REGISTERED CRITERIA -----",
   "raw_samples_considered": 12430,
   "readme_path": "backtests\\reports\\adelin_v2_expanded_candidate_window_pack\\README_manual_review.md",
   "reviewable_m1_m5_count": 300,
   "reviewable_m5_only_count": 0,
   "reviewable_samples": 300,
-  "run_finished_at": "2026-05-21T00:41:01.030069+00:00",
-  "run_started_at": "2026-05-21T00:35:45.149790+00:00",
+  "run_finished_at": "2026-05-21T01:00:30.216755+00:00",
+  "run_started_at": "2026-05-21T00:55:17.458846+00:00",
   "safety": {
     "broker_execution_enabled": false,
     "data_modified": false,
@@ -153,71 +194,80 @@
     "strategy_3_touched": false,
     "telegram_enabled": false
   },
+  "samples_attempted": 12430,
   "samples_per_day_max_observed": 5,
   "samples_per_month_distribution": {
     "2026-01": 7,
-    "2026-02": 82,
-    "2026-03": 80,
-    "2026-04": 72,
-    "2026-05": 59
+    "2026-02": 80,
+    "2026-03": 83,
+    "2026-04": 76,
+    "2026-05": 54
   },
   "samples_per_week_distribution": {
     "2026-W05": 7,
-    "2026-W06": 22,
-    "2026-W07": 22,
-    "2026-W08": 23,
-    "2026-W09": 15,
-    "2026-W10": 23,
-    "2026-W11": 24,
-    "2026-W12": 24,
-    "2026-W13": 7,
-    "2026-W14": 12,
-    "2026-W15": 25,
-    "2026-W16": 24,
-    "2026-W17": 13,
-    "2026-W18": 5,
-    "2026-W19": 22,
-    "2026-W20": 23,
+    "2026-W06": 20,
+    "2026-W07": 20,
+    "2026-W08": 20,
+    "2026-W09": 20,
+    "2026-W10": 20,
+    "2026-W11": 20,
+    "2026-W12": 20,
+    "2026-W13": 20,
+    "2026-W14": 13,
+    "2026-W15": 20,
+    "2026-W16": 20,
+    "2026-W17": 20,
+    "2026-W18": 11,
+    "2026-W19": 20,
+    "2026-W20": 20,
     "2026-W21": 9
   },
+  "samples_per_week_max_observed": 20,
   "samples_skipped_due_to_missing_ltf_data": 9771,
-  "samples_skipped_duplicate_spacing": 1521,
-  "samples_skipped_max_per_day": 319,
+  "samples_skipped_duplicate_spacing": 1510,
+  "samples_skipped_max_per_day": 305,
+  "samples_skipped_max_per_day_cap": 305,
+  "samples_skipped_max_per_week": 384,
+  "samples_skipped_max_per_week_cap": 384,
   "samples_skipped_missing_execution": 9771,
+  "samples_skipped_other": {},
   "samples_skipped_outside_date_range_goal": 0,
   "session_counts_by_volatility_bucket": {
-    "HIGH_VOLATILITY": {
-      "ASIA": 49,
-      "ASIA_OPEN": 21,
-      "LONDON": 51,
-      "LONDON_OPEN": 8,
-      "NEW_YORK": 39,
+    "HIGH": {
+      "ASIA": 17,
+      "ASIA_OPEN": 13,
+      "LONDON": 23,
+      "LONDON_OPEN": 2,
+      "NEW_YORK": 12,
+      "NEW_YORK_OPEN": 2,
+      "OTHER": 17
+    },
+    "LOW": {
+      "ASIA": 17,
+      "LONDON": 15,
+      "LONDON_OPEN": 3,
+      "NEW_YORK": 18,
+      "NEW_YORK_OPEN": 1,
+      "OTHER": 15
+    },
+    "MID": {
+      "ASIA": 37,
+      "ASIA_OPEN": 14,
+      "LONDON": 35,
+      "LONDON_OPEN": 3,
+      "NEW_YORK": 19,
       "NEW_YORK_OPEN": 11,
-      "OTHER": 44
-    },
-    "LOW_VOLATILITY": {
-      "ASIA": 1,
-      "LONDON": 2,
-      "OTHER": 1
-    },
-    "MID_VOLATILITY": {
-      "ASIA": 18,
-      "ASIA_OPEN": 5,
-      "LONDON": 17,
-      "LONDON_OPEN": 1,
-      "NEW_YORK": 13,
-      "NEW_YORK_OPEN": 3,
-      "OTHER": 16
+      "OTHER": 26
     }
   },
   "session_distribution": {
-    "ASIA": 68,
-    "ASIA_OPEN": 26,
-    "LONDON": 70,
-    "LONDON_OPEN": 9,
-    "NEW_YORK": 52,
+    "ASIA": 71,
+    "ASIA_OPEN": 27,
+    "LONDON": 73,
+    "LONDON_OPEN": 8,
+    "NEW_YORK": 49,
     "NEW_YORK_OPEN": 14,
-    "OTHER": 61
+    "OTHER": 58
   },
   "session_distribution_by_month": {
     "2026-01": {
@@ -228,38 +278,37 @@
       "OTHER": 2
     },
     "2026-02": {
-      "ASIA": 10,
+      "ASIA": 12,
       "ASIA_OPEN": 18,
-      "LONDON": 24,
+      "LONDON": 23,
       "LONDON_OPEN": 1,
-      "NEW_YORK": 11,
+      "NEW_YORK": 9,
       "NEW_YORK_OPEN": 3,
-      "OTHER": 15
+      "OTHER": 14
     },
     "2026-03": {
       "ASIA": 25,
-      "ASIA_OPEN": 7,
-      "LONDON": 14,
-      "LONDON_OPEN": 3,
-      "NEW_YORK": 13,
-      "NEW_YORK_OPEN": 4,
+      "ASIA_OPEN": 8,
+      "LONDON": 18,
+      "LONDON_OPEN": 2,
+      "NEW_YORK": 10,
+      "NEW_YORK_OPEN": 6,
       "OTHER": 14
     },
     "2026-04": {
-      "ASIA": 19,
+      "ASIA": 20,
       "LONDON": 19,
-      "LONDON_OPEN": 2,
-      "NEW_YORK": 11,
-      "NEW_YORK_OPEN": 4,
+      "LONDON_OPEN": 3,
+      "NEW_YORK": 14,
+      "NEW_YORK_OPEN": 3,
       "OTHER": 17
     },
     "2026-05": {
       "ASIA": 13,
       "LONDON": 12,
-      "LONDON_OPEN": 3,
-      "NEW_YORK": 17,
-      "NEW_YORK_OPEN": 1,
-      "OTHER": 13
+      "LONDON_OPEN": 2,
+      "NEW_YORK": 16,
+      "OTHER": 11
     }
   },
   "source_modes_used": [
@@ -272,10 +321,11 @@
   "trades_loaded": 0,
   "trades_path": null,
   "volatility_bucket_distribution": {
-    "HIGH_VOLATILITY": 223,
-    "LOW_VOLATILITY": 4,
-    "MID_VOLATILITY": 73
+    "HIGH": 86,
+    "LOW": 69,
+    "MID": 145
   },
+  "volatility_imbalance_warning": false,
   "warning": "Candidate windows are for visual labeling only and are not trade signals.",
   "weak_m1_only_count": 0
 }

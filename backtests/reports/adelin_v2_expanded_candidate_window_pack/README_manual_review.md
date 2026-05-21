@@ -34,15 +34,15 @@ Status: research-only. Candidate windows are for visual labeling only and are no
 - date_range_coverage_days: `111`
 - max_samples_per_day: `5`
 - min_sample_spacing_minutes: `240`
-- candidate_source_counts: `{'ROUND_LEVEL': 128, 'SWEEP_EXTREME': 126, 'SWEPT_LIQUIDITY_LEVEL': 22, 'UNKNOWN': 24}`
-- entry_level_source_counts: `{'ROUND_LEVEL': 128, 'SWEEP_EXTREME': 126, 'SWEPT_LIQUIDITY_LEVEL': 22, 'UNKNOWN': 24}`
-- session_distribution: `{'ASIA': 68, 'ASIA_OPEN': 26, 'LONDON': 70, 'LONDON_OPEN': 9, 'NEW_YORK': 52, 'NEW_YORK_OPEN': 14, 'OTHER': 61}`
-- volatility_bucket_distribution: `{'HIGH_VOLATILITY': 223, 'LOW_VOLATILITY': 4, 'MID_VOLATILITY': 73}`
+- candidate_source_counts: `{'ROUND_LEVEL': 127, 'SWEEP_EXTREME': 127, 'SWEPT_LIQUIDITY_LEVEL': 22, 'UNKNOWN': 24}`
+- entry_level_source_counts: `{'ROUND_LEVEL': 127, 'SWEEP_EXTREME': 127, 'SWEPT_LIQUIDITY_LEVEL': 22, 'UNKNOWN': 24}`
+- session_distribution: `{'ASIA': 71, 'ASIA_OPEN': 27, 'LONDON': 73, 'LONDON_OPEN': 8, 'NEW_YORK': 49, 'NEW_YORK_OPEN': 14, 'OTHER': 58}`
+- volatility_bucket_distribution: `{'HIGH': 86, 'LOW': 69, 'MID': 145}`
 - reviewable_samples: `300`
 - reviewable_m1_m5_count: `300`
 - insufficient_execution_data_count: `0`
 - source_modes_used: `CANDIDATE_WINDOW_MODE`
-- expanded_pack_generation_verdict: `INCONCLUSIVE_DATA_QUALITY_LIMITATION`
+- expanded_pack_generation_verdict: `INCONCLUSIVE`
 - expanded_pack_generation_verdict_reason: `LOCAL_DATA_COVERAGE_111_DAYS_BELOW_REQUESTED_180`
 - limitations: `INSUFFICIENT_EXECUTION_DATA_SAMPLES_SKIPPED, LOCAL_DATA_COVERAGE_BELOW_REQUESTED_MIN_DATE_RANGE, MATPLOTLIB_UNAVAILABLE_USING_SVG_CHARTS, NO_TRADES_PATH_AVAILABLE`
 

@@ -7,14 +7,20 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
+
 from dazro_trade.analytics.adelin_v2_visual_review_pack import (
     INSUFFICIENT_EXECUTION_DATA,
     MANUAL_LABEL_COLUMNS,
+    PRE_REGISTERED_DECISION_CRITERIA_TEXT,
     RESEARCH_WARNING,
     REVIEWABLE_M1_M5,
     REVIEWABLE_M5_ONLY,
+    VisualReviewSample,
     WEAK_M1_ONLY,
     VisualReviewPackConfig,
+    _annotate_sample_metadata,
+    _daily_atr14_context,
     create_visual_review_pack,
     is_near_number_theory_level,
 )
@@ -91,6 +97,7 @@ def test_cli_parser_import_does_not_execute_generation():
     args = module.parse_args(["--symbol", "XAUUSD", "--max-samples", "3"])
     assert args.symbol == "XAUUSD"
     assert args.max_samples == 3
+    assert args.max_samples_per_week == 20
 
 
 def test_visual_pack_creates_output_files_and_respects_sample_cap(tmp_path: Path):
@@ -161,6 +168,8 @@ def test_manual_label_template_contains_required_columns(tmp_path: Path):
         header = next(reader)
     assert header == MANUAL_LABEL_COLUMNS
     assert "execution_data_status" in header
+    assert "anchor_iso_week" in header
+    assert "daily_atr_at_anchor" in header
     assert "m1_candles_count" in header
     assert "m5_candles_count" in header
     assert "m15_candles_count" in header
@@ -421,13 +430,22 @@ def test_expanded_summary_includes_regime_metadata_and_decision_criteria(tmp_pat
     assert isinstance(summary["session_distribution"], dict)
     assert isinstance(summary["samples_per_month_distribution"], dict)
     assert isinstance(summary["volatility_bucket_distribution"], dict)
+    assert "atr_p25" in summary
+    assert "atr_p75" in summary
+    assert "volatility_imbalance_warning" in summary
+    assert "date_range_coverage" in summary
+    assert "anti_lookahead_guarantees_by_source" in summary
     assert summary["decision_criteria_preregistered"] is True
+    assert summary["pre_registered_decision_criteria"] == PRE_REGISTERED_DECISION_CRITERIA_TEXT
     assert summary["expanded_pack_generation_verdict"] in {
         "CONTINUE_DETECTOR_REFINEMENT",
-        "STOP_ARCHIVE_ADELIN_V2_DETECTOR",
+        "STOP_ARCHIVE_DETECTOR",
         "REPEAT_EXPANSION_ONCE",
-        "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+        "INCONCLUSIVE",
     }
+    criteria_path = output_dir / "decision_criteria.md"
+    assert criteria_path.exists()
+    assert criteria_path.read_text(encoding="utf-8").strip() == PRE_REGISTERED_DECISION_CRITERIA_TEXT
 
 
 def test_manual_template_includes_entry_source_metadata(tmp_path: Path):
@@ -445,7 +463,90 @@ def test_manual_template_includes_entry_source_metadata(tmp_path: Path):
     )
     with (output_dir / "manual_labels_template.csv").open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    assert {"candidate_source_type", "entry_level_source", "entry_level_confidence", "session", "month", "volatility_bucket"}.issubset(rows[0].keys())
+    assert {
+        "candidate_source_type",
+        "entry_level_source",
+        "entry_level_confidence",
+        "session",
+        "anchor_iso_week",
+        "month",
+        "volatility_bucket",
+        "daily_atr_at_anchor",
+    }.issubset(rows[0].keys())
+
+
+def test_weekly_cap_is_enforced_when_configured(tmp_path: Path):
+    data_dir = _make_data_dir(tmp_path)
+    output_dir = tmp_path / "pack"
+    summary = create_visual_review_pack(
+        VisualReviewPackConfig(
+            data_dir=data_dir,
+            output_dir=output_dir,
+            trades_path=tmp_path / "missing.csv",
+            audit_path=tmp_path / "missing_audit.csv",
+            max_samples=10,
+            max_samples_per_week=1,
+            min_sample_spacing_minutes=0,
+        )
+    )
+    assert summary["samples_per_week_max_observed"] <= 1
+    assert "samples_skipped_max_per_week_cap" in summary
+
+
+def test_atr14_volatility_context_is_deterministic_and_uses_prior_day():
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = []
+    for i in range(20):
+        rows.append(
+            {
+                "time": base + timedelta(days=i),
+                "open": 4900 + i,
+                "high": 4905 + i,
+                "low": 4895 + i,
+                "close": 4901 + i,
+            }
+        )
+    frames = {"D1": pd.DataFrame(rows)}
+    limitations: list[str] = []
+    anchor_end = base + timedelta(days=10)
+    buckets, atr_by_date, p25, p75 = _daily_atr14_context(frames, limitations, eligible_end=anchor_end)
+    changed_rows = list(rows)
+    changed_rows[10] = dict(changed_rows[10], high=9999.0, low=1.0)
+    changed_buckets, changed_atr_by_date, changed_p25, changed_p75 = _daily_atr14_context({"D1": pd.DataFrame(changed_rows)}, [], eligible_end=anchor_end)
+    anchor_date = "2026-01-11"
+    assert atr_by_date[anchor_date] == changed_atr_by_date[anchor_date]
+    assert buckets[anchor_date] == changed_buckets[anchor_date]
+    assert p25 is not None and p75 is not None and p25 <= p75
+    assert changed_p25 is not None and changed_p75 is not None
+
+
+def test_sweep_extreme_metadata_ignores_post_anchor_candles():
+    anchor = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    pre_times = [anchor - timedelta(minutes=30), anchor - timedelta(minutes=20), anchor - timedelta(minutes=10)]
+    post_times = [anchor + timedelta(minutes=1), anchor + timedelta(minutes=2), anchor + timedelta(minutes=3)]
+    rows = [
+        {"time": t, "open": 4900.0, "high": 4901.0, "low": 4899.0, "close": 4900.0}
+        for t in pre_times
+    ] + [
+        {"time": post_times[0], "open": 4900.0, "high": 4925.0, "low": 4899.0, "close": 4900.0},
+        {"time": post_times[1], "open": 4900.0, "high": 4901.0, "low": 4880.0, "close": 4900.0},
+        {"time": post_times[2], "open": 4900.0, "high": 4901.0, "low": 4899.0, "close": 4900.0},
+    ]
+    frames = {"M1": pd.DataFrame(rows), "M5": pd.DataFrame(rows)}
+    sample = VisualReviewSample(
+        sample_id="",
+        source_mode="CANDIDATE_WINDOW_MODE",
+        symbol="XAUUSD",
+        direction_guess="UNKNOWN",
+        anchor_timestamp=anchor,
+        anchor_timeframe="M1",
+        window_start=anchor - timedelta(minutes=90),
+        window_end=anchor + timedelta(minutes=180),
+        candidate_reason_codes=("TEST_POST_ANCHOR_ONLY",),
+    )
+    _annotate_sample_metadata(sample, frames, VisualReviewPackConfig(), {}, {})
+    assert sample.candidate_source_type == "UNKNOWN"
+    assert sample.entry_level_source == "UNKNOWN"
 
 
 def test_visual_pack_generation_does_not_modify_input_candle_data(tmp_path: Path):

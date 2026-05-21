@@ -51,31 +51,51 @@ INSUFFICIENT_EXECUTION_DATA = "INSUFFICIENT_EXECUTION_DATA"
 MULTI_TF_LIQUIDITY_CLUSTER = "MULTI_TF_LIQUIDITY_CLUSTER"
 DECISION_VERDICTS = (
     "CONTINUE_DETECTOR_REFINEMENT",
-    "STOP_ARCHIVE_ADELIN_V2_DETECTOR",
+    "STOP_ARCHIVE_DETECTOR",
     "REPEAT_EXPANSION_ONCE",
-    "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+    "INCONCLUSIVE",
 )
+PRE_REGISTERED_DECISION_CRITERIA_TEXT = """----- BEGIN PRE-REGISTERED CRITERIA -----
+
+CONTEXT:
+We will evaluate Adelin v2 candidate detector quality by comparing
+candidate metrics vs entry-source-matched + session-matched controls,
+stratified by entry source.
+
+Required minimum sample sizes per source for inference:
+- SWEEP_EXTREME: candidate N >= 80
+- ROUND_LEVEL:   candidate N >= 50
+- SWEPT_LIQUIDITY_LEVEL: candidate N >= 50
+
+VERDICT = CONTINUE_DETECTOR_REFINEMENT
+IF AT LEAST ONE of the following holds on any source meeting min N:
+  (a) candidate fast_reaction_rate >= control fast_reaction_rate + 0.07
+  (b) candidate runner_rate (>= 500 pips MFE) >= control runner_rate + 0.05
+  (c) candidate fast_sl20_rate <= control fast_sl20_rate - 0.10
+
+VERDICT = STOP_ARCHIVE_DETECTOR
+IF FOR ALL sources meeting min N:
+  |candidate_fast_reaction - control_fast_reaction| <= 0.03
+  AND candidate_fast_sl20_rate >= control_fast_sl20_rate - 0.03
+  AND candidate_runner_rate <= control_runner_rate + 0.02
+
+VERDICT = REPEAT_EXPANSION_ONCE
+IF effect size (|candidate - control|) >= 0.05 on at least one metric
+BUT no source has candidate N >= min N required.
+Maximum one repeat. Target on repeat: 500 samples.
+
+VERDICT = INCONCLUSIVE
+For any other case. Default action: pause Adelin v2, document, do not iterate.
+
+----- END PRE-REGISTERED CRITERIA -----"""
 PRE_REGISTERED_DECISION_CRITERIA = {
-    "useful_source_min_candidate_n": 80,
-    "primary_metrics": ["fast_reaction_rate", "runner_rate", "fast_sl20_rate"],
-    "continue_detector_refinement": {
-        "fast_reaction_improvement_min": 0.07,
-        "runner_improvement_min": 0.05,
-        "fast_sl20_reduction_min": 0.10,
-        "non_worse_fast_reaction_tolerance": -0.03,
+    "verbatim": PRE_REGISTERED_DECISION_CRITERIA_TEXT,
+    "required_minimum_sample_sizes_per_source": {
+        "SWEEP_EXTREME": 80,
+        "ROUND_LEVEL": 50,
+        "SWEPT_LIQUIDITY_LEVEL": 50,
     },
-    "stop_archive_detector": {
-        "flat_fast_reaction_range": [-0.03, 0.03],
-        "flat_runner_range": [-0.03, 0.03],
-        "fast_sl20_worse_all_sources_min": 0.05,
-    },
-    "repeat_expansion_once": {
-        "underpowered_candidate_n": 100,
-        "fast_reaction_visible_effect_min": 0.05,
-        "runner_visible_effect_min": 0.03,
-        "fast_sl20_visible_reduction_min": 0.10,
-    },
-    "warning": "Criteria are descriptive project gates, not statistical proof or profitability validation.",
+    "allowed_verdicts": list(DECISION_VERDICTS),
 }
 
 MANUAL_LABEL_COLUMNS = [
@@ -89,6 +109,7 @@ MANUAL_LABEL_COLUMNS = [
     "anchor_timestamp",
     "anchor_timeframe",
     "anchor_date",
+    "anchor_iso_week",
     "month",
     "session",
     "candidate_source_type",
@@ -97,6 +118,7 @@ MANUAL_LABEL_COLUMNS = [
     "entry_level_price",
     "entry_level_is_heuristic",
     "volatility_bucket",
+    "daily_atr_at_anchor",
     "chart_path",
     "html_path",
     "execution_data_status",
@@ -162,6 +184,7 @@ class VisualReviewPackConfig:
     max_samples: int = 300
     min_date_range_days: int = 180
     max_samples_per_day: int = 5
+    max_samples_per_week: int = 20
     min_sample_spacing_minutes: int = 240
     target_session_balance: bool = False
     include_candidate_windows: bool = True
@@ -191,8 +214,10 @@ class VisualReviewSample:
     direction_confidence: str = "UNKNOWN"
     session: str = "OTHER"
     anchor_date: str = ""
+    anchor_iso_week: str = ""
     month: str = ""
     volatility_bucket: str = "UNKNOWN"
+    daily_atr_at_anchor: float | None = None
     limitations: tuple[str, ...] = field(default_factory=tuple)
     sweep_level: float | None = None
     number_theory_level: float | None = None
@@ -231,6 +256,7 @@ class VisualReviewSample:
                 "anchor_timestamp": self.anchor_timestamp.isoformat(),
                 "anchor_timeframe": self.anchor_timeframe,
                 "anchor_date": self.anchor_date or self.anchor_timestamp.date().isoformat(),
+                "anchor_iso_week": self.anchor_iso_week or _week_key(self.anchor_timestamp),
                 "month": self.month or self.anchor_timestamp.strftime("%Y-%m"),
                 "session": self.session,
                 "candidate_source_type": self.candidate_source_type,
@@ -239,6 +265,7 @@ class VisualReviewSample:
                 "entry_level_price": self.entry_level_price if self.entry_level_price is not None else "",
                 "entry_level_is_heuristic": self.entry_level_is_heuristic,
                 "volatility_bucket": self.volatility_bucket,
+                "daily_atr_at_anchor": self.daily_atr_at_anchor if self.daily_atr_at_anchor is not None else "",
                 "chart_path": self.chart_path,
                 "html_path": self.html_path,
                 "execution_data_status": self.execution_data_status,
@@ -407,9 +434,10 @@ def _select_by_regime_constraints(
     max_samples: int,
     *,
     max_samples_per_day: int,
+    max_samples_per_week: int,
     min_sample_spacing_minutes: int,
     target_session_balance: bool,
-) -> tuple[list[VisualReviewSample], int, int]:
+) -> tuple[list[VisualReviewSample], int, int, int]:
     """Select samples across months/sources without using forward outcomes."""
     buckets: dict[tuple[str, str, str], list[VisualReviewSample]] = defaultdict(list)
     for sample in sorted(candidates, key=lambda item: item.anchor_timestamp):
@@ -417,8 +445,10 @@ def _select_by_regime_constraints(
     ordered_keys = sorted(buckets)
     selected: list[VisualReviewSample] = []
     per_day: Counter[str] = Counter()
+    per_week: Counter[str] = Counter()
     skipped_spacing = 0
     skipped_max_per_day = 0
+    skipped_max_per_week = 0
     while len(selected) < max_samples and any(buckets.values()):
         made_progress = False
         for key in ordered_keys:
@@ -428,20 +458,25 @@ def _select_by_regime_constraints(
             while bucket:
                 sample = bucket.pop(0)
                 day = _date_key(sample.anchor_timestamp)
+                week = _week_key(sample.anchor_timestamp)
                 if max_samples_per_day > 0 and per_day[day] >= max_samples_per_day:
                     skipped_max_per_day += 1
+                    continue
+                if max_samples_per_week > 0 and per_week[week] >= max_samples_per_week:
+                    skipped_max_per_week += 1
                     continue
                 if not _passes_spacing(sample, selected, min_sample_spacing_minutes):
                     skipped_spacing += 1
                     continue
                 selected.append(sample)
                 per_day[day] += 1
+                per_week[week] += 1
                 made_progress = True
                 break
             buckets[key] = bucket
         if not made_progress:
             break
-    return selected[:max_samples], skipped_spacing, skipped_max_per_day
+    return selected[:max_samples], skipped_spacing, skipped_max_per_day, skipped_max_per_week
 
 
 def _prefer_reviewable_samples(
@@ -449,11 +484,12 @@ def _prefer_reviewable_samples(
     max_samples: int,
     *,
     max_samples_per_day: int = 5,
+    max_samples_per_week: int = 20,
     min_sample_spacing_minutes: int = 240,
     target_session_balance: bool = False,
     allow_weak_m1_only: bool = False,
     include_insufficient_execution_debug: bool = False,
-) -> tuple[list[VisualReviewSample], int, int, int]:
+) -> tuple[list[VisualReviewSample], int, int, int, int]:
     ordered: list[VisualReviewSample] = []
     statuses = [REVIEWABLE_M1_M5]
     if allow_weak_m1_only:
@@ -463,10 +499,11 @@ def _prefer_reviewable_samples(
     for status in statuses:
         group = [sample for sample in samples if sample.execution_data_status == status]
         ordered.extend(sorted(group, key=lambda item: (_month_key(item.anchor_timestamp), _coverage_rank(item.execution_data_status), item.anchor_timestamp)))
-    selected, skipped_spacing, skipped_max_per_day = _select_by_regime_constraints(
+    selected, skipped_spacing, skipped_max_per_day, skipped_max_per_week = _select_by_regime_constraints(
         ordered,
         max_samples,
         max_samples_per_day=max_samples_per_day,
+        max_samples_per_week=max_samples_per_week,
         min_sample_spacing_minutes=min_sample_spacing_minutes,
         target_session_balance=target_session_balance,
     )
@@ -476,7 +513,7 @@ def _prefer_reviewable_samples(
         for sample in samples
         if sample.execution_data_status != REVIEWABLE_M1_M5 and id(sample) not in selected_ids
     )
-    return selected, skipped_insufficient, skipped_spacing, skipped_max_per_day
+    return selected, skipped_insufficient, skipped_spacing, skipped_max_per_day, skipped_max_per_week
 
 
 def _first(row: Mapping[str, Any], names: Sequence[str]) -> Any:
@@ -670,45 +707,80 @@ def _sample_time_bounds(samples: Sequence[VisualReviewSample]) -> tuple[str | No
     return dates[0].isoformat(), dates[-1].isoformat(), coverage_days
 
 
-def _daily_range_map(frames: Mapping[str, pd.DataFrame]) -> dict[str, float]:
+def _daily_ohlc_frame(frames: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     source = _normalised_ohlc(frames.get("D1", pd.DataFrame()))
     if not source.empty:
-        return {
-            pd.Timestamp(row.time).date().isoformat(): float(row.high) - float(row.low)
-            for row in source.itertuples(index=False)
-        }
+        out = source.copy()
+        out["date"] = out["time"].dt.date.astype(str)
+        return out[["date", "high", "low", "close"]].drop_duplicates("date").reset_index(drop=True)
     for timeframe in ("H1", "M15"):
         source = _normalised_ohlc(frames.get(timeframe, pd.DataFrame()))
         if source.empty:
             continue
         source["date"] = source["time"].dt.date.astype(str)
-        grouped = source.groupby("date").agg(high=("high", "max"), low=("low", "min"))
-        return {str(date): float(row.high) - float(row.low) for date, row in grouped.iterrows()}
-    return {}
+        grouped = source.groupby("date").agg(high=("high", "max"), low=("low", "min"), close=("close", "last"))
+        out = grouped.reset_index()
+        return out[["date", "high", "low", "close"]]
+    return pd.DataFrame()
 
 
-def _volatility_bucket_map(frames: Mapping[str, pd.DataFrame], limitations: list[str]) -> dict[str, str]:
-    daily_ranges = _daily_range_map(frames)
-    if not daily_ranges:
-        limitations.append("VOLATILITY_BUCKETS_UNAVAILABLE")
-        return {}
-    values = pd.Series(list(daily_ranges.values()), dtype="float64").dropna()
+def _daily_atr14_context(
+    frames: Mapping[str, pd.DataFrame],
+    limitations: list[str],
+    *,
+    eligible_start: datetime | None = None,
+    eligible_end: datetime | None = None,
+) -> tuple[dict[str, str], dict[str, float], float | None, float | None]:
+    daily = _daily_ohlc_frame(frames)
+    if daily.empty:
+        limitations.append("VOLATILITY_ATR14_UNAVAILABLE")
+        return {}, {}, None, None
+    daily = daily.copy()
+    daily["date"] = pd.to_datetime(daily["date"], utc=True, errors="coerce")
+    for column in ("high", "low", "close"):
+        daily[column] = pd.to_numeric(daily[column], errors="coerce")
+    daily = daily.dropna(subset=["date", "high", "low", "close"]).sort_values("date").reset_index(drop=True)
+    if daily.empty:
+        limitations.append("VOLATILITY_ATR14_UNAVAILABLE")
+        return {}, {}, None, None
+    previous_close = daily["close"].shift(1)
+    true_range = pd.concat(
+        [
+            daily["high"] - daily["low"],
+            (daily["high"] - previous_close).abs(),
+            (daily["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    daily["atr14"] = true_range.rolling(window=14, min_periods=1).mean()
+    daily["atr14_for_anchor"] = daily["atr14"].shift(1)
+    daily["date_key"] = daily["date"].dt.date.astype(str)
+    eligible = daily.copy()
+    if eligible_start is not None:
+        eligible = eligible[eligible["date"] >= pd.Timestamp(eligible_start.date(), tz="UTC")]
+    if eligible_end is not None:
+        eligible = eligible[eligible["date"] <= pd.Timestamp(eligible_end.date(), tz="UTC")]
+    values = eligible["atr14_for_anchor"].dropna().astype(float)
     if values.empty:
-        limitations.append("VOLATILITY_BUCKETS_UNAVAILABLE")
-        return {}
-    if len(values) < 3 or float(values.max()) == float(values.min()):
-        return {date: "MID_VOLATILITY" for date in daily_ranges}
-    low_cut = float(values.quantile(0.33))
-    high_cut = float(values.quantile(0.67))
+        limitations.append("VOLATILITY_ATR14_UNAVAILABLE_FOR_ELIGIBLE_RANGE")
+        return {}, {}, None, None
+    low_cut = float(values.quantile(0.25))
+    high_cut = float(values.quantile(0.75))
     buckets: dict[str, str] = {}
-    for date, value in daily_ranges.items():
-        if value <= low_cut:
-            buckets[date] = "LOW_VOLATILITY"
+    atr_by_date: dict[str, float] = {}
+    for row in daily.itertuples(index=False):
+        value = _parse_float(getattr(row, "atr14_for_anchor", None))
+        date = str(getattr(row, "date_key"))
+        if value is None:
+            continue
+        atr_by_date[date] = round(float(value), 4)
+        if value < low_cut:
+            buckets[date] = "LOW"
         elif value >= high_cut:
-            buckets[date] = "HIGH_VOLATILITY"
+            buckets[date] = "HIGH"
         else:
-            buckets[date] = "MID_VOLATILITY"
-    return buckets
+            buckets[date] = "MID"
+    return buckets, atr_by_date, round(low_cut, 4), round(high_cut, 4)
 
 
 def _append_reason(sample: VisualReviewSample, reason: str) -> None:
@@ -720,17 +792,22 @@ def _annotate_sample_metadata(
     frames: Mapping[str, pd.DataFrame],
     cfg: VisualReviewPackConfig,
     volatility_buckets: Mapping[str, str],
+    daily_atr_by_date: Mapping[str, float],
 ) -> None:
     sample.anchor_date = _date_key(sample.anchor_timestamp)
+    sample.anchor_iso_week = _week_key(sample.anchor_timestamp)
     sample.month = _month_key(sample.anchor_timestamp)
     sample.session = classify_session(sample.anchor_timestamp)
     sample.volatility_bucket = volatility_buckets.get(sample.anchor_date, "UNKNOWN")
+    sample.daily_atr_at_anchor = daily_atr_by_date.get(sample.anchor_date)
     sample.raw_metadata.update(
         {
             "session": sample.session,
             "anchor_date": sample.anchor_date,
+            "anchor_iso_week": sample.anchor_iso_week,
             "month": sample.month,
             "volatility_bucket": sample.volatility_bucket,
+            "daily_atr_at_anchor": sample.daily_atr_at_anchor if sample.daily_atr_at_anchor is not None else "",
         }
     )
 
@@ -799,9 +876,10 @@ def _annotate_samples_metadata(
     frames: Mapping[str, pd.DataFrame],
     cfg: VisualReviewPackConfig,
     volatility_buckets: Mapping[str, str],
+    daily_atr_by_date: Mapping[str, float],
 ) -> None:
     for sample in samples:
-        _annotate_sample_metadata(sample, frames, cfg, volatility_buckets)
+        _annotate_sample_metadata(sample, frames, cfg, volatility_buckets, daily_atr_by_date)
 
 
 def _session_reason(ts: pd.Timestamp, range_pips: float, median_range_pips: float) -> str | None:
@@ -1109,6 +1187,7 @@ def _metadata_table(sample: VisualReviewSample) -> str:
         "anchor_timestamp": sample.anchor_timestamp.isoformat(),
         "anchor_timeframe": sample.anchor_timeframe,
         "anchor_date": sample.anchor_date,
+        "anchor_iso_week": sample.anchor_iso_week,
         "month": sample.month,
         "session": sample.session,
         "candidate_source_type": sample.candidate_source_type,
@@ -1117,6 +1196,7 @@ def _metadata_table(sample: VisualReviewSample) -> str:
         "entry_level_price": sample.entry_level_price,
         "entry_level_is_heuristic": sample.entry_level_is_heuristic,
         "volatility_bucket": sample.volatility_bucket,
+        "daily_atr_at_anchor": sample.daily_atr_at_anchor,
         "execution_data_status": sample.execution_data_status,
         "m1_candles_count": sample.m1_candles_count,
         "m5_candles_count": sample.m5_candles_count,
@@ -1238,6 +1318,7 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
             "total_samples": summary.get("total_samples"),
             "date_range_coverage_days": summary.get("date_range_coverage_days"),
             "samples_per_day_max_observed": summary.get("samples_per_day_max_observed"),
+            "samples_per_week_max_observed": summary.get("samples_per_week_max_observed"),
             "reviewable_samples": summary.get("reviewable_samples"),
             "reviewable_m1_m5_count": summary.get("reviewable_m1_m5_count"),
             "insufficient_execution_data_count": summary.get("insufficient_execution_data_count"),
@@ -1245,6 +1326,9 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
             "entry_level_source_counts": summary.get("entry_level_source_counts"),
             "session_distribution": summary.get("session_distribution"),
             "volatility_bucket_distribution": summary.get("volatility_bucket_distribution"),
+            "atr_p25": summary.get("atr_p25"),
+            "atr_p75": summary.get("atr_p75"),
+            "volatility_imbalance_warning": summary.get("volatility_imbalance_warning"),
             "expanded_pack_generation_verdict": summary.get("expanded_pack_generation_verdict"),
             "source_modes_used": ", ".join(summary.get("source_modes_used", [])),
             "candidate_windows_generated": summary.get("candidate_windows_generated"),
@@ -1263,7 +1347,7 @@ def _write_index(samples: Sequence[VisualReviewSample], summary: Mapping[str, An
 <p class="warning">Not validation. Not live. Not profitability evidence. Expanded candidate windows are sampled for diagnostic replay and manual review only.</p>
 {coverage_warning}
 <div class="summary">{summary_boxes}</div>
-<p><a href="manual_labels_template.csv">manual_labels_template.csv</a> | <a href="README_manual_review.md">README_manual_review.md</a> | <a href="review_pack_summary.json">review_pack_summary.json</a></p>
+<p><a href="manual_labels_template.csv">manual_labels_template.csv</a> | <a href="README_manual_review.md">README_manual_review.md</a> | <a href="decision_criteria.md">decision_criteria.md</a> | <a href="review_pack_summary.json">review_pack_summary.json</a></p>
 <table>
   <thead>
     <tr><th>sample_id</th><th>source_mode</th><th>anchor timestamp</th><th>direction guess</th><th>candidate source</th><th>entry source</th><th>session</th><th>month</th><th>volatility</th><th>execution_data_status</th><th>M1 count</th><th>M5 count</th><th>M15 count</th><th>candidate reason codes</th><th>chart</th><th>sample page</th><th>recommended manual labels to fill</th></tr>
@@ -1354,6 +1438,10 @@ def _write_summary(summary: Mapping[str, Any], output_dir: Path) -> None:
     (output_dir / "review_pack_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
 
+def _write_decision_criteria(output_dir: Path) -> None:
+    (output_dir / "decision_criteria.md").write_text(PRE_REGISTERED_DECISION_CRITERIA_TEXT + "\n", encoding="utf-8")
+
+
 def _count_attr(samples: Sequence[VisualReviewSample], attr: str) -> dict[str, int]:
     counts: Counter[str] = Counter()
     for sample in samples:
@@ -1376,7 +1464,7 @@ def _month_distribution(samples: Sequence[VisualReviewSample]) -> dict[str, int]
 
 
 def _week_distribution(samples: Sequence[VisualReviewSample]) -> dict[str, int]:
-    return dict(sorted(Counter(_week_key(sample.anchor_timestamp) for sample in samples).items()))
+    return dict(sorted(Counter(sample.anchor_iso_week or _week_key(sample.anchor_timestamp) for sample in samples).items()))
 
 
 def _max_samples_per_day_observed(samples: Sequence[VisualReviewSample]) -> int:
@@ -1384,6 +1472,54 @@ def _max_samples_per_day_observed(samples: Sequence[VisualReviewSample]) -> int:
         return 0
     counts = Counter(_date_key(sample.anchor_timestamp) for sample in samples)
     return max(counts.values())
+
+
+def _max_samples_per_week_observed(samples: Sequence[VisualReviewSample]) -> int:
+    if not samples:
+        return 0
+    counts = Counter(sample.anchor_iso_week or _week_key(sample.anchor_timestamp) for sample in samples)
+    return max(counts.values())
+
+
+def _top_counts(counter: Mapping[str, int], limit: int = 10) -> dict[str, int]:
+    return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0]))[:limit])
+
+
+def _day_distribution(samples: Sequence[VisualReviewSample]) -> dict[str, int]:
+    return dict(sorted(Counter(sample.anchor_date or _date_key(sample.anchor_timestamp) for sample in samples).items()))
+
+
+def _volatility_imbalance_warning(samples: Sequence[VisualReviewSample]) -> bool:
+    if not samples:
+        return False
+    counts = Counter(sample.volatility_bucket for sample in samples)
+    total = len(samples)
+    return any((counts.get(bucket, 0) / total) < 0.15 for bucket in ("LOW", "MID", "HIGH"))
+
+
+def _anti_lookahead_guarantees_by_source() -> dict[str, list[str]]:
+    return {
+        ROUND_LEVEL: [
+            "Uses number-theory level metadata derived from anchor or pre-anchor price only.",
+            "Does not use post-anchor movement to decide sample inclusion.",
+        ],
+        SWEEP_EXTREME: [
+            "Uses only [anchor - 60m, anchor) candles for sweep validation.",
+            "Excludes the anchor candle from sweep validation.",
+            "Excludes all post-anchor candles from sweep validation.",
+            "Requires sweep candle at least 5 minutes before anchor.",
+        ],
+        SWEPT_LIQUIDITY_LEVEL: [
+            "Uses explicit swept level metadata from the pre-anchor candidate definition only.",
+            "Does not use post-anchor movement to decide sample inclusion.",
+        ],
+        MULTI_TF_LIQUIDITY_CLUSTER: [
+            "Unsupported in this branch; no rows are labeled this way unless a future lookahead-safe detector is added.",
+        ],
+        UNKNOWN_ENTRY_SOURCE: [
+            "No defensible source is inferred; sample remains unknown instead of inventing metadata.",
+        ],
+    }
 
 
 def _expanded_pack_generation_verdict(
@@ -1394,31 +1530,31 @@ def _expanded_pack_generation_verdict(
     local_data_coverage_days: int,
 ) -> tuple[str, str]:
     if not samples:
-        return "INCONCLUSIVE_DATA_QUALITY_LIMITATION", "NO_EXPANDED_CANDIDATE_SAMPLES_GENERATED"
+        return "INCONCLUSIVE", "NO_EXPANDED_CANDIDATE_SAMPLES_GENERATED"
     if local_data_coverage_days < cfg.min_date_range_days:
         return (
-            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            "INCONCLUSIVE",
             f"LOCAL_DATA_COVERAGE_{local_data_coverage_days}_DAYS_BELOW_REQUESTED_{cfg.min_date_range_days}",
         )
     if date_range_coverage_days < cfg.min_date_range_days:
         return (
-            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            "INCONCLUSIVE",
             f"SAMPLE_DATE_RANGE_{date_range_coverage_days}_DAYS_BELOW_REQUESTED_{cfg.min_date_range_days}",
         )
     if len(samples) < cfg.max_samples:
         return (
-            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            "INCONCLUSIVE",
             f"ONLY_{len(samples)}_OF_{cfg.max_samples}_REQUESTED_SAMPLES_GENERATED_UNDER_SPACING_AND_COVERAGE_RULES",
         )
     source_counts = Counter(sample.entry_level_source or UNKNOWN_ENTRY_SOURCE for sample in samples)
     useful_sources = {source: count for source, count in source_counts.items() if source != UNKNOWN_ENTRY_SOURCE and count >= 80}
     if not useful_sources:
         return (
-            "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+            "INCONCLUSIVE",
             "NO_ENTRY_SOURCE_GROUP_REACHED_USEFUL_SOURCE_MIN_CANDIDATE_N_80",
         )
     return (
-        "INCONCLUSIVE_DATA_QUALITY_LIMITATION",
+        "INCONCLUSIVE",
         "OBJECTIVE_REPLAY_AND_MATCHED_CONTROLS_REQUIRED_TO_APPLY_PRIMARY_DECISION_CRITERIA",
     )
 
@@ -1438,6 +1574,7 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         max_samples=max(0, int(cfg.max_samples)),
         min_date_range_days=max(0, int(cfg.min_date_range_days)),
         max_samples_per_day=max(1, int(cfg.max_samples_per_day)),
+        max_samples_per_week=max(0, int(cfg.max_samples_per_week)),
         min_sample_spacing_minutes=max(0, int(cfg.min_sample_spacing_minutes)),
         target_session_balance=bool(cfg.target_session_balance),
         include_candidate_windows=cfg.include_candidate_windows,
@@ -1455,7 +1592,12 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
     frames = _load_market_frames(normalized_cfg, limitations)
     all_data_start, all_data_end, all_data_coverage_days = _frame_time_bounds(frames)
     data_start, data_end, local_data_coverage_days = _required_execution_time_bounds(frames)
-    volatility_buckets = _volatility_bucket_map(frames, limitations)
+    volatility_buckets, daily_atr_by_date, atr_p25, atr_p75 = _daily_atr14_context(
+        frames,
+        limitations,
+        eligible_start=data_start,
+        eligible_end=data_end,
+    )
     samples: list[VisualReviewSample] = []
     trades_loaded = 0
     audit_rows_loaded = 0
@@ -1474,6 +1616,7 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
             max_samples=normalized_cfg.max_samples,
             min_date_range_days=normalized_cfg.min_date_range_days,
             max_samples_per_day=normalized_cfg.max_samples_per_day,
+            max_samples_per_week=normalized_cfg.max_samples_per_week,
             min_sample_spacing_minutes=normalized_cfg.min_sample_spacing_minutes,
             target_session_balance=normalized_cfg.target_session_balance,
             include_candidate_windows=True,
@@ -1485,13 +1628,14 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         )
         samples.extend(_candidate_window_samples(candidate_cfg, frames, limitations))
 
-    _annotate_samples_metadata(samples, frames, normalized_cfg, volatility_buckets)
+    _annotate_samples_metadata(samples, frames, normalized_cfg, volatility_buckets, daily_atr_by_date)
     _set_all_execution_coverage(samples, frames)
     raw_samples_count = len(samples)
-    samples, skipped_missing_ltf, skipped_duplicate_spacing, skipped_max_per_day = _prefer_reviewable_samples(
+    samples, skipped_missing_ltf, skipped_duplicate_spacing, skipped_max_per_day, skipped_max_per_week = _prefer_reviewable_samples(
         samples,
         normalized_cfg.max_samples,
         max_samples_per_day=normalized_cfg.max_samples_per_day,
+        max_samples_per_week=normalized_cfg.max_samples_per_week,
         min_sample_spacing_minutes=normalized_cfg.min_sample_spacing_minutes,
         target_session_balance=normalized_cfg.target_session_balance,
         allow_weak_m1_only=normalized_cfg.allow_weak_m1_only,
@@ -1530,7 +1674,11 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         date_range_coverage_days=date_range_coverage_days,
         local_data_coverage_days=local_data_coverage_days,
     )
+    day_distribution = _day_distribution(samples)
+    week_distribution = _week_distribution(samples)
+    volatility_distribution = _count_attr(samples, "volatility_bucket")
     _write_manual_template(samples, output_dir)
+    _write_decision_criteria(output_dir)
     discovered_trades_path = _discover_existing_path(normalized_cfg.trades_path, DEFAULT_TRADES_PATH)
     discovered_audit_path = _discover_existing_path(normalized_cfg.audit_path, DEFAULT_AUDIT_PATH)
     summary = {
@@ -1543,6 +1691,7 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "max_samples_requested": normalized_cfg.max_samples,
         "min_date_range_days_requested": normalized_cfg.min_date_range_days,
         "max_samples_per_day": normalized_cfg.max_samples_per_day,
+        "max_samples_per_week": normalized_cfg.max_samples_per_week,
         "min_sample_spacing_minutes": normalized_cfg.min_sample_spacing_minutes,
         "target_session_balance": normalized_cfg.target_session_balance,
         "allow_weak_m1_only": normalized_cfg.allow_weak_m1_only,
@@ -1550,6 +1699,12 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "date_range_start": date_range_start,
         "date_range_end": date_range_end,
         "date_range_coverage_days": date_range_coverage_days,
+        "date_range_coverage": {
+            "first_anchor": date_range_start,
+            "last_anchor": date_range_end,
+            "calendar_days_covered": date_range_coverage_days,
+            "meets_min_date_range_days": bool(date_range_coverage_days >= normalized_cfg.min_date_range_days),
+        },
         "local_data_range_start": data_start.isoformat() if data_start else None,
         "local_data_range_end": data_end.isoformat() if data_end else None,
         "local_data_coverage_days": local_data_coverage_days,
@@ -1557,25 +1712,38 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "all_loaded_data_range_end": all_data_end.isoformat() if all_data_end else None,
         "all_loaded_data_coverage_days": all_data_coverage_days,
         "samples_per_day_max_observed": _max_samples_per_day_observed(samples),
+        "samples_per_week_max_observed": _max_samples_per_week_observed(samples),
         "samples_per_month_distribution": _month_distribution(samples),
-        "samples_per_week_distribution": _week_distribution(samples),
+        "samples_per_week_distribution": week_distribution,
+        "per_day_sample_distribution_top_10": _top_counts(day_distribution),
+        "per_iso_week_sample_distribution_top_10": _top_counts(week_distribution),
         "candidate_source_counts": _count_attr(samples, "candidate_source_type"),
         "entry_level_source_counts": _count_attr(samples, "entry_level_source"),
         "candidate_source_counts_by_month": _nested_count(samples, "month", "candidate_source_type"),
         "session_distribution": _count_attr(samples, "session"),
         "session_distribution_by_month": _nested_count(samples, "month", "session"),
-        "volatility_bucket_distribution": _count_attr(samples, "volatility_bucket"),
+        "volatility_bucket_distribution": volatility_distribution,
+        "atr_p25": atr_p25,
+        "atr_p75": atr_p75,
+        "volatility_imbalance_warning": _volatility_imbalance_warning(samples),
         "candidate_source_counts_by_volatility_bucket": _nested_count(samples, "volatility_bucket", "candidate_source_type"),
         "session_counts_by_volatility_bucket": _nested_count(samples, "volatility_bucket", "session"),
         "direction_distribution": _count_attr(samples, "direction_guess"),
         "execution_data_status_counts": _count_attr(samples, "execution_data_status"),
         "m1_m5_full_coverage_count": reviewable_m1_m5_count,
+        "samples_attempted": raw_samples_count,
         "samples_skipped_missing_execution": skipped_missing_ltf,
         "samples_skipped_duplicate_spacing": skipped_duplicate_spacing,
         "samples_skipped_max_per_day": skipped_max_per_day,
+        "samples_skipped_max_per_day_cap": skipped_max_per_day,
+        "samples_skipped_max_per_week": skipped_max_per_week,
+        "samples_skipped_max_per_week_cap": skipped_max_per_week,
+        "samples_skipped_other": {},
         "samples_skipped_outside_date_range_goal": 0,
         "decision_criteria_preregistered": True,
         "decision_criteria": PRE_REGISTERED_DECISION_CRITERIA,
+        "pre_registered_decision_criteria": PRE_REGISTERED_DECISION_CRITERIA_TEXT,
+        "anti_lookahead_guarantees_by_source": _anti_lookahead_guarantees_by_source(),
         "expanded_pack_generation_verdict": generation_verdict,
         "expanded_pack_generation_verdict_reason": generation_verdict_reason,
         "objective_replay_required_before_final_decision": True,
@@ -1599,6 +1767,7 @@ def create_visual_review_pack(cfg: VisualReviewPackConfig) -> dict[str, Any]:
         "manual_label_template_path": str(output_dir / "manual_labels_template.csv"),
         "index_path": str(output_dir / "index.html"),
         "readme_path": str(output_dir / "README_manual_review.md"),
+        "decision_criteria_path": str(output_dir / "decision_criteria.md"),
         "limitations": sorted(set(limitations)),
         "safety": {
             "live_trading_enabled": False,

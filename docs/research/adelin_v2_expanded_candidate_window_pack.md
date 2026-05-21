@@ -24,11 +24,18 @@ The expanded generator does not enable Adelin live, send Telegram messages, call
 python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir data --output-dir backtests/reports/adelin_v2_expanded_candidate_window_pack --max-samples 300 --min-date-range-days 180 --max-samples-per-day 5 --min-sample-spacing-minutes 240 --dry-run
 ```
 
+With the default weekly guardrail:
+
+```powershell
+python scripts/create_adelin_v2_visual_review_pack.py --symbol XAUUSD --data-dir data --output-dir backtests/reports/adelin_v2_expanded_candidate_window_pack --max-samples 300 --min-date-range-days 180 --min-sample-spacing-minutes 240 --max-samples-per-day 5 --max-samples-per-week 20 --dry-run
+```
+
 ## Regime Rules
 
 - Request at least 180 calendar days of sample coverage when local data allows it.
 - Use full available data and report a limitation if local data contains less than 180 days.
 - Do not create more than 5 samples per day by default.
+- Do not create more than 20 samples per ISO week by default.
 - Keep candidate anchors at least 240 minutes apart by default.
 - Require M15 or H1 context, M5 reaction window, and M1 execution window by default.
 - Do not fake samples to fill the pack.
@@ -41,34 +48,58 @@ Candidate source, direction, and entry-level metadata are derived only from cand
 
 ## Volatility Buckets
 
-The generator uses a simple daily range bucket:
+The generator uses daily ATR(14) from data strictly up to the day before the anchor date.
 
-- bottom 33%: `LOW_VOLATILITY`,
-- middle 33%: `MID_VOLATILITY`,
-- top 33%: `HIGH_VOLATILITY`.
+- below the 25th percentile: `LOW`,
+- 25th to below 75th percentile: `MID`,
+- 75th percentile and above: `HIGH`.
 
-It uses D1 when available, otherwise daily high-low aggregation from H1 or M15. If volatility cannot be computed, the summary reports a limitation.
+It uses D1 when available, otherwise daily aggregation from H1 or M15. If ATR cannot be computed, the summary reports a limitation. The pack reports `atr_p25`, `atr_p75`, `daily_atr_at_anchor`, and `volatility_imbalance_warning`.
 
 ## Pre-Registered Decision Criteria
 
-Useful source group: candidate `N >= 80`.
+The criteria below are copied into `decision_criteria.md` and `review_pack_summary.json` before outcome replay. There should be no ad-hoc reinterpretation after seeing replay results.
 
-Continue detector refinement if at least one useful source meets one of:
+----- BEGIN PRE-REGISTERED CRITERIA -----
 
-- fast reaction rate >= matched control + `0.07`,
-- runner rate >= matched control + `0.05`,
-- fast SL20 rate <= matched control - `0.10` and fast reaction is no worse than matched control - `0.03`.
+CONTEXT:
+We will evaluate Adelin v2 candidate detector quality by comparing
+candidate metrics vs entry-source-matched + session-matched controls,
+stratified by entry source.
 
-Stop/archive if all useful sources are flat on fast reaction and runner behavior and candidate fast SL20 is not better, or if fast SL20 is worse by `0.05` or more on all useful sources.
+Required minimum sample sizes per source for inference:
+- SWEEP_EXTREME: candidate N >= 80
+- ROUND_LEVEL:   candidate N >= 50
+- SWEPT_LIQUIDITY_LEVEL: candidate N >= 50
 
-Repeat expansion once only if a visible but underpowered effect appears and total generated candidates are below 300 due to data constraints.
+VERDICT = CONTINUE_DETECTOR_REFINEMENT
+IF AT LEAST ONE of the following holds on any source meeting min N:
+  (a) candidate fast_reaction_rate >= control fast_reaction_rate + 0.07
+  (b) candidate runner_rate (>= 500 pips MFE) >= control runner_rate + 0.05
+  (c) candidate fast_sl20_rate <= control fast_sl20_rate - 0.10
 
-Allowed verdict values:
+VERDICT = STOP_ARCHIVE_DETECTOR
+IF FOR ALL sources meeting min N:
+  |candidate_fast_reaction - control_fast_reaction| <= 0.03
+  AND candidate_fast_sl20_rate >= control_fast_sl20_rate - 0.03
+  AND candidate_runner_rate <= control_runner_rate + 0.02
 
-- `CONTINUE_DETECTOR_REFINEMENT`
-- `STOP_ARCHIVE_ADELIN_V2_DETECTOR`
-- `REPEAT_EXPANSION_ONCE`
-- `INCONCLUSIVE_DATA_QUALITY_LIMITATION`
+VERDICT = REPEAT_EXPANSION_ONCE
+IF effect size (|candidate - control|) >= 0.05 on at least one metric
+BUT no source has candidate N >= min N required.
+Maximum one repeat. Target on repeat: 500 samples.
+
+VERDICT = INCONCLUSIVE
+For any other case. Default action: pause Adelin v2, document, do not iterate.
+
+----- END PRE-REGISTERED CRITERIA -----
+
+Operationally:
+
+- `CONTINUE_DETECTOR_REFINEMENT`: continue detector implementation research only.
+- `STOP_ARCHIVE_DETECTOR`: archive this detector path unless new evidence is introduced externally.
+- `REPEAT_EXPANSION_ONCE`: repeat once at 500 samples, then stop using the same criteria.
+- `INCONCLUSIVE`: pause Adelin v2, document, and avoid further tuning.
 
 ## Next Step
 
