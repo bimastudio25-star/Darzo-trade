@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Adelin v3 Composite Candidate Pack</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; margin: 24px; color: #172033; }
+    .warning { border-left: 5px solid #b91c1c; background: #fff1f2; padding: 12px; font-weight: 700; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+    th, td { border: 1px solid #d6d3ca; padding: 7px; text-align: left; font-size: 13px; }
+    th { background: #eceee8; }
+  </style>
+</head>
+<body>
+  <h1>Adelin v3 Composite Candidate Pack</h1>
+  <p class="warning">Research-only candidate windows. Not signals, not validation, not live trading.</p>
+  <p>Composite detector: C1 sweepable D1/H1 swing, C2 reaction zone beyond sweep, C3 number confluence, C4 multi-timeframe liquidity confluence, C5 unambiguous reversal direction. No replay and no matched controls in this branch.</p>
+  <h2>Summary</h2>
+  <pre>{
+  &quot;anti_lookahead_guarantees&quot;: [
+    &quot;C1 D1/H1 swings require known_at &lt; anchor and configured age before anchor.&quot;,
+    &quot;Sweep candles must close at least 5 minutes before anchor.&quot;,
+    &quot;FVG/IFVG/volume crack/LVN sandwich use pre-anchor M5 candles only.&quot;,
+    &quot;IFVG retest requires the last completed pre-anchor M5 candle; anchor candle retests are rejected.&quot;,
+    &quot;24h volume profile uses [anchor - 24h, anchor) with completed pre-anchor candles.&quot;
+  ],
+  &quot;candidate_count&quot;: 31,
+  &quot;candidate_pack_verdict&quot;: &quot;READY_FOR_MATCHED_CONTROL_REPLAY&quot;,
+  &quot;direction_counts&quot;: {
+    &quot;LONG&quot;: 19,
+    &quot;SHORT&quot;: 12
+  },
+  &quot;dry_run&quot;: true,
+  &quot;limitations&quot;: [
+    &quot;Deterministic proxies approximate discretionary Adelin v3 judgment.&quot;,
+    &quot;Matched-control replay is intentionally deferred.&quot;,
+    &quot;No thresholds are optimized in this branch.&quot;
+  ],
+  &quot;liquidity_confluence_counts&quot;: {
+    &quot;CONFIG_A_H4_INTERNAL_M1_EXTERNAL&quot;: 9,
+    &quot;CONFIG_A_H4_INTERNAL_M5_EXTERNAL&quot;: 6,
+    &quot;CONFIG_B_DAILY_M15_SWEEP&quot;: 16
+  },
+  &quot;output_dir&quot;: &quot;backtests\\reports\\adelin_v3_composite_candidate_pack&quot;,
+  &quot;pre_registered_decision_criteria&quot;: &quot;----- BEGIN PRE-REGISTERED V3 CRITERIA -----\n\nWhen a replay is run on Adelin v3 candidates with matched controls:\n\nVERDICT = CONTINUE_REFINEMENT\nIF any of (with N &gt;= 30 candidates):\n  (a) candidate fast_reaction_rate &gt;= control + 0.10\n  (b) candidate runner_rate &gt;= control + 0.07\n  (c) candidate fast_sl20_rate &lt;= control - 0.10\n\nVERDICT = STOP_ARCHIVE_V3\nIF for all metrics with N &gt;= 30:\n  |candidate - control| &lt;= 0.04\n\nVERDICT = INSUFFICIENT_SAMPLE\nIF N &lt; 30 candidates.\nDefault action: pause v3, no further iteration without a different hypothesis.\n\nVERDICT = INCONCLUSIVE\nOtherwise. Default action: pause.\n\n----- END PRE-REGISTERED V3 CRITERIA -----&quot;,
+  &quot;reaction_zone_counts&quot;: {
+    &quot;FVG&quot;: 12,
+    &quot;IFVG&quot;: 17,
+    &quot;LVN_SANDWICH&quot;: 2
+  },
+  &quot;recommended_next_step&quot;: &quot;Create feat/adelin-v3-candidate-pack-matched-control-replay and apply locked v3 criteria.&quot;,
+  &quot;rejection_counts&quot;: {
+    &quot;C1_OR_C3_NO_ELIGIBLE_AGED_ROUND_SWING&quot;: 8373,
+    &quot;C2_REACTION_ZONE_MISSING&quot;: 19006,
+    &quot;C4_MULTI_TF_CONFLUENCE_MISSING&quot;: 6521,
+    &quot;DUPLICATE_LEVEL_REACTION_DAY&quot;: 19,
+    &quot;MIN_SPACING_FILTER&quot;: 323
+  },
+  &quot;run_finished_at&quot;: &quot;2026-05-21T09:25:37.636093+00:00&quot;,
+  &quot;run_started_at&quot;: &quot;2026-05-21T09:13:33.817020+00:00&quot;,
+  &quot;safety&quot;: {
+    &quot;broker_execution_enabled&quot;: false,
+    &quot;data_modified&quot;: false,
+    &quot;live_trading_enabled&quot;: false,
+    &quot;order_execution_enabled&quot;: false,
+    &quot;strategy_2_touched&quot;: false,
+    &quot;strategy_3_touched&quot;: false,
+    &quot;telegram_enabled&quot;: false
+  },
+  &quot;session_counts&quot;: {
+    &quot;ASIA&quot;: 5,
+    &quot;ASIA_OPEN&quot;: 5,
+    &quot;LONDON&quot;: 4,
+    &quot;NEW_YORK&quot;: 6,
+    &quot;NEW_YORK_OPEN&quot;: 2,
+    &quot;OTHER&quot;: 9
+  },
+  &quot;source_counts&quot;: {
+    &quot;DAILY_SWING&quot;: 21,
+    &quot;H1_SWING&quot;: 10
+  },
+  &quot;symbol&quot;: &quot;XAUUSD&quot;,
+  &quot;time_ranges&quot;: {
+    &quot;D1&quot;: {
+      &quot;end&quot;: &quot;2026-05-19T00:00:00+00:00&quot;,
+      &quot;rows&quot;: &quot;127&quot;,
+      &quot;start&quot;: &quot;2025-11-19T00:00:00+00:00&quot;
+    },
+    &quot;H1&quot;: {
+      &quot;end&quot;: &quot;2026-05-19T18:00:00+00:00&quot;,
+      &quot;rows&quot;: &quot;2867&quot;,
+      &quot;start&quot;: &quot;2025-11-19T01:00:00+00:00&quot;
+    },
+    &quot;H4&quot;: {
+      &quot;end&quot;: &quot;2026-05-19T00:00:00+00:00&quot;,
+      &quot;rows&quot;: &quot;757&quot;,
+      &quot;start&quot;: &quot;2025-11-19T00:00:00+00:00&quot;
+    },
+    &quot;M1&quot;: {
+      &quot;end&quot;: &quot;2026-05-19T19:55:00+00:00&quot;,
+      &quot;rows&quot;: &quot;103776&quot;,
+      &quot;start&quot;: &quot;2026-01-29T16:19:00+00:00&quot;
+    },
+    &quot;M15&quot;: {
+      &quot;end&quot;: &quot;2026-05-19T19:30:00+00:00&quot;,
+      &quot;rows&quot;: &quot;11444&quot;,
+      &quot;start&quot;: &quot;2025-11-19T01:00:00+00:00&quot;
+    },
+    &quot;M5&quot;: {
+      &quot;end&quot;: &quot;2026-05-19T19:50:00+00:00&quot;,
+      &quot;rows&quot;: &quot;34273&quot;,
+      &quot;start&quot;: &quot;2025-11-19T01:00:00+00:00&quot;
+    }
+  }
+}</pre>
+  <h2>Candidates</h2>
+  <table>
+    <tr><th>sample</th><th>anchor</th><th>direction</th><th>C1</th><th>reaction</th><th>C4</th><th>session</th><th>html</th><th>svg</th></tr>
+    <tr><td>v3_sample_001</td><td>2025-11-27T13:25:00+00:00</td><td>SHORT</td><td>H1_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M5_EXTERNAL</td><td>NEW_YORK</td><td><a href="examples/v3_sample_001.html">html</a></td><td><a href="charts/v3_sample_001.svg">svg</a></td></tr><tr><td>v3_sample_002</td><td>2026-01-09T19:55:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>OTHER</td><td><a href="examples/v3_sample_002.html">html</a></td><td><a href="charts/v3_sample_002.svg">svg</a></td></tr><tr><td>v3_sample_003</td><td>2026-01-09T22:20:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>OTHER</td><td><a href="examples/v3_sample_003.html">html</a></td><td><a href="charts/v3_sample_003.svg">svg</a></td></tr><tr><td>v3_sample_004</td><td>2026-02-11T20:25:00+00:00</td><td>SHORT</td><td>H1_SWING</td><td>FVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>OTHER</td><td><a href="examples/v3_sample_004.html">html</a></td><td><a href="charts/v3_sample_004.svg">svg</a></td></tr><tr><td>v3_sample_005</td><td>2026-02-13T06:30:00+00:00</td><td>LONG</td><td>H1_SWING</td><td>FVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>ASIA</td><td><a href="examples/v3_sample_005.html">html</a></td><td><a href="charts/v3_sample_005.svg">svg</a></td></tr><tr><td>v3_sample_006</td><td>2026-02-18T02:20:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>ASIA_OPEN</td><td><a href="examples/v3_sample_006.html">html</a></td><td><a href="charts/v3_sample_006.svg">svg</a></td></tr><tr><td>v3_sample_007</td><td>2026-03-04T22:15:00+00:00</td><td>LONG</td><td>H1_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>OTHER</td><td><a href="examples/v3_sample_007.html">html</a></td><td><a href="charts/v3_sample_007.svg">svg</a></td></tr><tr><td>v3_sample_008</td><td>2026-03-06T02:35:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_A_H4_INTERNAL_M5_EXTERNAL</td><td>ASIA_OPEN</td><td><a href="examples/v3_sample_008.html">html</a></td><td><a href="charts/v3_sample_008.svg">svg</a></td></tr><tr><td>v3_sample_009</td><td>2026-03-06T14:40:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>NEW_YORK_OPEN</td><td><a href="examples/v3_sample_009.html">html</a></td><td><a href="charts/v3_sample_009.svg">svg</a></td></tr><tr><td>v3_sample_010</td><td>2026-03-16T07:45:00+00:00</td><td>SHORT</td><td>H1_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>LONDON</td><td><a href="examples/v3_sample_010.html">html</a></td><td><a href="charts/v3_sample_010.svg">svg</a></td></tr><tr><td>v3_sample_011</td><td>2026-03-16T16:30:00+00:00</td><td>LONG</td><td>H1_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M5_EXTERNAL</td><td>NEW_YORK</td><td><a href="examples/v3_sample_011.html">html</a></td><td><a href="charts/v3_sample_011.svg">svg</a></td></tr><tr><td>v3_sample_012</td><td>2026-03-19T04:15:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>LVN_SANDWICH</td><td>CONFIG_A_H4_INTERNAL_M5_EXTERNAL</td><td>ASIA</td><td><a href="examples/v3_sample_012.html">html</a></td><td><a href="charts/v3_sample_012.svg">svg</a></td></tr><tr><td>v3_sample_013</td><td>2026-03-23T11:45:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>LONDON</td><td><a href="examples/v3_sample_013.html">html</a></td><td><a href="charts/v3_sample_013.svg">svg</a></td></tr><tr><td>v3_sample_014</td><td>2026-03-31T08:20:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>LONDON</td><td><a href="examples/v3_sample_014.html">html</a></td><td><a href="charts/v3_sample_014.svg">svg</a></td></tr><tr><td>v3_sample_015</td><td>2026-04-17T22:50:00+00:00</td><td>LONG</td><td>H1_SWING</td><td>LVN_SANDWICH</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>OTHER</td><td><a href="examples/v3_sample_015.html">html</a></td><td><a href="charts/v3_sample_015.svg">svg</a></td></tr><tr><td>v3_sample_016</td><td>2026-04-20T18:00:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>OTHER</td><td><a href="examples/v3_sample_016.html">html</a></td><td><a href="charts/v3_sample_016.svg">svg</a></td></tr><tr><td>v3_sample_017</td><td>2026-04-22T02:35:00+00:00</td><td>LONG</td><td>H1_SWING</td><td>FVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>ASIA_OPEN</td><td><a href="examples/v3_sample_017.html">html</a></td><td><a href="charts/v3_sample_017.svg">svg</a></td></tr><tr><td>v3_sample_018</td><td>2026-04-22T21:30:00+00:00</td><td>LONG</td><td>H1_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M5_EXTERNAL</td><td>OTHER</td><td><a href="examples/v3_sample_018.html">html</a></td><td><a href="charts/v3_sample_018.svg">svg</a></td></tr><tr><td>v3_sample_019</td><td>2026-04-24T02:50:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>ASIA_OPEN</td><td><a href="examples/v3_sample_019.html">html</a></td><td><a href="charts/v3_sample_019.svg">svg</a></td></tr><tr><td>v3_sample_020</td><td>2026-04-27T17:00:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>NEW_YORK</td><td><a href="examples/v3_sample_020.html">html</a></td><td><a href="charts/v3_sample_020.svg">svg</a></td></tr><tr><td>v3_sample_021</td><td>2026-04-28T04:50:00+00:00</td><td>SHORT</td><td>H1_SWING</td><td>FVG</td><td>CONFIG_A_H4_INTERNAL_M5_EXTERNAL</td><td>ASIA</td><td><a href="examples/v3_sample_021.html">html</a></td><td><a href="charts/v3_sample_021.svg">svg</a></td></tr><tr><td>v3_sample_022</td><td>2026-04-30T03:05:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>ASIA</td><td><a href="examples/v3_sample_022.html">html</a></td><td><a href="charts/v3_sample_022.svg">svg</a></td></tr><tr><td>v3_sample_023</td><td>2026-05-06T22:50:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>OTHER</td><td><a href="examples/v3_sample_023.html">html</a></td><td><a href="charts/v3_sample_023.svg">svg</a></td></tr><tr><td>v3_sample_024</td><td>2026-05-08T02:35:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>ASIA_OPEN</td><td><a href="examples/v3_sample_024.html">html</a></td><td><a href="charts/v3_sample_024.svg">svg</a></td></tr><tr><td>v3_sample_025</td><td>2026-05-08T04:05:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>ASIA</td><td><a href="examples/v3_sample_025.html">html</a></td><td><a href="charts/v3_sample_025.svg">svg</a></td></tr><tr><td>v3_sample_026</td><td>2026-05-12T17:20:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>NEW_YORK</td><td><a href="examples/v3_sample_026.html">html</a></td><td><a href="charts/v3_sample_026.svg">svg</a></td></tr><tr><td>v3_sample_027</td><td>2026-05-13T07:05:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>LONDON</td><td><a href="examples/v3_sample_027.html">html</a></td><td><a href="charts/v3_sample_027.svg">svg</a></td></tr><tr><td>v3_sample_028</td><td>2026-05-13T13:45:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>NEW_YORK</td><td><a href="examples/v3_sample_028.html">html</a></td><td><a href="charts/v3_sample_028.svg">svg</a></td></tr><tr><td>v3_sample_029</td><td>2026-05-14T13:15:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>NEW_YORK</td><td><a href="examples/v3_sample_029.html">html</a></td><td><a href="charts/v3_sample_029.svg">svg</a></td></tr><tr><td>v3_sample_030</td><td>2026-05-14T15:50:00+00:00</td><td>LONG</td><td>DAILY_SWING</td><td>IFVG</td><td>CONFIG_A_H4_INTERNAL_M1_EXTERNAL</td><td>NEW_YORK_OPEN</td><td><a href="examples/v3_sample_030.html">html</a></td><td><a href="charts/v3_sample_030.svg">svg</a></td></tr><tr><td>v3_sample_031</td><td>2026-05-15T22:20:00+00:00</td><td>SHORT</td><td>DAILY_SWING</td><td>FVG</td><td>CONFIG_B_DAILY_M15_SWEEP</td><td>OTHER</td><td><a href="examples/v3_sample_031.html">html</a></td><td><a href="charts/v3_sample_031.svg">svg</a></td></tr>
+  </table>
+</body>
+</html>

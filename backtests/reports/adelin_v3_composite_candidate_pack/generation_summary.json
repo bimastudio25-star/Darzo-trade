@@ -1,0 +1,97 @@
+{
+  "anti_lookahead_guarantees": [
+    "C1 D1/H1 swings require known_at < anchor and configured age before anchor.",
+    "Sweep candles must close at least 5 minutes before anchor.",
+    "FVG/IFVG/volume crack/LVN sandwich use pre-anchor M5 candles only.",
+    "IFVG retest requires the last completed pre-anchor M5 candle; anchor candle retests are rejected.",
+    "24h volume profile uses [anchor - 24h, anchor) with completed pre-anchor candles."
+  ],
+  "candidate_count": 31,
+  "candidate_pack_verdict": "READY_FOR_MATCHED_CONTROL_REPLAY",
+  "direction_counts": {
+    "LONG": 19,
+    "SHORT": 12
+  },
+  "dry_run": true,
+  "limitations": [
+    "Deterministic proxies approximate discretionary Adelin v3 judgment.",
+    "Matched-control replay is intentionally deferred.",
+    "No thresholds are optimized in this branch."
+  ],
+  "liquidity_confluence_counts": {
+    "CONFIG_A_H4_INTERNAL_M1_EXTERNAL": 9,
+    "CONFIG_A_H4_INTERNAL_M5_EXTERNAL": 6,
+    "CONFIG_B_DAILY_M15_SWEEP": 16
+  },
+  "output_dir": "backtests\\reports\\adelin_v3_composite_candidate_pack",
+  "pre_registered_decision_criteria": "----- BEGIN PRE-REGISTERED V3 CRITERIA -----\n\nWhen a replay is run on Adelin v3 candidates with matched controls:\n\nVERDICT = CONTINUE_REFINEMENT\nIF any of (with N >= 30 candidates):\n  (a) candidate fast_reaction_rate >= control + 0.10\n  (b) candidate runner_rate >= control + 0.07\n  (c) candidate fast_sl20_rate <= control - 0.10\n\nVERDICT = STOP_ARCHIVE_V3\nIF for all metrics with N >= 30:\n  |candidate - control| <= 0.04\n\nVERDICT = INSUFFICIENT_SAMPLE\nIF N < 30 candidates.\nDefault action: pause v3, no further iteration without a different hypothesis.\n\nVERDICT = INCONCLUSIVE\nOtherwise. Default action: pause.\n\n----- END PRE-REGISTERED V3 CRITERIA -----",
+  "reaction_zone_counts": {
+    "FVG": 12,
+    "IFVG": 17,
+    "LVN_SANDWICH": 2
+  },
+  "recommended_next_step": "Create feat/adelin-v3-candidate-pack-matched-control-replay and apply locked v3 criteria.",
+  "rejection_counts": {
+    "C1_OR_C3_NO_ELIGIBLE_AGED_ROUND_SWING": 8373,
+    "C2_REACTION_ZONE_MISSING": 19006,
+    "C4_MULTI_TF_CONFLUENCE_MISSING": 6521,
+    "DUPLICATE_LEVEL_REACTION_DAY": 19,
+    "MIN_SPACING_FILTER": 323
+  },
+  "run_finished_at": "2026-05-21T09:25:37.636093+00:00",
+  "run_started_at": "2026-05-21T09:13:33.817020+00:00",
+  "safety": {
+    "broker_execution_enabled": false,
+    "data_modified": false,
+    "live_trading_enabled": false,
+    "order_execution_enabled": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "telegram_enabled": false
+  },
+  "session_counts": {
+    "ASIA": 5,
+    "ASIA_OPEN": 5,
+    "LONDON": 4,
+    "NEW_YORK": 6,
+    "NEW_YORK_OPEN": 2,
+    "OTHER": 9
+  },
+  "source_counts": {
+    "DAILY_SWING": 21,
+    "H1_SWING": 10
+  },
+  "symbol": "XAUUSD",
+  "time_ranges": {
+    "D1": {
+      "end": "2026-05-19T00:00:00+00:00",
+      "rows": "127",
+      "start": "2025-11-19T00:00:00+00:00"
+    },
+    "H1": {
+      "end": "2026-05-19T18:00:00+00:00",
+      "rows": "2867",
+      "start": "2025-11-19T01:00:00+00:00"
+    },
+    "H4": {
+      "end": "2026-05-19T00:00:00+00:00",
+      "rows": "757",
+      "start": "2025-11-19T00:00:00+00:00"
+    },
+    "M1": {
+      "end": "2026-05-19T19:55:00+00:00",
+      "rows": "103776",
+      "start": "2026-01-29T16:19:00+00:00"
+    },
+    "M15": {
+      "end": "2026-05-19T19:30:00+00:00",
+      "rows": "11444",
+      "start": "2025-11-19T01:00:00+00:00"
+    },
+    "M5": {
+      "end": "2026-05-19T19:50:00+00:00",
+      "rows": "34273",
+      "start": "2025-11-19T01:00:00+00:00"
+    }
+  }
+}
