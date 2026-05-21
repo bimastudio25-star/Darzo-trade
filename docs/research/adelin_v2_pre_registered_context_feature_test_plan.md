@@ -49,7 +49,8 @@ audit are eligible for primary future test specs:
 - FVG
 - IFVG
 - number theory
-- round levels
+- round levels, retained only as stratification metadata after the 004/005
+  overlap fix
 - wick/body behavior
 - displacement
 - time-of-day context
@@ -91,9 +92,18 @@ Structured specs were created here:
 
 Spec count: 10.
 
+Primary signal tests: 9.
+
+Stratification metadata specs: 1.
+
+Spec 004 and spec 005 no longer count as independent primary hypotheses.
+Human signoff was previously blocked by their overlap and can proceed only
+after this fix is committed and reviewed.
+
 Every spec includes:
 
 - `source_classification = MEASURABLE_NOW`
+- `role = PRIMARY_TEST` or `role = STRATIFICATION_METADATA_ONLY`
 - `execution_locked = true`
 - deterministic formula
 - pre-entry availability
@@ -106,6 +116,51 @@ Every spec includes:
 - required human signoff
 
 No spec uses continuation as a positive feature.
+
+## Numeric-level overlap correction
+
+Review found that the original 004 and 005 specs overlapped:
+
+- 004 tested numeric/number-theory proximity within 20 pips.
+- 005 tested round-level proximity within 10 pips.
+
+Because the 005 round-level grid was underspecified and likely a narrower
+subset of 004, the two specs were not independent primary hypotheses.
+
+Resolution: `DOWNGRADE_ONE_TO_STRATIFICATION`.
+
+Spec 004 final state:
+
+- test_id: `004`
+- feature_name: `NUMERIC_LEVEL_CONFLUENCE`
+- role: `PRIMARY_TEST`
+- frozen grid: XAUUSD price levels divisible by `10.00 USD`
+- examples: `4830.00`, `4900.00`, `4910.00`
+- pip conversion: `pip_factor = 10`, so `pips / 10 = USD`
+- threshold: `<=20 pips = 2.0 USD`
+- anti-overlap note: this is the only primary numeric-level proximity
+  hypothesis.
+
+Spec 005 final state:
+
+- test_id: `005`
+- feature_name: `tight_numeric_level_touch_band`
+- role: `STRATIFICATION_METADATA_ONLY`
+- `removed_from_primary_tests = true`
+- purpose: stratify spec 004 by distance band only
+- bands:
+  - `0-10 pips`
+  - `10-20 pips`
+  - `>20 pips`
+- not an independent signal hypothesis
+- not a standalone entry feature
+- not eligible for PASS as a standalone feature
+
+Forbidden interpretation:
+
+```text
+tight_numeric_level_touch_band must not be interpreted as an independent edge or standalone entry feature.
+```
 
 ## Future test families
 

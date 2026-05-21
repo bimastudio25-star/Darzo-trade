@@ -14,6 +14,8 @@ Execution remains locked until the reviewer approves or requests changes.
 - [ ] I confirm each feature has PASS/FAIL/KILL criteria.
 - [ ] I confirm sample-size gates are accepted.
 - [ ] I confirm continuation is not used as positive feature.
+- [ ] I confirm spec 004 `NUMERIC_LEVEL_CONFLUENCE` is the only primary numeric-level proximity hypothesis.
+- [ ] I confirm spec 005 `tight_numeric_level_touch_band` is stratification metadata only and is not an independent signal feature.
 - [ ] I confirm execution remains locked until signoff.
 
 ## Signature

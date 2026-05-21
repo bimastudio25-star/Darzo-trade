@@ -39,5 +39,34 @@
     "telegram_trade_alerts_enabled": false,
     "broker_execution_enabled": false,
     "order_execution_enabled": false
-  }
+  },
+  "primary_signal_test_count": 9,
+  "stratification_metadata_spec_count": 1,
+  "primary_tests_before_overlap_fix": 10,
+  "primary_tests_after_overlap_fix": 9,
+  "stratification_metadata_specs_before_overlap_fix": 0,
+  "stratification_metadata_specs_after_overlap_fix": 1,
+  "numeric_level_overlap_fix_applied": true,
+  "numeric_level_overlap_recommendation": "DOWNGRADE_ONE_TO_STRATIFICATION",
+  "spec_004_final": {
+    "test_id": "004",
+    "role": "PRIMARY_TEST",
+    "feature_name": "NUMERIC_LEVEL_CONFLUENCE",
+    "grid": "XAUUSD price levels divisible by 10.00 USD; examples 4830.00, 4900.00, 4910.00",
+    "threshold": "<=20 pips = 2.0 USD",
+    "pip_factor": 10
+  },
+  "spec_005_final": {
+    "test_id": "005",
+    "role": "STRATIFICATION_METADATA_ONLY",
+    "feature_name": "tight_numeric_level_touch_band",
+    "bands": [
+      "0-10 pips",
+      "10-20 pips",
+      ">20 pips"
+    ],
+    "removed_from_primary_tests": true
+  },
+  "human_signoff_previously_blocked_by_004_005_overlap": true,
+  "human_signoff_can_proceed_after_fix_review": true
 }
