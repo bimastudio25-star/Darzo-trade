@@ -1,0 +1,26 @@
+{
+  "schema_only": true,
+  "manual_examples_analyzed": false,
+  "screenshots_auto_labeled": false,
+  "ohlc_read": false,
+  "replay_run": false,
+  "matched_control_replay_run": false,
+  "phase_4_blocked": true,
+  "live_trading_enabled": false,
+  "telegram_enabled": false,
+  "broker_execution_enabled": false,
+  "profitability_claim_made": false,
+  "strategy_validated": false,
+  "intended_use": "manual qualitative evidence collection",
+  "verdict_flags": [
+    "MANUAL_TRADE_EVIDENCE_SCHEMA_CREATED",
+    "QUALITATIVE_EVIDENCE_ONLY",
+    "NO_VALIDATION_CLAIM",
+    "NO_PHASE_4",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ],
+  "template_path": "backtests/reports/adelin_v2_manual_trade_evidence_schema/manual_trade_evidence_template.csv",
+  "schema_path": "backtests/reports/adelin_v2_manual_trade_evidence_schema/manual_trade_evidence_schema.json",
+  "validator_path": "scripts/validate_adelin_v2_manual_trade_evidence.py"
+}
