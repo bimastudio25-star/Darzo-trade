@@ -1,0 +1,22 @@
+{
+  "forbidden_fields_checked": [
+    "tp_hit",
+    "sl_hit",
+    "pnl",
+    "r_multiple",
+    "future_mfe",
+    "future_mae",
+    "max_favorable",
+    "max_adverse",
+    "post_entry",
+    "non_directional_max_move"
+  ],
+  "forbidden_fields_found": [],
+  "leakage_passed": true,
+  "manual_cherry_pick_sources_found": [],
+  "non_directional_max_move_replay_used_as_feature_evidence": false,
+  "outcome_derived_thresholds_used": false,
+  "phase_4_or_matched_control_logic_used": false,
+  "post_entry_candles_used_for_h1_h2": false,
+  "post_entry_feature_usage_detected": false
+}

@@ -1,0 +1,20 @@
+{
+  "all_hard_minimums_met": true,
+  "chop_after_entry_n": 27,
+  "fast_failure_n": 112,
+  "fast_hard_minimum_met": true,
+  "good_fast_reaction_n": 47,
+  "good_hard_minimum_met": true,
+  "good_lte_10_gate_active": false,
+  "hard_minimum_fast_failure_n": 25,
+  "hard_minimum_good_fast_reaction_n": 11,
+  "hard_minimum_total_samples": 60,
+  "mixed_reaction_n": 11,
+  "phase_4_blocked": true,
+  "target_fast_failure_n": 40,
+  "target_good_fast_reaction_n": 20,
+  "target_total_samples": 80,
+  "targets_met": true,
+  "total_hard_minimum_met": true,
+  "total_samples": 197
+}

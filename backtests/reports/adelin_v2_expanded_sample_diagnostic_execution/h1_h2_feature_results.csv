@@ -1,0 +1,3 @@
+difference_good_minus_fast,effect_repeats_prior_direction,expected_repeat_direction,fast_failure_n,fast_failure_present,fast_failure_rate,feature_name,good_fast_reaction_n,good_fast_reaction_present,good_fast_reaction_rate,interpretation,phase_4_blocked,subset
+-0.299772,True,FAST_FAILURE_MORE_FREQUENT,112,86,0.767857,fvg_ifvg_near_20p,47,22,0.468085,descriptive_only_post_hoc_hypothesis_test,True,pooled
+-0.029825,False,GOOD_FAST_REACTION_MORE_FREQUENT,112,51,0.455357,liquidity_htf_recent_level,47,20,0.425532,descriptive_only_post_hoc_hypothesis_test,True,pooled

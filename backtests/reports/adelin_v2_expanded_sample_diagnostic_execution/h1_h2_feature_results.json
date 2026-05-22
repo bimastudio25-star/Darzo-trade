@@ -1,0 +1,32 @@
+[
+  {
+    "difference_good_minus_fast": -0.299772,
+    "effect_repeats_prior_direction": true,
+    "expected_repeat_direction": "FAST_FAILURE_MORE_FREQUENT",
+    "fast_failure_n": 112,
+    "fast_failure_present": 86,
+    "fast_failure_rate": 0.767857,
+    "feature_name": "fvg_ifvg_near_20p",
+    "good_fast_reaction_n": 47,
+    "good_fast_reaction_present": 22,
+    "good_fast_reaction_rate": 0.468085,
+    "interpretation": "descriptive_only_post_hoc_hypothesis_test",
+    "phase_4_blocked": true,
+    "subset": "pooled"
+  },
+  {
+    "difference_good_minus_fast": -0.029825,
+    "effect_repeats_prior_direction": false,
+    "expected_repeat_direction": "GOOD_FAST_REACTION_MORE_FREQUENT",
+    "fast_failure_n": 112,
+    "fast_failure_present": 51,
+    "fast_failure_rate": 0.455357,
+    "feature_name": "liquidity_htf_recent_level",
+    "good_fast_reaction_n": 47,
+    "good_fast_reaction_present": 20,
+    "good_fast_reaction_rate": 0.425532,
+    "interpretation": "descriptive_only_post_hoc_hypothesis_test",
+    "phase_4_blocked": true,
+    "subset": "pooled"
+  }
+]

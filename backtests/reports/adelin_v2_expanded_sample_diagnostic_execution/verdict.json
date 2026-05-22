@@ -1,0 +1,24 @@
+{
+  "allowed_next_action": "review_results_and_keep_phase_4_blocked",
+  "broker_execution_enabled": false,
+  "deployability_claim_made": false,
+  "edge_claim_made": false,
+  "final_verdict": "HYPOTHESES_FAIL_TO_REPEAT",
+  "live_trading_enabled": false,
+  "matched_control_replay_run": false,
+  "orders_enabled": false,
+  "phase_4_blocked": true,
+  "profitability_claim_made": false,
+  "runtime_logic_modified": false,
+  "telegram_enabled": false,
+  "verdict_flags": [
+    "EXPANDED_SAMPLE_DIAGNOSTIC_EXECUTED",
+    "POST_HOC_HYPOTHESES_TESTED_NOT_VALIDATED",
+    "PHASE_4_STILL_BLOCKED",
+    "NO_MATCHED_CONTROL_REPLAY",
+    "NO_LIVE_DEPLOYMENT_DECISION",
+    "NO_PROFITABILITY_CLAIM",
+    "ADELIN_REMAINS_RESEARCH_ONLY"
+  ],
+  "verdict_reason": "At least one frozen primary hypothesis failed to repeat directionally."
+}

@@ -1,0 +1,17 @@
+{
+  "confidence_counts": {
+    "2": 85,
+    "3": 112
+  },
+  "excluded_sample_count": 103,
+  "group_counts": {
+    "CHOP_AFTER_ENTRY": 27,
+    "FAST_FAILURE": 112,
+    "GOOD_FAST_REACTION": 47,
+    "MIXED_REACTION": 11
+  },
+  "sample_sources_used": [
+    "EXISTING_EXPANDED_OBJECTIVE_REPLAY"
+  ],
+  "samples_collected_or_selected": 197
+}
