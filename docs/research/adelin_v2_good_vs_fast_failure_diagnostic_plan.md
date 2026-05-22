@@ -114,11 +114,26 @@ The later execution branch must not produce:
 
 Small-N warning: `GOOD_FAST_REACTION` has N=10 in the prior baseline. That is too small for strong conclusions. Any later output is diagnostic only.
 
+## Strict Minimum-N Gate
+
+The following minimum-N gate is locked before any GOOD vs FAST execution branch:
+
+- current `GOOD_FAST_REACTION` N: 10
+- current `FAST_FAILURE` N: 27
+- if any primary group has N <= 10, `STRONG_DESCRIPTIVE_SEPARATION` is forbidden
+- if the gate is tripped, Phase 4 remains blocked
+- if the gate is tripped, the strongest allowed verdict is `MIXED_AMBIGUOUS_SMALL_N`
+- an optional directional/descriptive note is allowed
+- allowed next actions are more sample collection or a bounded confirmatory diagnostic
+- Phase 4 matched-control replay is not an allowed next action
+
+There is no confidence-stratum exception. Even if a future comparison found a visually interesting confidence-3 subset, N <= 10 in any primary group still blocks `STRONG_DESCRIPTIVE_SEPARATION`.
+
 ## Decision Matrix
 
 ### A. Strong descriptive separation
 
-If one or two pre-entry features show strong descriptive separation and the same pattern appears in confidence-3-only sensitivity:
+If the minimum-N gate is not tripped, one or two pre-entry features show strong descriptive separation, and the same pattern appears in confidence-3-only sensitivity:
 
 - allow a small confirmatory diagnostic branch
 - still no Phase 4 unless reviewed
@@ -149,9 +164,10 @@ If separation requires post-entry interpretation:
 
 ### E. Mixed or ambiguous
 
-If separation is ambiguous due small N:
+If separation is ambiguous due small N, or any primary group has N <= 10:
 
-- require additional samples or stricter sample collection
+- allow only an optional directional/descriptive note
+- require more sample collection or a bounded confirmatory diagnostic
 - no Phase 4
 
 ## Phase 4 Gate

@@ -1,8 +1,32 @@
 {
+  "minimum_n_thresholds": {
+    "allowed_next_actions_when_gate_tripped": [
+      "more sample collection",
+      "bounded confirmatory diagnostic"
+    ],
+    "blocking_primary_groups": [
+      "GOOD_FAST_REACTION"
+    ],
+    "current_fast_failure_n": 27,
+    "current_good_fast_reaction_n": 10,
+    "forbidden_next_actions_when_gate_tripped": [
+      "Phase 4 matched-control replay",
+      "STRONG_DESCRIPTIVE_SEPARATION verdict"
+    ],
+    "gate_tripped": true,
+    "minimum_n_threshold": 10,
+    "no_exceptions": "No confidence-stratum exception is allowed. With N <= 10 in any primary group, STRONG_DESCRIPTIVE_SEPARATION remains blocked.",
+    "optional_directional_descriptive_note_allowed": true,
+    "phase_4_blocked": true,
+    "strong_descriptive_separation_forbidden": true,
+    "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+    "threshold_rule": "if any primary group has N <= minimum_n_threshold"
+  },
   "outcomes": [
     {
       "allowed_next_step": "allow a small confirmatory diagnostic branch",
-      "condition": "One or two pre-entry features show strong descriptive separation and the same pattern appears in confidence-3-only sensitivity.",
+      "blocked_when": "any primary group has N <= 10",
+      "condition": "Minimum-N gate is not tripped, one or two pre-entry features show strong descriptive separation, and the same pattern appears in confidence-3-only sensitivity.",
       "decision_code": "STRONG_DESCRIPTIVE_SEPARATION",
       "phase_4_status": "still blocked until reviewed"
     },
@@ -25,8 +49,8 @@
       "phase_4_status": "blocked"
     },
     {
-      "allowed_next_step": "require additional samples or stricter sample collection",
-      "condition": "Separation is ambiguous due small N.",
+      "allowed_next_step": "allow only an optional directional/descriptive note, more sample collection, or bounded confirmatory diagnostic; do not proceed to Phase 4",
+      "condition": "Separation is ambiguous due small N, or any primary group has N <= 10. When this minimum-N gate is tripped, this is the strongest allowed verdict.",
       "decision_code": "MIXED_AMBIGUOUS_SMALL_N",
       "phase_4_status": "blocked"
     }

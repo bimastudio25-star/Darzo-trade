@@ -7,6 +7,7 @@ from typing import Any
 
 from scripts.create_adelin_v2_good_vs_fast_failure_diagnostic_plan import (
     DEFAULT_OUTPUT_DIR,
+    minimum_n_gate_status,
     write_plan,
 )
 
@@ -94,6 +95,7 @@ def test_sample_groups_are_pre_registered():
 def test_decision_matrix_keeps_phase_4_blocked():
     matrix = _load("decision_matrix.json")
     assert matrix["phase_4_blocked"] is True
+    assert "minimum_n_thresholds" in matrix
     codes = {item["decision_code"] for item in matrix["outcomes"]}
     assert codes == {
         "STRONG_DESCRIPTIVE_SEPARATION",
@@ -103,6 +105,47 @@ def test_decision_matrix_keeps_phase_4_blocked():
         "MIXED_AMBIGUOUS_SMALL_N",
     }
     assert all(item["phase_4_status"] != "unblocked" for item in matrix["outcomes"])
+
+
+def test_minimum_n_gate_blocks_any_primary_group_at_or_below_10():
+    gate = minimum_n_gate_status({"GOOD_FAST_REACTION": 10, "FAST_FAILURE": 27})
+    assert gate["gate_tripped"] is True
+    assert gate["blocking_primary_groups"] == ["GOOD_FAST_REACTION"]
+    assert gate["strong_descriptive_separation_forbidden"] is True
+    assert gate["phase_4_blocked"] is True
+    assert gate["strongest_allowed_verdict"] == "MIXED_AMBIGUOUS_SMALL_N"
+
+    other_group_gate = minimum_n_gate_status({"GOOD_FAST_REACTION": 30, "FAST_FAILURE": 10})
+    assert other_group_gate["gate_tripped"] is True
+    assert other_group_gate["blocking_primary_groups"] == ["FAST_FAILURE"]
+    assert other_group_gate["strong_descriptive_separation_forbidden"] is True
+    assert other_group_gate["strongest_allowed_verdict"] == "MIXED_AMBIGUOUS_SMALL_N"
+
+
+def test_generated_minimum_n_gate_blocks_strong_separation():
+    matrix = _load("decision_matrix.json")
+    gate = matrix["minimum_n_thresholds"]
+    assert gate["current_good_fast_reaction_n"] == 10
+    assert gate["current_fast_failure_n"] == 27
+    assert gate["minimum_n_threshold"] == 10
+    assert gate["gate_tripped"] is True
+    assert gate["strong_descriptive_separation_forbidden"] is True
+    assert gate["strongest_allowed_verdict"] == "MIXED_AMBIGUOUS_SMALL_N"
+    strong = next(item for item in matrix["outcomes"] if item["decision_code"] == "STRONG_DESCRIPTIVE_SEPARATION")
+    assert strong["blocked_when"] == "any primary group has N <= 10"
+
+
+def test_summary_records_minimum_n_gate_and_no_replay():
+    summary = _load("summary.json")
+    assert summary["minimum_n_gate_enforced"] is True
+    assert summary["minimum_n_thresholds"]["gate_tripped"] is True
+    assert summary["strong_descriptive_separation_allowed_under_current_n"] is False
+    assert summary["strongest_allowed_verdict_under_current_n"] == "MIXED_AMBIGUOUS_SMALL_N"
+    assert summary["plan_only"] is True
+    assert summary["ohlc_read"] is False
+    assert summary["comparison_executed"] is False
+    assert summary["replay_run"] is False
+    assert summary["matched_control_replay_run"] is False
 
 
 def test_no_output_contains_real_feature_vs_outcome_statistics():

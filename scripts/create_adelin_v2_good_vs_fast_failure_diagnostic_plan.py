@@ -17,6 +17,11 @@ DEFAULT_OUTPUT_DIR = Path("backtests/reports/adelin_v2_good_vs_fast_failure_diag
 
 PRIMARY_GROUPS = ["GOOD_FAST_REACTION", "FAST_FAILURE"]
 SECONDARY_REVIEW_GROUPS = ["MIXED_REACTION", "CHOP_AFTER_ENTRY"]
+CURRENT_PRIMARY_GROUP_COUNTS = {
+    "GOOD_FAST_REACTION": 10,
+    "FAST_FAILURE": 27,
+}
+MINIMUM_N_THRESHOLD = 10
 
 PRIOR_VALIDATED_BASELINE_CONTEXT = {
     "total_samples": 40,
@@ -36,6 +41,42 @@ PRIOR_VALIDATED_BASELINE_CONTEXT = {
         "does not recompute outcomes or produce feature-vs-outcome statistics."
     ),
 }
+
+
+def minimum_n_gate_status(
+    group_counts: dict[str, int] | None = None,
+    threshold: int = MINIMUM_N_THRESHOLD,
+) -> dict[str, Any]:
+    counts = dict(group_counts or CURRENT_PRIMARY_GROUP_COUNTS)
+    blocking_groups = [group for group in PRIMARY_GROUPS if int(counts.get(group, 0)) <= threshold]
+    gate_tripped = bool(blocking_groups)
+    return {
+        "current_good_fast_reaction_n": int(counts.get("GOOD_FAST_REACTION", 0)),
+        "current_fast_failure_n": int(counts.get("FAST_FAILURE", 0)),
+        "minimum_n_threshold": threshold,
+        "threshold_rule": "if any primary group has N <= minimum_n_threshold",
+        "blocking_primary_groups": blocking_groups,
+        "gate_tripped": gate_tripped,
+        "strong_descriptive_separation_forbidden": gate_tripped,
+        "phase_4_blocked": True,
+        "strongest_allowed_verdict": (
+            "MIXED_AMBIGUOUS_SMALL_N" if gate_tripped else "STRONG_DESCRIPTIVE_SEPARATION_ELIGIBLE_IF_OTHER_GATES_PASS"
+        ),
+        "optional_directional_descriptive_note_allowed": True,
+        "allowed_next_actions_when_gate_tripped": [
+            "more sample collection",
+            "bounded confirmatory diagnostic",
+        ],
+        "forbidden_next_actions_when_gate_tripped": [
+            "Phase 4 matched-control replay",
+            "STRONG_DESCRIPTIVE_SEPARATION verdict",
+        ],
+        "no_exceptions": (
+            "No confidence-stratum exception is allowed. With N <= 10 in any primary group, "
+            "STRONG_DESCRIPTIVE_SEPARATION remains blocked."
+        ),
+    }
+
 
 ALLOWED_FEATURES = [
     {
@@ -226,13 +267,15 @@ COMPARISON_SCHEMA = {
 DECISION_MATRIX = {
     "plan_version": PLAN_VERSION,
     "phase_4_blocked": True,
+    "minimum_n_thresholds": minimum_n_gate_status(),
     "outcomes": [
         {
             "decision_code": "STRONG_DESCRIPTIVE_SEPARATION",
             "condition": (
-                "One or two pre-entry features show strong descriptive separation and "
-                "the same pattern appears in confidence-3-only sensitivity."
+                "Minimum-N gate is not tripped, one or two pre-entry features show strong "
+                "descriptive separation, and the same pattern appears in confidence-3-only sensitivity."
             ),
+            "blocked_when": "any primary group has N <= 10",
             "allowed_next_step": "allow a small confirmatory diagnostic branch",
             "phase_4_status": "still blocked until reviewed",
         },
@@ -256,8 +299,14 @@ DECISION_MATRIX = {
         },
         {
             "decision_code": "MIXED_AMBIGUOUS_SMALL_N",
-            "condition": "Separation is ambiguous due small N.",
-            "allowed_next_step": "require additional samples or stricter sample collection",
+            "condition": (
+                "Separation is ambiguous due small N, or any primary group has N <= 10. "
+                "When this minimum-N gate is tripped, this is the strongest allowed verdict."
+            ),
+            "allowed_next_step": (
+                "allow only an optional directional/descriptive note, more sample collection, "
+                "or bounded confirmatory diagnostic; do not proceed to Phase 4"
+            ),
             "phase_4_status": "blocked",
         },
     ],
@@ -287,6 +336,7 @@ def diagnostic_plan() -> dict[str, Any]:
         "forbidden_feature_count": len(FORBIDDEN_FEATURES),
         "comparison_schema_file": "comparison_schema.json",
         "decision_matrix_file": "decision_matrix.json",
+        "minimum_n_thresholds": minimum_n_gate_status(),
     }
 
 
@@ -308,6 +358,10 @@ def summary() -> dict[str, Any]:
         "forbidden_leakage_fields": [item["name"] for item in FORBIDDEN_FEATURES],
         "confidence_2_guardrail": CONFIDENCE_HANDLING["confidence_2_guardrail"],
         "confidence_3_sensitivity_required": True,
+        "minimum_n_thresholds": minimum_n_gate_status(),
+        "minimum_n_gate_enforced": True,
+        "strong_descriptive_separation_allowed_under_current_n": False,
+        "strongest_allowed_verdict_under_current_n": "MIXED_AMBIGUOUS_SMALL_N",
         "small_n_warning": COMPARISON_SCHEMA["small_n_warning"],
         "safety": {
             "runtime_logic_modified": False,
@@ -327,6 +381,7 @@ def summary() -> dict[str, Any]:
             "FORBIDDEN_LEAKAGE_FEATURES_REGISTERED",
             "CONFIDENCE_3_SENSITIVITY_REQUIRED",
             "CONFIDENCE_2_GUARDRAIL_REGISTERED",
+            "MINIMUM_N_GATE_ENFORCED",
             "PHASE_4_STILL_BLOCKED",
             "ADELIN_REMAINS_RESEARCH_ONLY",
             "NO_LIVE_DEPLOYMENT_DECISION",

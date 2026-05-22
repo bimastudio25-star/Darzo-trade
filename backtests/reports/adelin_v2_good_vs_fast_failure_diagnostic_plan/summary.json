@@ -35,6 +35,30 @@
     "non-directional max move replay as primary evidence"
   ],
   "matched_control_replay_run": false,
+  "minimum_n_gate_enforced": true,
+  "minimum_n_thresholds": {
+    "allowed_next_actions_when_gate_tripped": [
+      "more sample collection",
+      "bounded confirmatory diagnostic"
+    ],
+    "blocking_primary_groups": [
+      "GOOD_FAST_REACTION"
+    ],
+    "current_fast_failure_n": 27,
+    "current_good_fast_reaction_n": 10,
+    "forbidden_next_actions_when_gate_tripped": [
+      "Phase 4 matched-control replay",
+      "STRONG_DESCRIPTIVE_SEPARATION verdict"
+    ],
+    "gate_tripped": true,
+    "minimum_n_threshold": 10,
+    "no_exceptions": "No confidence-stratum exception is allowed. With N <= 10 in any primary group, STRONG_DESCRIPTIVE_SEPARATION remains blocked.",
+    "optional_directional_descriptive_note_allowed": true,
+    "phase_4_blocked": true,
+    "strong_descriptive_separation_forbidden": true,
+    "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+    "threshold_rule": "if any primary group has N <= minimum_n_threshold"
+  },
   "new_outcome_statistics_generated": false,
   "ohlc_read": false,
   "phase_4_blocked": true,
@@ -60,6 +84,8 @@
     "CHOP_AFTER_ENTRY"
   ],
   "small_n_warning": "N=10 GOOD_FAST_REACTION is too small for strong conclusions. Future outputs must be diagnostic only.",
+  "strong_descriptive_separation_allowed_under_current_n": false,
+  "strongest_allowed_verdict_under_current_n": "MIXED_AMBIGUOUS_SMALL_N",
   "verdict_flags": [
     "GOOD_VS_FAST_FAILURE_PLAN_REGISTERED",
     "PLAN_ONLY_NO_COMPARISON_EXECUTED",
@@ -68,6 +94,7 @@
     "FORBIDDEN_LEAKAGE_FEATURES_REGISTERED",
     "CONFIDENCE_3_SENSITIVITY_REQUIRED",
     "CONFIDENCE_2_GUARDRAIL_REGISTERED",
+    "MINIMUM_N_GATE_ENFORCED",
     "PHASE_4_STILL_BLOCKED",
     "ADELIN_REMAINS_RESEARCH_ONLY",
     "NO_LIVE_DEPLOYMENT_DECISION"

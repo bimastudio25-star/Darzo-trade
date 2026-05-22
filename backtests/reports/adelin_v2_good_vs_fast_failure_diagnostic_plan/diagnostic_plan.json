@@ -15,6 +15,29 @@
   },
   "forbidden_feature_count": 12,
   "matched_control_replay_run": false,
+  "minimum_n_thresholds": {
+    "allowed_next_actions_when_gate_tripped": [
+      "more sample collection",
+      "bounded confirmatory diagnostic"
+    ],
+    "blocking_primary_groups": [
+      "GOOD_FAST_REACTION"
+    ],
+    "current_fast_failure_n": 27,
+    "current_good_fast_reaction_n": 10,
+    "forbidden_next_actions_when_gate_tripped": [
+      "Phase 4 matched-control replay",
+      "STRONG_DESCRIPTIVE_SEPARATION verdict"
+    ],
+    "gate_tripped": true,
+    "minimum_n_threshold": 10,
+    "no_exceptions": "No confidence-stratum exception is allowed. With N <= 10 in any primary group, STRONG_DESCRIPTIVE_SEPARATION remains blocked.",
+    "optional_directional_descriptive_note_allowed": true,
+    "phase_4_blocked": true,
+    "strong_descriptive_separation_forbidden": true,
+    "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+    "threshold_rule": "if any primary group has N <= minimum_n_threshold"
+  },
   "ohlc_read": false,
   "phase_4_blocked": true,
   "plan_only": true,
