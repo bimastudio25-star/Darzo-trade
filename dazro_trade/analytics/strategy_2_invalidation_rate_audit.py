@@ -11,15 +11,32 @@ import pandas as pd
 
 
 VALID_STATES = {"VALID_LONG", "VALID_SHORT"}
-INVALID_STATES = {"INVALIDATED_LONG", "INVALIDATED_SHORT", "FULLY_INVALIDATED"}
+STATE_FULLY_INVALIDATED = "FULLY_INVALIDATED"
+STATE_TRUE_DUAL_DIRECTION_INVALIDATED = "TRUE_DUAL_DIRECTION_INVALIDATED"
+STATE_H1_CONTEXT_ALREADY_CONSUMED = "H1_CONTEXT_ALREADY_CONSUMED"
+STATE_MAE_NOT_REACHED = "MAE_NOT_REACHED"
+STATE_STRUCTURE_INVALID = "STRUCTURE_INVALID"
+STATE_UNKNOWN_INVALIDATION_STATE = "UNKNOWN_INVALIDATION_STATE"
+INVALID_STATES = {
+    "INVALIDATED_LONG",
+    "INVALIDATED_SHORT",
+    STATE_FULLY_INVALIDATED,
+    STATE_TRUE_DUAL_DIRECTION_INVALIDATED,
+    STATE_H1_CONTEXT_ALREADY_CONSUMED,
+    STATE_MAE_NOT_REACHED,
+    STATE_STRUCTURE_INVALID,
+    STATE_UNKNOWN_INVALIDATION_STATE,
+}
 LONG_REASON = "OPPOSITE_M15_HIGH_TAKEN_FIRST_FOR_LONG"
 SHORT_REASON = "OPPOSITE_M15_LOW_TAKEN_FIRST_FOR_SHORT"
+TRUE_DUAL_REASON = "TRUE_DUAL_DIRECTION_INVALIDATION"
 SUPPORTED_REASON_GROUPS = [
     LONG_REASON,
     SHORT_REASON,
     "DOUBLE_SWEEP_DEGRADATION",
     "H1_REFERENCE_ALREADY_CONSUMED",
     "MAE_NOT_REACHED",
+    TRUE_DUAL_REASON,
     "FULLY_INVALIDATED_H1_CONTEXT",
     "UNKNOWN_OR_NONE",
     "OTHER",
@@ -153,7 +170,9 @@ def build_h1_context_audit(frame: pd.DataFrame) -> pd.DataFrame:
     for context_id, group in frame.groupby("h1_context_id", dropna=False):
         long_invalidated = bool(group["long_invalidated"].any())
         short_invalidated = bool(group["short_invalidated"].any())
-        fully_rows = group[group["final_state"].eq("FULLY_INVALIDATED")]
+        legacy_fully_rows = group[group["final_state"].eq(STATE_FULLY_INVALIDATED)]
+        true_dual_rows = group[group["final_state"].eq(STATE_TRUE_DUAL_DIRECTION_INVALIDATED)]
+        fully_rows = group[group["final_state"].isin({STATE_FULLY_INVALIDATED, STATE_TRUE_DUAL_DIRECTION_INVALIDATED})]
         records.append(
             {
                 "h1_context_id": context_id,
@@ -162,6 +181,8 @@ def build_h1_context_audit(frame: pd.DataFrame) -> pd.DataFrame:
                 "final_states": ";".join(sorted(str(item) for item in group["final_state"].dropna().unique())),
                 "long_invalidated_any": long_invalidated,
                 "short_invalidated_any": short_invalidated,
+                "legacy_fully_invalidated_rows": int(len(legacy_fully_rows)),
+                "true_dual_direction_invalidated_rows": int(len(true_dual_rows)),
                 "fully_invalidated_rows": int(len(fully_rows)),
                 "fully_invalidated_has_both_directional_invalidations": bool(long_invalidated and short_invalidated),
                 "potential_cross_h1_contamination": bool(len(group) > 2),
@@ -190,7 +211,18 @@ def build_sticky_audit(frame: pd.DataFrame) -> pd.DataFrame:
 
 def build_transition_examples(frame: pd.DataFrame, *, per_state: int = 5) -> pd.DataFrame:
     examples: list[pd.DataFrame] = []
-    for state in ["VALID_LONG", "VALID_SHORT", "INVALIDATED_LONG", "INVALIDATED_SHORT", "FULLY_INVALIDATED"]:
+    for state in [
+        "VALID_LONG",
+        "VALID_SHORT",
+        "INVALIDATED_LONG",
+        "INVALIDATED_SHORT",
+        STATE_TRUE_DUAL_DIRECTION_INVALIDATED,
+        STATE_H1_CONTEXT_ALREADY_CONSUMED,
+        STATE_MAE_NOT_REACHED,
+        STATE_STRUCTURE_INVALID,
+        STATE_UNKNOWN_INVALIDATION_STATE,
+        STATE_FULLY_INVALIDATED,
+    ]:
         subset = frame[frame["final_state"].eq(state)].head(per_state).copy()
         if not subset.empty:
             subset.insert(0, "example_group", state.lower())
@@ -212,7 +244,7 @@ def build_transition_examples(frame: pd.DataFrame, *, per_state: int = 5) -> pd.
 
 
 def build_fully_invalidated_examples(frame: pd.DataFrame, h1_context_audit: pd.DataFrame, *, limit: int = 25) -> pd.DataFrame:
-    fully = frame[frame["final_state"].eq("FULLY_INVALIDATED")].copy()
+    fully = frame[frame["final_state"].isin({STATE_FULLY_INVALIDATED, STATE_TRUE_DUAL_DIRECTION_INVALIDATED})].copy()
     if fully.empty:
         return pd.DataFrame()
     context_flags = h1_context_audit.set_index("h1_context_id")["fully_invalidated_has_both_directional_invalidations"].to_dict()
@@ -242,10 +274,15 @@ def build_invalidation_rate_audit(input_dir: str | Path) -> InvalidationRateAudi
     total = int(len(frame))
     valid_count = int(sum(counts.get(state, 0) for state in VALID_STATES))
     invalidated_count = int(sum(counts.get(state, 0) for state in INVALID_STATES))
-    fully_count = int(counts.get("FULLY_INVALIDATED", 0))
+    fully_count = int(counts.get(STATE_FULLY_INVALIDATED, 0))
+    true_dual_count = int(counts.get(STATE_TRUE_DUAL_DIRECTION_INVALIDATED, 0))
+    h1_consumed_count = int(counts.get(STATE_H1_CONTEXT_ALREADY_CONSUMED, 0))
+    mae_not_reached_count = int(counts.get(STATE_MAE_NOT_REACHED, 0))
+    structure_invalid_count = int(counts.get(STATE_STRUCTURE_INVALID, 0))
+    unknown_state_count = int(counts.get(STATE_UNKNOWN_INVALIDATION_STATE, 0))
     directionality = audit_directionality(frame)
     fully_contexts_without_both = h1_context_audit[
-        h1_context_audit["fully_invalidated_rows"].gt(0) & ~h1_context_audit["fully_invalidated_has_both_directional_invalidations"]
+        h1_context_audit["legacy_fully_invalidated_rows"].gt(0) & ~h1_context_audit["fully_invalidated_has_both_directional_invalidations"]
     ]
     fully_rows_without_both = int(fully_examples["fully_invalidated_has_both_directional_invalidations"].eq(False).sum()) if not fully_examples.empty else 0
     sticky_violations = int(sticky_audit["sticky_violation"].sum()) if not sticky_audit.empty else 0
@@ -267,6 +304,12 @@ def build_invalidation_rate_audit(input_dir: str | Path) -> InvalidationRateAudi
         "invalidation_rate": _rate(invalidated_count, total),
         "fully_invalidated_count": fully_count,
         "fully_invalidated_rate": _rate(fully_count, total),
+        "true_dual_direction_invalidated_count": true_dual_count,
+        "true_dual_direction_invalidated_rate": _rate(true_dual_count, total),
+        "h1_context_already_consumed_count": h1_consumed_count,
+        "mae_not_reached_count": mae_not_reached_count,
+        "structure_invalid_count": structure_invalid_count,
+        "unknown_invalidation_state_count": unknown_state_count,
         "fully_invalidated_contexts_without_both_directional_invalidations": int(len(fully_contexts_without_both)),
         "fully_invalidated_example_rows_without_both_directional_invalidations": fully_rows_without_both,
         "sticky_invalidation_confirmed": sticky_violations == 0,
@@ -357,6 +400,11 @@ def render_invalidation_rate_report(summary: dict[str, Any], reason_distribution
         f"- valid count/rate: `{summary['valid_count']}` / `{summary['valid_rate']}`",
         f"- invalidated count/rate: `{summary['invalidated_count']}` / `{summary['invalidation_rate']}`",
         f"- fully invalidated count/rate: `{summary['fully_invalidated_count']}` / `{summary['fully_invalidated_rate']}`",
+        f"- true dual-direction invalidated count/rate: `{summary.get('true_dual_direction_invalidated_count')}` / `{summary.get('true_dual_direction_invalidated_rate')}`",
+        f"- H1 context already consumed: `{summary.get('h1_context_already_consumed_count')}`",
+        f"- MAE not reached: `{summary.get('mae_not_reached_count')}`",
+        f"- structure invalid: `{summary.get('structure_invalid_count')}`",
+        f"- unknown invalidation state: `{summary.get('unknown_invalidation_state_count')}`",
         f"- sticky violations: `{summary['sticky_violation_count']}`",
         f"- H1 cross-boundary flags: `{summary['cross_h1_contamination_flags']}`",
         f"- fully-invalidated contexts without both directional invalidations: `{summary['fully_invalidated_contexts_without_both_directional_invalidations']}`",
@@ -374,7 +422,7 @@ def render_invalidation_rate_report(summary: dict[str, Any], reason_distribution
             "",
             "## Critical Assessment",
             "",
-            "Directionality and sticky behavior are mechanically consistent in this audit. However, `FULLY_INVALIDATED` is currently overloaded because many rows are H1-reference/no-level consumed cases rather than contexts where both LONG and SHORT were truly invalidated. That makes the headline invalidation rate useful as a warning, but too aggressive to accept as final Layer A truth without separating H1-consumed/no-level states from true dual-direction invalidation.",
+            "Directionality and sticky behavior are mechanically consistent in this audit. When legacy `FULLY_INVALIDATED` appears without both directional invalidations, it should be treated as an overloaded taxonomy bucket and split into true dual-direction, H1-consumed, MAE-not-reached, structure-invalid, or unknown terminal states.",
             "",
             "## Safety",
             "",

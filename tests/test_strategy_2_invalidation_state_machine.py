@@ -7,8 +7,13 @@ import pandas as pd
 
 from dazro_trade.analytics.strategy_2_invalidation_state_machine import (
     STATE_FULLY_INVALIDATED,
+    STATE_H1_CONTEXT_ALREADY_CONSUMED,
     STATE_INVALIDATED_LONG,
     STATE_INVALIDATED_SHORT,
+    STATE_MAE_NOT_REACHED,
+    STATE_STRUCTURE_INVALID,
+    STATE_TRUE_DUAL_DIRECTION_INVALIDATED,
+    STATE_UNKNOWN_INVALIDATION_STATE,
     STATE_VALID_LONG,
     STATE_VALID_SHORT,
     apply_state_machine,
@@ -84,10 +89,41 @@ def test_fully_invalidated_state_works_for_same_h1_context():
         ]
     )
     result = apply_state_machine(frame)
-    assert set(result["final_state"]) == {STATE_FULLY_INVALIDATED}
+    assert set(result["final_state"]) == {STATE_TRUE_DUAL_DIRECTION_INVALIDATED}
     assert result["long_invalidated"].all()
     assert result["short_invalidated"].all()
     assert result["reactivation_blocked"].all()
+    assert STATE_FULLY_INVALIDATED not in set(result["final_state"])
+
+
+def test_h1_consumed_is_not_true_dual_direction_invalidation():
+    frame = pd.DataFrame([_row("XAUUSD_20260520141000+0000_previous_h1_containing_NO_LEVEL", skip="H1_REFERENCE_ALREADY_CONSUMED")])
+    result = apply_state_machine(frame).iloc[0]
+    assert result["final_state"] == STATE_H1_CONTEXT_ALREADY_CONSUMED
+    assert bool(result["long_invalidated"]) is False
+    assert bool(result["short_invalidated"]) is False
+
+
+def test_mae_not_reached_is_separate_terminal_state():
+    frame = pd.DataFrame([_row("XAUUSD_20260520142000+0000_previous_h1_containing_LONG", uncertain="MAE_NOT_REACHED")])
+    result = apply_state_machine(frame).iloc[0]
+    assert result["final_state"] == STATE_MAE_NOT_REACHED
+    assert bool(result["long_invalidated"]) is False
+    assert bool(result["short_invalidated"]) is False
+
+
+def test_structure_invalid_is_separate_from_directional_and_h1_consumed():
+    frame = pd.DataFrame([_row("XAUUSD_20260520143000+0000_previous_h1_containing_LONG", skip="DOUBLE_SWEEP_DEGRADATION")])
+    result = apply_state_machine(frame).iloc[0]
+    assert result["final_state"] == STATE_STRUCTURE_INVALID
+    assert bool(result["long_invalidated"]) is False
+    assert "DOUBLE_SWEEP_DEGRADATION" in result["invalidation_reason"]
+
+
+def test_unknown_invalidation_state_fallback_works():
+    frame = pd.DataFrame([_row("MALFORMED_SAMPLE_ID", skip="", take="", uncertain="")])
+    result = apply_state_machine(frame).iloc[0]
+    assert result["final_state"] == STATE_UNKNOWN_INVALIDATION_STATE
 
 
 def test_state_transitions_logged_correctly():

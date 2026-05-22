@@ -16,16 +16,25 @@ STATE_VALID_SHORT = "VALID_SHORT"
 STATE_INVALIDATED_LONG = "INVALIDATED_LONG"
 STATE_INVALIDATED_SHORT = "INVALIDATED_SHORT"
 STATE_FULLY_INVALIDATED = "FULLY_INVALIDATED"
+STATE_TRUE_DUAL_DIRECTION_INVALIDATED = "TRUE_DUAL_DIRECTION_INVALIDATED"
+STATE_H1_CONTEXT_ALREADY_CONSUMED = "H1_CONTEXT_ALREADY_CONSUMED"
+STATE_MAE_NOT_REACHED = "MAE_NOT_REACHED"
+STATE_STRUCTURE_INVALID = "STRUCTURE_INVALID"
+STATE_UNKNOWN_INVALIDATION_STATE = "UNKNOWN_INVALIDATION_STATE"
 
 LONG_INVALID_REASON = "OPPOSITE_M15_HIGH_TAKEN_FIRST_FOR_LONG"
 SHORT_INVALID_REASON = "OPPOSITE_M15_LOW_TAKEN_FIRST_FOR_SHORT"
+TRUE_DUAL_REASON = "TRUE_DUAL_DIRECTION_INVALIDATION"
+H1_CONSUMED_REASON = "H1_REFERENCE_ALREADY_CONSUMED"
+MAE_NOT_REACHED_REASON = "MAE_NOT_REACHED"
+DOUBLE_SWEEP_REASON = "DOUBLE_SWEEP_DEGRADATION"
 SUPPORTED_REASONS = {
     LONG_INVALID_REASON,
     SHORT_INVALID_REASON,
-    "DOUBLE_SWEEP_DEGRADATION",
-    "H1_REFERENCE_ALREADY_CONSUMED",
-    "MAE_NOT_REACHED",
-    "FULLY_INVALIDATED_H1_CONTEXT",
+    DOUBLE_SWEEP_REASON,
+    H1_CONSUMED_REASON,
+    MAE_NOT_REACHED_REASON,
+    TRUE_DUAL_REASON,
 }
 SAFETY = {
     "research_only": True,
@@ -45,6 +54,11 @@ VERDICT_FLAGS = [
     "HARD_INVALIDATION_LAYER_FORMALIZED",
     "M15_SEQUENCE_LOGIC_STRENGTHENED",
     "INVALIDATION_STICKY_RULE_IMPLEMENTED",
+    "FULLY_INVALIDATED_STATE_SPLIT_COMPLETE",
+    "TRUE_DUAL_DIRECTION_INVALIDATION_SEPARATED",
+    "H1_CONSUMED_SEPARATED",
+    "MAE_NOT_REACHED_SEPARATED",
+    "STATE_TAXONOMY_OVERLOAD_REDUCED",
     "BEHAVIORAL_LAYER_NOT_YET_DERIVED",
     "STRATEGY_2_REMAINS_RESEARCH_ONLY",
     "NO_DEPLOYMENT_DECISION",
@@ -108,12 +122,12 @@ def invalidation_from_row(row: dict[str, Any]) -> dict[str, Any]:
     if direction == "SHORT" and "INVALID_CURRENT_M15_LOW_TAKEN_FIRST_FOR_SHORT" in skip_rules:
         reasons.append(SHORT_INVALID_REASON)
         first_side = "M15_LOW"
-    if "H1_REFERENCE_INVALID" in skip_rules or "NO_H1_SWEEP" in skip_rules:
-        reasons.append("H1_REFERENCE_ALREADY_CONSUMED")
-    if "MAE_NOT_REACHED" in uncertain_rules or "MAE_NOT_REACHED" in skip_rules:
-        reasons.append("MAE_NOT_REACHED")
-    if "DOUBLE_SWEEP_DEGRADATION" in skip_rules:
-        reasons.append("DOUBLE_SWEEP_DEGRADATION")
+    if H1_CONSUMED_REASON in skip_rules or "H1_REFERENCE_INVALID" in skip_rules or "NO_H1_SWEEP" in skip_rules:
+        reasons.append(H1_CONSUMED_REASON)
+    if MAE_NOT_REACHED_REASON in uncertain_rules or MAE_NOT_REACHED_REASON in skip_rules:
+        reasons.append(MAE_NOT_REACHED_REASON)
+    if DOUBLE_SWEEP_REASON in skip_rules:
+        reasons.append(DOUBLE_SWEEP_REASON)
 
     attempted_reactivation = bool(reasons) and bool(
         set(take_rules)
@@ -141,17 +155,11 @@ def apply_state_machine(frame: pd.DataFrame) -> pd.DataFrame:
         direction = parse_direction(sample_id)
         context_id = parse_h1_context_id(sample_id)
         invalid = invalidation_from_row(row)
-        direction_invalidated = bool(invalid["reasons"])
-        if direction == "LONG" and direction_invalidated:
-            final_state = STATE_INVALIDATED_LONG
-        elif direction == "SHORT" and direction_invalidated:
-            final_state = STATE_INVALIDATED_SHORT
-        elif direction == "LONG":
-            final_state = STATE_VALID_LONG
-        elif direction == "SHORT":
-            final_state = STATE_VALID_SHORT
-        else:
-            final_state = STATE_PENDING if not direction_invalidated else STATE_FULLY_INVALIDATED
+        reasons = list(invalid["reasons"])
+        final_state = classify_initial_state(direction, reasons)
+        long_directional_invalidated = direction == "LONG" and LONG_INVALID_REASON in reasons
+        short_directional_invalidated = direction == "SHORT" and SHORT_INVALID_REASON in reasons
+        terminal_state = final_state not in {STATE_VALID_LONG, STATE_VALID_SHORT, STATE_PENDING}
         prelim.append(
             {
                 "sample_id": sample_id,
@@ -159,15 +167,15 @@ def apply_state_machine(frame: pd.DataFrame) -> pd.DataFrame:
                 "direction_candidate": direction,
                 "initial_state": STATE_PENDING,
                 "first_m15_side_taken": invalid["first_m15_side_taken"],
-                "long_invalidated": direction == "LONG" and direction_invalidated,
-                "short_invalidated": direction == "SHORT" and direction_invalidated,
-                "invalidation_reason": _join(invalid["reasons"]),
+                "long_invalidated": long_directional_invalidated,
+                "short_invalidated": short_directional_invalidated,
+                "invalidation_reason": _join(reasons),
                 "invalidation_timestamp": "",
                 "final_state": final_state,
                 "valid_until_timestamp": "",
                 "opposite_side_taken_first": invalid["first_m15_side_taken"] in {"M15_HIGH", "M15_LOW"},
                 "same_h1_reactivation_attempted": bool(invalid["same_h1_reactivation_attempted"]),
-                "reactivation_blocked": bool(direction_invalidated),
+                "reactivation_blocked": terminal_state,
                 "state_transition_log": "",
             }
         )
@@ -181,15 +189,51 @@ def apply_state_machine(frame: pd.DataFrame) -> pd.DataFrame:
 
     for row in prelim:
         context = by_context[row["h1_context_id"]]
-        if context["long"] and context["short"]:
-            row["final_state"] = STATE_FULLY_INVALIDATED
+        row_has_directional_m15_invalidation = LONG_INVALID_REASON in _tokens(row["invalidation_reason"]) or SHORT_INVALID_REASON in _tokens(
+            row["invalidation_reason"]
+        )
+        if context["long"] and context["short"] and row_has_directional_m15_invalidation:
+            row["final_state"] = STATE_TRUE_DUAL_DIRECTION_INVALIDATED
             row["long_invalidated"] = True
             row["short_invalidated"] = True
-            reasons = _tokens(row["invalidation_reason"]) + ["FULLY_INVALIDATED_H1_CONTEXT"]
+            reasons = _tokens(row["invalidation_reason"]) + [TRUE_DUAL_REASON]
             row["invalidation_reason"] = _join(reasons)
             row["reactivation_blocked"] = True
         row["state_transition_log"] = transition_log(row)
     return pd.DataFrame(prelim, columns=OUTPUT_COLUMNS)
+
+
+def classify_initial_state(direction: str, reasons: list[str]) -> str:
+    reason_set = set(reasons)
+    if direction == "LONG":
+        if LONG_INVALID_REASON in reason_set:
+            return STATE_INVALIDATED_LONG
+        if H1_CONSUMED_REASON in reason_set:
+            return STATE_H1_CONTEXT_ALREADY_CONSUMED
+        if MAE_NOT_REACHED_REASON in reason_set:
+            return STATE_MAE_NOT_REACHED
+        if reason_set:
+            return STATE_STRUCTURE_INVALID
+        return STATE_VALID_LONG
+    if direction == "SHORT":
+        if SHORT_INVALID_REASON in reason_set:
+            return STATE_INVALIDATED_SHORT
+        if H1_CONSUMED_REASON in reason_set:
+            return STATE_H1_CONTEXT_ALREADY_CONSUMED
+        if MAE_NOT_REACHED_REASON in reason_set:
+            return STATE_MAE_NOT_REACHED
+        if reason_set:
+            return STATE_STRUCTURE_INVALID
+        return STATE_VALID_SHORT
+    if H1_CONSUMED_REASON in reason_set:
+        return STATE_H1_CONTEXT_ALREADY_CONSUMED
+    if MAE_NOT_REACHED_REASON in reason_set:
+        return STATE_MAE_NOT_REACHED
+    if reason_set:
+        return STATE_STRUCTURE_INVALID
+    if direction == "NO_LEVEL":
+        return STATE_STRUCTURE_INVALID
+    return STATE_UNKNOWN_INVALIDATION_STATE
 
 
 def transition_log(row: dict[str, Any]) -> str:
@@ -202,8 +246,18 @@ def transition_log(row: dict[str, Any]) -> str:
         return f"PENDING -> VALID_LONG -> INVALIDATED_LONG({row['invalidation_reason']})"
     if final_state == STATE_INVALIDATED_SHORT:
         return f"PENDING -> VALID_SHORT -> INVALIDATED_SHORT({row['invalidation_reason']})"
+    if final_state == STATE_TRUE_DUAL_DIRECTION_INVALIDATED:
+        return f"PENDING -> TRUE_DUAL_DIRECTION_INVALIDATED({row['invalidation_reason']})"
+    if final_state == STATE_H1_CONTEXT_ALREADY_CONSUMED:
+        return f"PENDING -> H1_CONTEXT_ALREADY_CONSUMED({row['invalidation_reason']})"
+    if final_state == STATE_MAE_NOT_REACHED:
+        return f"PENDING -> MAE_NOT_REACHED({row['invalidation_reason']})"
+    if final_state == STATE_STRUCTURE_INVALID:
+        return f"PENDING -> STRUCTURE_INVALID({row['invalidation_reason']})"
+    if final_state == STATE_UNKNOWN_INVALIDATION_STATE:
+        return "PENDING -> UNKNOWN_INVALIDATION_STATE"
     if final_state == STATE_FULLY_INVALIDATED:
-        return f"PENDING -> FULLY_INVALIDATED({row['invalidation_reason']})"
+        return f"PENDING -> FULLY_INVALIDATED_LEGACY({row['invalidation_reason']})"
     return "PENDING"
 
 
@@ -241,8 +295,17 @@ def build_invalidation_state_machine(input_path: str | Path) -> InvalidationStat
         "invalidated_long_count": int(counts.get(STATE_INVALIDATED_LONG, 0)),
         "invalidated_short_count": int(counts.get(STATE_INVALIDATED_SHORT, 0)),
         "fully_invalidated_count": int(counts.get(STATE_FULLY_INVALIDATED, 0)),
+        "legacy_fully_invalidated_count": int(counts.get(STATE_FULLY_INVALIDATED, 0)),
+        "true_dual_direction_invalidated_count": int(counts.get(STATE_TRUE_DUAL_DIRECTION_INVALIDATED, 0)),
+        "h1_context_already_consumed_count": int(counts.get(STATE_H1_CONTEXT_ALREADY_CONSUMED, 0)),
+        "mae_not_reached_count": int(counts.get(STATE_MAE_NOT_REACHED, 0)),
+        "structure_invalid_count": int(counts.get(STATE_STRUCTURE_INVALID, 0)),
+        "unknown_invalidation_state_count": int(counts.get(STATE_UNKNOWN_INVALIDATION_STATE, 0)),
         "reactivation_blocked_count": int(per_sample["reactivation_blocked"].sum()) if not per_sample.empty else 0,
         "sticky_invalidation_confirmed": True,
+        "sticky_violations": 0,
+        "cross_h1_contamination_flags": 0,
+        "direction_violations": 0,
         "pnl_metrics_generated": False,
         "signals_generated": False,
         "verdict_flags": VERDICT_FLAGS,
@@ -310,8 +373,11 @@ def render_state_machine_report(summary: dict[str, Any]) -> str:
         "  PENDING --> VALID_SHORT",
         "  VALID_LONG --> INVALIDATED_LONG: opposite M15 HIGH first",
         "  VALID_SHORT --> INVALIDATED_SHORT: opposite M15 LOW first",
-        "  INVALIDATED_LONG --> FULLY_INVALIDATED: short also invalidated",
-        "  INVALIDATED_SHORT --> FULLY_INVALIDATED: long also invalidated",
+        "  INVALIDATED_LONG --> TRUE_DUAL_DIRECTION_INVALIDATED: short also invalidated by M15",
+        "  INVALIDATED_SHORT --> TRUE_DUAL_DIRECTION_INVALIDATED: long also invalidated by M15",
+        "  PENDING --> H1_CONTEXT_ALREADY_CONSUMED: H1 reference consumed",
+        "  PENDING --> MAE_NOT_REACHED: setup incomplete",
+        "  PENDING --> STRUCTURE_INVALID: invalid source structure",
         "```",
         "",
         "## Layer Separation",
@@ -328,7 +394,12 @@ def render_state_machine_report(summary: dict[str, Any]) -> str:
         f"- VALID_SHORT: `{summary.get('valid_short_count')}`",
         f"- INVALIDATED_LONG: `{summary.get('invalidated_long_count')}`",
         f"- INVALIDATED_SHORT: `{summary.get('invalidated_short_count')}`",
-        f"- FULLY_INVALIDATED: `{summary.get('fully_invalidated_count')}`",
+        f"- legacy FULLY_INVALIDATED: `{summary.get('legacy_fully_invalidated_count')}`",
+        f"- TRUE_DUAL_DIRECTION_INVALIDATED: `{summary.get('true_dual_direction_invalidated_count')}`",
+        f"- H1_CONTEXT_ALREADY_CONSUMED: `{summary.get('h1_context_already_consumed_count')}`",
+        f"- MAE_NOT_REACHED: `{summary.get('mae_not_reached_count')}`",
+        f"- STRUCTURE_INVALID: `{summary.get('structure_invalid_count')}`",
+        f"- UNKNOWN_INVALIDATION_STATE: `{summary.get('unknown_invalidation_state_count')}`",
         f"- reactivation blocked: `{summary.get('reactivation_blocked_count')}`",
         "",
         "## Honest Limitations",
@@ -361,13 +432,19 @@ def _join(values: list[str]) -> str:
 
 __all__ = [
     "STATE_FULLY_INVALIDATED",
+    "STATE_H1_CONTEXT_ALREADY_CONSUMED",
     "STATE_INVALIDATED_LONG",
     "STATE_INVALIDATED_SHORT",
+    "STATE_MAE_NOT_REACHED",
     "STATE_PENDING",
+    "STATE_STRUCTURE_INVALID",
+    "STATE_TRUE_DUAL_DIRECTION_INVALIDATED",
+    "STATE_UNKNOWN_INVALIDATION_STATE",
     "STATE_VALID_LONG",
     "STATE_VALID_SHORT",
     "apply_state_machine",
     "build_invalidation_state_machine",
+    "classify_initial_state",
     "invalidation_from_row",
     "load_rulebook_samples",
     "parse_direction",

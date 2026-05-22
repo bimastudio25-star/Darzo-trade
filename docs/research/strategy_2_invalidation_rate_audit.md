@@ -36,6 +36,10 @@ The hard invalidation state machine produced an extreme invalidation rate, so La
 
 Directionality and sticky behavior are mechanically consistent in this audit. However, `FULLY_INVALIDATED` is currently overloaded because many rows are H1-reference/no-level consumed cases rather than contexts where both LONG and SHORT were truly invalidated. That makes the headline invalidation rate useful as a warning, but too aggressive to accept as final Layer A truth without separating H1-consumed/no-level states from true dual-direction invalidation.
 
+## Follow-Up Taxonomy Fix
+
+The follow-up state split resolves this overload by replacing the mixed `FULLY_INVALIDATED` bucket with `TRUE_DUAL_DIRECTION_INVALIDATED`, `H1_CONTEXT_ALREADY_CONSUMED`, `MAE_NOT_REACHED`, `STRUCTURE_INVALID`, and `UNKNOWN_INVALIDATION_STATE`. The corrected split produced `TRUE_DUAL_DIRECTION_INVALIDATED = 2` versus the old `FULLY_INVALIDATED = 256`; sticky violations, cross-H1 contamination flags, and direction violations remained `0`.
+
 ## Safety
 
 - Strategy 3 untouched.

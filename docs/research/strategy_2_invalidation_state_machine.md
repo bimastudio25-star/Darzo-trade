@@ -22,8 +22,11 @@ stateDiagram-v2
   PENDING --> VALID_SHORT
   VALID_LONG --> INVALIDATED_LONG: opposite M15 HIGH first
   VALID_SHORT --> INVALIDATED_SHORT: opposite M15 LOW first
-  INVALIDATED_LONG --> FULLY_INVALIDATED: short also invalidated
-  INVALIDATED_SHORT --> FULLY_INVALIDATED: long also invalidated
+  INVALIDATED_LONG --> TRUE_DUAL_DIRECTION_INVALIDATED: short also invalidated by M15
+  INVALIDATED_SHORT --> TRUE_DUAL_DIRECTION_INVALIDATED: long also invalidated by M15
+  PENDING --> H1_CONTEXT_ALREADY_CONSUMED: H1 reference consumed
+  PENDING --> MAE_NOT_REACHED: setup incomplete
+  PENDING --> STRUCTURE_INVALID: invalid source structure
 ```
 
 ## Layer Separation
@@ -40,8 +43,17 @@ This branch formalizes Layer A only. It does not derive behavioral quality autom
 - VALID_SHORT: `87`
 - INVALIDATED_LONG: `315`
 - INVALIDATED_SHORT: `332`
-- FULLY_INVALIDATED: `256`
+- legacy FULLY_INVALIDATED: `0`
+- TRUE_DUAL_DIRECTION_INVALIDATED: `2`
+- H1_CONTEXT_ALREADY_CONSUMED: `248`
+- MAE_NOT_REACHED: `93`
+- STRUCTURE_INVALID: `0`
+- UNKNOWN_INVALIDATION_STATE: `0`
 - reactivation blocked: `903`
+
+## Taxonomy Split Note
+
+The original `FULLY_INVALIDATED = 256` bucket was later audited as overloaded. The corrected taxonomy separates true dual-direction M15 invalidation from H1-consumed, MAE-not-reached, structure-invalid, and unknown terminal states. The split is documented in `strategy_2_fully_invalidated_state_split.md`.
 
 ## Honest Limitations
 
