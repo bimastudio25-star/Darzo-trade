@@ -9,6 +9,16 @@
   },
   "decision_matrix_file": "decision_matrix.json",
   "goal": "Freeze expanded/new-sample collection rules before any new sample execution.",
+  "hypothesis_origin_disclosure": {
+    "disclosure": "H1 and H2 were selected from a prior underpowered exploratory diagnostic with GOOD_FAST_REACTION N=10, FAST_FAILURE N=27, and final verdict MIXED_AMBIGUOUS_SMALL_N. They are post-hoc hypotheses, not validated features. The expanded/new-sample plan is allowed only to test whether these hypotheses repeat on new or expanded samples. The future test may reject both hypotheses. These hypotheses must not be treated as edge, filters, scoring components, or deployment evidence.",
+    "hypothesis_origin": "post_hoc_from_underpowered_exploratory_diagnostic",
+    "may_be_rejected_by_future_test": true,
+    "not_deployment_evidence": true,
+    "originating_fast_failure_n": 27,
+    "originating_good_fast_reaction_n": 10,
+    "originating_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+    "validation_status": "not_validated"
+  },
   "minimum_n_gates": {
     "direction_confidence": {
       "confidence_2_only_signal_policy": "mark weak/research-only and do not proceed to Phase 4",

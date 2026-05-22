@@ -21,12 +21,23 @@ There is no clean separation. Confidence-3-only sensitivity amplified some descr
 
 ## Frozen Hypotheses
 
+### Post-hoc Hypothesis-Origin Disclosure
+
+H1 and H2 were selected from a prior underpowered exploratory diagnostic with GOOD_FAST_REACTION N=10, FAST_FAILURE N=27, and final verdict `MIXED_AMBIGUOUS_SMALL_N`.
+
+They are post-hoc hypotheses, not validated features. Pre-registering them now does not validate their origin. The expanded/new-sample plan is allowed only to test whether these hypotheses repeat on new or expanded samples. The future test may reject both hypotheses.
+
+These hypotheses must not be treated as edge, filters, scoring components, or deployment evidence.
+
 ### H1 — FVG/iFVG Near Entry As Failure-Side Marker
 
 - feature: `fvg_ifvg_near_20p`
 - prior observation: GOOD 3/10 vs FAST 23/27, difference -0.552
 - frozen interpretation: nearby FVG/iFVG may be associated with FAST_FAILURE
 - role: possible negative/failure marker
+- origin: post-hoc from underpowered exploratory diagnostic
+- validation status: not validated
+- future test may reject this hypothesis: yes
 
 Do not reinterpret H1 as positive unless future data proves otherwise.
 
@@ -36,6 +47,9 @@ Do not reinterpret H1 as positive unless future data proves otherwise.
 - prior observation: GOOD 6/10 vs FAST 3/27, difference +0.489
 - frozen interpretation: recent HTF liquidity confluence may be associated with GOOD_FAST_REACTION
 - role: possible positive/good-reaction marker
+- origin: post-hoc from underpowered exploratory diagnostic
+- validation status: not validated
+- future test may reject this hypothesis: yes
 
 Frozen HTF definition:
 

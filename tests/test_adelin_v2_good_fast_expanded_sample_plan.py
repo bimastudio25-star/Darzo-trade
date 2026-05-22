@@ -67,6 +67,33 @@ def test_primary_hypotheses_are_exactly_h1_h2():
     ]
 
 
+def test_post_hoc_origin_disclosure_exists():
+    summary = _load("summary.json")
+    frozen = _load("frozen_hypotheses.json")
+    disclosure = summary["hypothesis_origin_disclosure"]
+    assert disclosure["hypothesis_origin"] == "post_hoc_from_underpowered_exploratory_diagnostic"
+    assert disclosure["originating_good_fast_reaction_n"] == 10
+    assert disclosure["originating_fast_failure_n"] == 27
+    assert disclosure["originating_verdict"] == "MIXED_AMBIGUOUS_SMALL_N"
+    assert disclosure["validation_status"] == "not_validated"
+    assert disclosure["may_be_rejected_by_future_test"] is True
+    assert disclosure["not_deployment_evidence"] is True
+    assert "FAST_FAILURE N=27" in disclosure["disclosure"]
+    assert frozen["hypothesis_origin_disclosure"] == disclosure
+
+
+def test_h1_h2_are_post_hoc_and_not_validated():
+    frozen = _load("frozen_hypotheses.json")
+    for hypothesis in frozen["primary_hypotheses"]:
+        assert hypothesis["hypothesis_origin"] == "post_hoc_from_underpowered_exploratory_diagnostic"
+        assert hypothesis["originating_good_fast_reaction_n"] == 10
+        assert hypothesis["originating_fast_failure_n"] == 27
+        assert hypothesis["originating_verdict"] == "MIXED_AMBIGUOUS_SMALL_N"
+        assert hypothesis["validation_status"] == "not_validated"
+        assert hypothesis["may_be_rejected_by_future_test"] is True
+        assert hypothesis["not_deployment_evidence"] is True
+
+
 def test_secondary_features_are_not_primary_hypotheses():
     summary = _load("summary.json")
     assert summary["secondary_tracked_features"] == ["m1_large_body_ge_0_60", "m1_close_high_ge_0_70"]

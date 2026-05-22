@@ -14,11 +14,31 @@ from typing import Any
 PLAN_VERSION = "adelin_v2_good_fast_expanded_sample_plan_v1"
 DEFAULT_OUTPUT_DIR = Path("backtests/reports/adelin_v2_good_fast_expanded_sample_plan")
 
+POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSURE = {
+    "hypothesis_origin": "post_hoc_from_underpowered_exploratory_diagnostic",
+    "originating_good_fast_reaction_n": 10,
+    "originating_fast_failure_n": 27,
+    "originating_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+    "validation_status": "not_validated",
+    "may_be_rejected_by_future_test": True,
+    "not_deployment_evidence": True,
+    "disclosure": (
+        "H1 and H2 were selected from a prior underpowered exploratory diagnostic "
+        "with GOOD_FAST_REACTION N=10, FAST_FAILURE N=27, and final verdict "
+        "MIXED_AMBIGUOUS_SMALL_N. "
+        "They are post-hoc hypotheses, not validated features. The expanded/new-sample "
+        "plan is allowed only to test whether these hypotheses repeat on new or expanded "
+        "samples. The future test may reject both hypotheses. These hypotheses must not "
+        "be treated as edge, filters, scoring components, or deployment evidence."
+    ),
+}
+
 PRIMARY_HYPOTHESES = [
     {
         "hypothesis_id": "H1",
         "feature_name": "fvg_ifvg_near_20p",
         "role": "PRIMARY_HYPOTHESIS",
+        **POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSURE,
         "prior_observation": {
             "good_fast_reaction": "3/10",
             "fast_failure": "23/27",
@@ -42,6 +62,7 @@ PRIMARY_HYPOTHESES = [
         "hypothesis_id": "H2",
         "feature_name": "liquidity_htf_recent_level",
         "role": "PRIMARY_HYPOTHESIS",
+        **POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSURE,
         "prior_observation": {
             "good_fast_reaction": "6/10",
             "fast_failure": "3/27",
@@ -233,6 +254,7 @@ def expanded_sample_plan() -> dict[str, Any]:
         },
         "goal": "Freeze expanded/new-sample collection rules before any new sample execution.",
         "primary_hypotheses": [item["feature_name"] for item in PRIMARY_HYPOTHESES],
+        "hypothesis_origin_disclosure": POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSURE,
         "secondary_tracked_features": [item["feature_name"] for item in SECONDARY_TRACKED_FEATURES],
         "minimum_n_gates": MINIMUM_N_GATES,
         "sample_collection_schema_file": "sample_collection_schema.json",
@@ -260,6 +282,7 @@ def summary() -> dict[str, Any]:
         "strategy_3_touched": False,
         "v3_stash_applied_or_popped": False,
         "primary_hypotheses": [item["feature_name"] for item in PRIMARY_HYPOTHESES],
+        "hypothesis_origin_disclosure": POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSURE,
         "secondary_tracked_features": [item["feature_name"] for item in SECONDARY_TRACKED_FEATURES],
         "minimum_n_gates": MINIMUM_N_GATES,
         "forbidden_interpretations": FUTURE_EXECUTION_SCHEMA["forbidden"],
@@ -268,6 +291,7 @@ def summary() -> dict[str, Any]:
             "PLAN_ONLY_NO_SAMPLES_COLLECTED",
             "NO_OHLC_READ",
             "PRIMARY_HYPOTHESES_FROZEN",
+            "POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSED",
             "MINIMUM_N_GATES_REGISTERED",
             "PHASE_4_STILL_BLOCKED",
             "NO_MATCHED_CONTROL_REPLAY",
@@ -299,6 +323,7 @@ def write_plan(output_dir: Path) -> dict[str, Path]:
         outputs["frozen_hypotheses"],
         {
             "plan_version": PLAN_VERSION,
+            "hypothesis_origin_disclosure": POST_HOC_HYPOTHESIS_ORIGIN_DISCLOSURE,
             "primary_hypotheses": PRIMARY_HYPOTHESES,
             "secondary_tracked_features": SECONDARY_TRACKED_FEATURES,
         },
