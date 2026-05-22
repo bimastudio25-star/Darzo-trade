@@ -90,6 +90,7 @@ class DiagnosticConfig:
     phase3_schema_path: Path = DEFAULT_PHASE3_SCHEMA_PATH
     feature_specs_path: Path = DEFAULT_FEATURE_SPECS_PATH
     output_dir: Path = DEFAULT_OUTPUT_DIR
+    direction_recovery_path: Path | None = None
     forward_minutes: int = 240
     fast_reaction_minutes: int = 15
     slow_reaction_minutes: int = 30
@@ -141,6 +142,41 @@ def load_visual_samples(visual_pack_dir: Path | str, symbol: str) -> tuple[list[
     if not rows:
         limitations.append("NO_VISUAL_SAMPLE_ROWS_LOADED")
     return rows, limitations
+
+
+def load_direction_recovery_overrides(path: Path | str | None) -> tuple[dict[str, dict[str, str]], list[str]]:
+    """Load pre-entry direction recovery rows by sample_id.
+
+    Recovery rows are rejected if they claim post-entry data was used. Unknown
+    directions are left as unknown instead of being forced into replay.
+    """
+    if path is None:
+        return {}, []
+    recovery_path = Path(path)
+    if not recovery_path.exists():
+        return {}, [f"DIRECTION_RECOVERY_FILE_MISSING:{recovery_path}"]
+    if recovery_path.suffix.lower() == ".json":
+        payload = json.loads(recovery_path.read_text(encoding="utf-8"))
+        rows = payload if isinstance(payload, list) else payload.get("rows", [])
+    else:
+        with recovery_path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+    overrides: dict[str, dict[str, str]] = {}
+    limitations: list[str] = []
+    for row in rows:
+        sample_id = str(row.get("sample_id") or "").strip()
+        final_direction = str(row.get("final_direction") or "").strip().upper()
+        used_post_entry = str(row.get("used_post_entry_data") or "").strip().lower()
+        if not sample_id:
+            limitations.append("DIRECTION_RECOVERY_ROW_MISSING_SAMPLE_ID")
+            continue
+        if used_post_entry in {"true", "1", "yes"}:
+            limitations.append(f"DIRECTION_RECOVERY_ROW_REJECTED_POST_ENTRY:{sample_id}")
+            continue
+        if final_direction not in {"LONG", "SHORT"}:
+            continue
+        overrides[sample_id] = {str(key): "" if value is None else str(value) for key, value in row.items()}
+    return overrides, limitations
 
 
 def normalize_frames(frames: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
@@ -633,6 +669,9 @@ def compute_sample_diagnostic(
         "source_mode": sample.get("source_mode", ""),
         "symbol": sample.get("symbol") or symbol,
         "direction": direction,
+        "direction_recovery_source": sample.get("direction_recovery_source", ""),
+        "direction_recovery_confidence": sample.get("direction_recovery_confidence", ""),
+        "direction_recovery_reason": sample.get("direction_recovery_reason", ""),
         "decision_timestamp": as_iso(decision_ts),
         "chart_path": sample.get("chart_path", ""),
         "html_path": sample.get("html_path", ""),
@@ -849,6 +888,19 @@ def run_diagnostics(config: DiagnosticConfig) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     symbol_spec = get_symbol_spec(config.symbol)
     samples, sample_limitations = load_visual_samples(config.visual_pack_dir, config.symbol)
+    direction_overrides, direction_recovery_limitations = load_direction_recovery_overrides(config.direction_recovery_path)
+    if direction_overrides:
+        updated_samples: list[dict[str, str]] = []
+        for sample in samples:
+            sample_copy = dict(sample)
+            override = direction_overrides.get(str(sample_copy.get("sample_id") or ""))
+            if override:
+                sample_copy["direction_guess"] = override.get("final_direction", sample_copy.get("direction_guess", ""))
+                sample_copy["direction_recovery_source"] = override.get("direction_source", "")
+                sample_copy["direction_recovery_confidence"] = override.get("direction_confidence", "")
+                sample_copy["direction_recovery_reason"] = override.get("direction_recovery_reason", "")
+            updated_samples.append(sample_copy)
+        samples = updated_samples
     frames = normalize_frames(
         load_csv_timeframes(config.symbol, ["M1", "M5", "M15", "H1"], data_dir=str(config.data_dir))
     )
@@ -875,7 +927,14 @@ def run_diagnostics(config: DiagnosticConfig) -> dict[str, Any]:
     outcome_counts = Counter(str(row.get("final_diagnostic_outcome", "")) for row in rows)
     sufficient = sum(bool(row.get("post_entry_replay_available")) for row in rows)
     insufficient = len(rows) - sufficient
-    limitations = sorted(set(sample_limitations + frame_limitations + [v for row in rows for v in str(row.get("limitations", "")).split("|") if v]))
+    limitations = sorted(
+        set(
+            sample_limitations
+            + direction_recovery_limitations
+            + frame_limitations
+            + [v for row in rows for v in str(row.get("limitations", "")).split("|") if v]
+        )
+    )
     summary = {
         "run_started_at": datetime.now(timezone.utc).isoformat(),
         "symbol": config.symbol,
@@ -883,6 +942,9 @@ def run_diagnostics(config: DiagnosticConfig) -> dict[str, Any]:
         "visual_pack_dir": str(config.visual_pack_dir),
         "phase3_schema_path": str(config.phase3_schema_path),
         "feature_specs_path": str(config.feature_specs_path),
+        "direction_recovery_path": str(config.direction_recovery_path) if config.direction_recovery_path else None,
+        "direction_recovery_applied": bool(direction_overrides),
+        "direction_recovery_override_count": len(direction_overrides),
         "ohlc_data_read": True,
         "forward_minutes": config.forward_minutes,
         "pip_size": symbol_spec.pip_size,
@@ -979,6 +1041,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--phase3-schema-path", default=str(DEFAULT_PHASE3_SCHEMA_PATH))
     parser.add_argument("--feature-specs-path", default=str(DEFAULT_FEATURE_SPECS_PATH))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--direction-recovery-path", default=None)
     parser.add_argument("--forward-minutes", type=int, default=240)
     parser.add_argument("--dry-run", action="store_true", default=True)
     return parser
@@ -992,6 +1055,7 @@ def config_from_args(args: argparse.Namespace) -> DiagnosticConfig:
         phase3_schema_path=Path(args.phase3_schema_path),
         feature_specs_path=Path(args.feature_specs_path),
         output_dir=Path(args.output_dir),
+        direction_recovery_path=Path(args.direction_recovery_path) if args.direction_recovery_path else None,
         forward_minutes=args.forward_minutes,
         diagnostic_only=bool(args.dry_run),
     )
