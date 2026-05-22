@@ -1,0 +1,102 @@
+[
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "PRE_DECISION_SWEEP_HIGH_LOW",
+    "concept_name": "Pre-decision sweep high/low",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_NOW",
+    "possible_proxy": "Completed pre-decision M1/M5 candle trades beyond a prior high/low and maps high sweep to SHORT context or low sweep to LONG context.",
+    "required_data": "Existing OHLC candles; no image data required."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "FAST_M1_REACTION_AFTER_SWEEP",
+    "concept_name": "Fast M1 reaction after sweep",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "Pre-register a sweep timestamp and measure only pre-decision reaction if used as context; post-entry reaction remains diagnostic-only.",
+    "required_data": "Existing M1 OHLC; strict timestamp boundary is required."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "TIGHT_SL_BEHIND_SPIKE_OR_SWING",
+    "concept_name": "Tight SL behind spike or swing",
+    "current_adelin_feature_coverage": "MISSING",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "Distance from entry/reference price to nearest completed pre-decision local swing or spike extreme.",
+    "required_data": "Existing M1/M5 OHLC and a frozen swing/spike definition."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "SWING_HIGH_LOW_ZONE_PROXIMITY",
+    "concept_name": "Swing high/low zone proximity",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "Distance from entry/reference price to a pre-defined recent swing high/low zone width.",
+    "required_data": "Existing OHLC and a frozen swing-zone width rule."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "HTF_LTF_LEVEL_CONFLUENCE",
+    "concept_name": "HTF/LTF level confluence",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "Distance between frozen HTF level and LTF swing/sweep level at decision timestamp.",
+    "required_data": "Existing M1/M5/M15/H1/H4/D1 OHLC where available."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "VOLUME_PROFILE_ZONE_PROXIMITY",
+    "concept_name": "Volume profile zone proximity",
+    "current_adelin_feature_coverage": "MISSING",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_NEW_DATA",
+    "possible_proxy": "Distance to POC/HVN/LVN/value-area levels from a frozen rolling volume-profile calculation.",
+    "required_data": "Tick volume or real volume plus a frozen volume-profile indicator/binning method."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "PRICE_INSIDE_REACTION_ZONE",
+    "concept_name": "Price inside reaction zone",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "Entry/reference price lies within frozen FVG, IFVG, swing-zone, or volume-zone boundaries.",
+    "required_data": "Existing OHLC for FVG/swing zones; new volume-profile data for profile zones."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "CLEAN_TARGET_SPACE_TO_NEXT_ZONE",
+    "concept_name": "Clean target space to next zone",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "MEDIUM",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "Distance from entry/reference price to next opposing pre-decision swing/liquidity/reaction zone.",
+    "required_data": "Existing OHLC and frozen opposing-zone definitions."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "DIRTY_REACTION_CHOP_AFTER_ENTRY",
+    "concept_name": "Dirty reaction or chop after entry",
+    "current_adelin_feature_coverage": "PARTIAL",
+    "future_priority": "LOW",
+    "measurability_status": "HEURISTIC_ONLY",
+    "possible_proxy": "Diagnostic-only post-entry chop tag; do not use as a clean pre-entry feature.",
+    "required_data": "Post-entry OHLC for diagnostics only."
+  },
+  {
+    "allowed_next_step": "pre-register proxy methodology before empirical testing",
+    "concept_id": "ZONE_RETEST_OR_RECLAIM",
+    "concept_name": "Zone retest or reclaim",
+    "current_adelin_feature_coverage": "MISSING",
+    "future_priority": "HIGH",
+    "measurability_status": "MEASURABLE_WITH_EXISTING_OHLC_PROXY",
+    "possible_proxy": "A completed pre-decision candle crosses and closes back inside/outside a frozen zone boundary.",
+    "required_data": "Existing OHLC and a frozen zone definition."
+  }
+]

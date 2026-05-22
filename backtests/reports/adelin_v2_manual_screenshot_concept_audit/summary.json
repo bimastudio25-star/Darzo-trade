@@ -1,0 +1,41 @@
+{
+  "audit_only": true,
+  "broker_execution_enabled": false,
+  "existing_ohlc_proxy_count": 7,
+  "heuristic_only_count": 1,
+  "high_priority_missing_concepts": [
+    "PRE_DECISION_SWEEP_HIGH_LOW",
+    "FAST_M1_REACTION_AFTER_SWEEP",
+    "TIGHT_SL_BEHIND_SPIKE_OR_SWING",
+    "SWING_HIGH_LOW_ZONE_PROXIMITY",
+    "HTF_LTF_LEVEL_CONFLUENCE",
+    "VOLUME_PROFILE_ZONE_PROXIMITY",
+    "PRICE_INSIDE_REACTION_ZONE",
+    "ZONE_RETEST_OR_RECLAIM"
+  ],
+  "live_trading_enabled": false,
+  "manual_screenshot_paths_detected": [],
+  "manual_screenshot_paths_listed_only": true,
+  "matched_control_replay_run": false,
+  "measurable_now_count": 3,
+  "new_data_required_count": 1,
+  "not_reliably_measurable_count": 0,
+  "ohlc_read": false,
+  "phase_4_blocked": true,
+  "profitability_claim_made": false,
+  "replay_run": false,
+  "runtime_logic_modified": false,
+  "screenshots_auto_labeled": false,
+  "screenshots_used_as_validation": false,
+  "telegram_enabled": false,
+  "total_concepts": 12,
+  "verdict_flags": [
+    "MANUAL_SCREENSHOT_CONCEPT_AUDIT_COMPLETE",
+    "QUALITATIVE_REFERENCE_ONLY",
+    "NO_SCREENSHOT_VALIDATION",
+    "NO_AUTO_LABELING",
+    "NO_PHASE_4",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ]
+}

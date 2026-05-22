@@ -1,0 +1,43 @@
+[
+  {
+    "allowed_scope": "Define deterministic pre-entry sweep proxy; no replay or optimization.",
+    "concept_ids": [
+      "PRE_DECISION_SWEEP_HIGH_LOW"
+    ],
+    "task_id": "FUTURE_001",
+    "title": "Pre-entry sweep feature governance"
+  },
+  {
+    "allowed_scope": "Define local spike/swing invalidation distance using completed pre-decision candles only.",
+    "concept_ids": [
+      "TIGHT_SL_BEHIND_SPIKE_OR_SWING"
+    ],
+    "task_id": "FUTURE_002",
+    "title": "Tight invalidation distance proxy"
+  },
+  {
+    "allowed_scope": "Check whether tick/volume/profile data exists and can be computed reproducibly; no trading claims.",
+    "concept_ids": [
+      "VOLUME_PROFILE_ZONE_PROXIMITY"
+    ],
+    "task_id": "FUTURE_003",
+    "title": "Volume profile data feasibility"
+  },
+  {
+    "allowed_scope": "Freeze zone definitions and retest/reclaim semantics before any empirical execution.",
+    "concept_ids": [
+      "PRICE_INSIDE_REACTION_ZONE",
+      "ZONE_RETEST_OR_RECLAIM"
+    ],
+    "task_id": "FUTURE_004",
+    "title": "Reaction-zone boundary and reclaim proxy"
+  },
+  {
+    "allowed_scope": "Define next opposing zone from pre-decision data only; do not use future TP outcome.",
+    "concept_ids": [
+      "CLEAN_TARGET_SPACE_TO_NEXT_ZONE"
+    ],
+    "task_id": "FUTURE_005",
+    "title": "Target-space pre-entry proxy"
+  }
+]
