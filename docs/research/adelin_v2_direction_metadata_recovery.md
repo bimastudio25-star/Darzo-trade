@@ -39,6 +39,76 @@ minutes between the detected sweep candle and the anchor. Upward sweep implies
 If conflicting pre-entry evidence exists, the row is marked
 `CONFLICTING_DIRECTION_EVIDENCE` and remains unusable for directional replay.
 
+## Direction Inference Governance
+
+Frozen rule version:
+
+`adelin_v2_pre_decision_sweep_v1`
+
+Rule name:
+
+`PRE_DECISION_SWEEP_INFERENCE`
+
+Exact heuristic:
+
+- Preserve existing visual-pack `LONG` or `SHORT` direction metadata as
+  confidence `3`.
+- For missing directions, use explicit candidate/signal side metadata if
+  present.
+- If no explicit side exists, use unambiguous liquidity-side metadata if
+  present.
+- If still unknown, inspect only M5 and M1 candles in
+  `[decision_timestamp - 60m, decision_timestamp)`.
+- The decision/anchor candle is excluded.
+- All candles after `decision_timestamp` are excluded.
+- A valid sweep candle must be at least 5 minutes before the decision timestamp.
+- A sweep of high / upper liquidity maps to `SHORT`.
+- A sweep of low / lower liquidity maps to `LONG`.
+- The sweep must show pre-decision rejection or move-away by the configured
+  rejection threshold.
+- Multiple valid sweep events inside the same pre-entry window are resolved by
+  the latest defensible sweep event.
+- If independent pre-entry sources conflict, the final direction is `UNKNOWN`.
+- If no valid pre-entry evidence exists, the final direction is `UNKNOWN`.
+
+Allowed inputs:
+
+- existing visual-pack direction metadata;
+- explicit candidate/signal side metadata when present;
+- unambiguous pre-entry liquidity-side metadata when present;
+- M5 and M1 candles before the decision timestamp only;
+- pre-anchor sweep candle, swept level, sweep extreme, and pre-anchor
+  rejection/move-away evidence;
+- explicit pre-entry entry/liquidity relation metadata when present.
+
+Forbidden inputs:
+
+- candles at or after `decision_timestamp`;
+- post-entry price movement;
+- MFE/MAE;
+- TP/SL hits;
+- win/loss;
+- diagnostic replay outcome;
+- matched-control result;
+- manually invented direction.
+
+Confidence governance:
+
+- Confidence `3` means original existing metadata.
+- Confidence `2` means inferred from pre-decision sweep evidence.
+- Confidence `2` is weaker than confidence `3`; inferred directions must not be
+  treated as equal to existing metadata.
+
+Current governance baseline:
+
+- 19 of 40 directions are inferred at confidence `2`.
+- Phase 4 remains blocked until this methodology is explicitly accepted.
+- Direction-recovered diagnostic outcomes are:
+  - `FAST_FAILURE`: 27 / 40
+  - `GOOD_FAST_REACTION`: 10 / 40
+  - `MIXED_REACTION`: 2 / 40
+  - `CHOP_AFTER_ENTRY`: 1 / 40
+
 ## Results
 
 - Total samples: 40

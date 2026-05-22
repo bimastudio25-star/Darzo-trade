@@ -1,5 +1,5 @@
 {
-  "run_started_at": "2026-05-21T23:53:41.093075+00:00",
+  "run_started_at": "2026-05-22T00:10:13.009137+00:00",
   "symbol": "XAUUSD",
   "visual_pack_dir": "backtests\\reports\\adelin_v2_visual_review_pack",
   "output_dir": "backtests\\reports\\adelin_v2_direction_metadata_recovery",
@@ -7,6 +7,7 @@
   "existing_direction_count": 21,
   "missing_direction_count": 19,
   "recovered_direction_count": 19,
+  "recovered_direction_confidence_2_count": 19,
   "unrecoverable_direction_count": 0,
   "final_direction_known_count": 40,
   "final_direction_unknown_count": 0,
@@ -52,7 +53,32 @@
     "v3_stash_applied_or_popped": false,
     "post_entry_direction_inference_used": false
   },
-  "run_finished_at": "2026-05-21T23:53:41.093075+00:00",
+  "run_finished_at": "2026-05-22T00:10:13.009137+00:00",
+  "inference_rule_version": "adelin_v2_pre_decision_sweep_v1",
+  "inference_rule_name": "PRE_DECISION_SWEEP_INFERENCE",
+  "inference_rule_description": "Preserve existing LONG/SHORT metadata at confidence 3. For missing directions, use explicit candidate side if present, then unambiguous liquidity-side metadata, then PRE_DECISION_SWEEP_INFERENCE at confidence 2. The sweep inference inspects M5 and M1 candles only in [decision_timestamp - 60m, decision_timestamp), excludes the anchor/decision candle and all post-entry candles, requires the sweep candle to be at least 5 minutes before the decision timestamp, and requires rejection or move-away by at least the configured rejection threshold. A sweep of high/upper liquidity maps to SHORT. A sweep of low/lower liquidity maps to LONG. Multiple valid sweep events inside the same pre-entry window are resolved by the latest defensible sweep event; unresolved or cross-source conflicts return UNKNOWN.",
+  "inference_rule_allowed_inputs": [
+    "existing visual-pack direction metadata",
+    "explicit candidate/signal side metadata when present",
+    "unambiguous pre-entry liquidity-side metadata when present",
+    "M5 candles in [decision_timestamp - sweep_lookback_minutes, decision_timestamp)",
+    "M1 candles in [decision_timestamp - sweep_lookback_minutes, decision_timestamp)",
+    "pre-anchor sweep candle timestamp and pre-anchor rejection/move-away candles",
+    "explicit pre-entry entry/liquidity relation metadata when present"
+  ],
+  "inference_rule_forbidden_inputs": [
+    "candles at or after decision_timestamp",
+    "post-entry price movement",
+    "MFE/MAE",
+    "TP/SL hits",
+    "win/loss",
+    "diagnostic replay outcome",
+    "matched-control result",
+    "manual invention of direction"
+  ],
+  "inference_rule_conflict_policy": "If independent pre-entry sources disagree, set final_direction=UNKNOWN, direction_source=CONFLICTING_DIRECTION_EVIDENCE, confidence=0, and do not force replay.",
+  "inference_rule_no_evidence_policy": "If no existing metadata, explicit side, liquidity-side metadata, valid pre-decision sweep, or entry/liquidity relation exists, set final_direction=UNKNOWN.",
+  "confidence_2_warning": "Confidence 2 directions are inferred from pre-decision sweep evidence and must not be treated as equal to confidence 3 existing visual-pack metadata.",
   "diagnostic_rerun": {
     "executed": true,
     "before_summary_path": "backtests\\reports\\adelin_v2_preentry_outcome_diagnostics\\summary.json",

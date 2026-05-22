@@ -1,8 +1,38 @@
 {
   "limitations": [],
-  "method_limitations": [
-    "PRE_DECISION_SWEEP_INFERENCE_IS_HEURISTIC_AND_RESEARCH_ONLY",
-    "RECOVERED_DIRECTION_DOES_NOT_VALIDATE_ADELIN",
-    "NON_DIRECTIONAL_REPLAY_NOT_USED_AS_PRIMARY"
-  ]
+  "inference_rule": {
+    "inference_rule_version": "adelin_v2_pre_decision_sweep_v1",
+    "inference_rule_name": "PRE_DECISION_SWEEP_INFERENCE",
+    "inference_rule_description": "Preserve existing LONG/SHORT metadata at confidence 3. For missing directions, use explicit candidate side if present, then unambiguous liquidity-side metadata, then PRE_DECISION_SWEEP_INFERENCE at confidence 2. The sweep inference inspects M5 and M1 candles only in [decision_timestamp - 60m, decision_timestamp), excludes the anchor/decision candle and all post-entry candles, requires the sweep candle to be at least 5 minutes before the decision timestamp, and requires rejection or move-away by at least the configured rejection threshold. A sweep of high/upper liquidity maps to SHORT. A sweep of low/lower liquidity maps to LONG. Multiple valid sweep events inside the same pre-entry window are resolved by the latest defensible sweep event; unresolved or cross-source conflicts return UNKNOWN.",
+    "inference_rule_allowed_inputs": [
+      "existing visual-pack direction metadata",
+      "explicit candidate/signal side metadata when present",
+      "unambiguous pre-entry liquidity-side metadata when present",
+      "M5 candles in [decision_timestamp - sweep_lookback_minutes, decision_timestamp)",
+      "M1 candles in [decision_timestamp - sweep_lookback_minutes, decision_timestamp)",
+      "pre-anchor sweep candle timestamp and pre-anchor rejection/move-away candles",
+      "explicit pre-entry entry/liquidity relation metadata when present"
+    ],
+    "inference_rule_forbidden_inputs": [
+      "candles at or after decision_timestamp",
+      "post-entry price movement",
+      "MFE/MAE",
+      "TP/SL hits",
+      "win/loss",
+      "diagnostic replay outcome",
+      "matched-control result",
+      "manual invention of direction"
+    ],
+    "inference_rule_conflict_policy": "If independent pre-entry sources disagree, set final_direction=UNKNOWN, direction_source=CONFLICTING_DIRECTION_EVIDENCE, confidence=0, and do not force replay.",
+    "inference_rule_no_evidence_policy": "If no existing metadata, explicit side, liquidity-side metadata, valid pre-decision sweep, or entry/liquidity relation exists, set final_direction=UNKNOWN.",
+    "confidence_2_warning": "Confidence 2 directions are inferred from pre-decision sweep evidence and must not be treated as equal to confidence 3 existing visual-pack metadata."
+  },
+  "method_limitations": {
+    "confidence_2_is_inferred_not_original_metadata": "Confidence 2 directions are inferred from pre-decision sweep evidence and must not be treated as equal to confidence 3 existing visual-pack metadata.",
+    "pre_decision_sweep_inference_is_heuristic": "The PRE_DECISION_SWEEP_INFERENCE rule is a deterministic research proxy. It is not an original strategy signal and not a deployment-quality direction source.",
+    "inferred_directions_must_not_be_treated_as_equal_to_existing_metadata": "Existing metadata keeps confidence 3; recovered sweep directions use confidence 2.",
+    "phase_4_blocked_until_human_methodology_gate": "Matched-control replay remains blocked until recovered direction methodology is accepted.",
+    "recovered_direction_does_not_validate_adelin": "Direction recovery only repairs diagnostic coverage.",
+    "non_directional_replay_not_used_as_primary": "Best-move-in-either-direction replay is not used because it changes directional semantics."
+  }
 }

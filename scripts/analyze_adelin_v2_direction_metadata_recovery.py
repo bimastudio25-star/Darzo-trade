@@ -50,6 +50,52 @@ DIRECTION_JSON = "direction_recovery.json"
 SUMMARY_JSON = "direction_recovery_summary.json"
 LIMITATIONS_JSON = "direction_recovery_limitations.json"
 
+DIRECTION_INFERENCE_RULE_VERSION = "adelin_v2_pre_decision_sweep_v1"
+DIRECTION_INFERENCE_RULE_NAME = "PRE_DECISION_SWEEP_INFERENCE"
+DIRECTION_INFERENCE_RULE_ALLOWED_INPUTS = [
+    "existing visual-pack direction metadata",
+    "explicit candidate/signal side metadata when present",
+    "unambiguous pre-entry liquidity-side metadata when present",
+    "M5 candles in [decision_timestamp - sweep_lookback_minutes, decision_timestamp)",
+    "M1 candles in [decision_timestamp - sweep_lookback_minutes, decision_timestamp)",
+    "pre-anchor sweep candle timestamp and pre-anchor rejection/move-away candles",
+    "explicit pre-entry entry/liquidity relation metadata when present",
+]
+DIRECTION_INFERENCE_RULE_FORBIDDEN_INPUTS = [
+    "candles at or after decision_timestamp",
+    "post-entry price movement",
+    "MFE/MAE",
+    "TP/SL hits",
+    "win/loss",
+    "diagnostic replay outcome",
+    "matched-control result",
+    "manual invention of direction",
+]
+DIRECTION_INFERENCE_RULE_DESCRIPTION = (
+    "Preserve existing LONG/SHORT metadata at confidence 3. For missing directions, "
+    "use explicit candidate side if present, then unambiguous liquidity-side metadata, "
+    "then PRE_DECISION_SWEEP_INFERENCE at confidence 2. The sweep inference inspects "
+    "M5 and M1 candles only in [decision_timestamp - 60m, decision_timestamp), excludes "
+    "the anchor/decision candle and all post-entry candles, requires the sweep candle to "
+    "be at least 5 minutes before the decision timestamp, and requires rejection or "
+    "move-away by at least the configured rejection threshold. A sweep of high/upper "
+    "liquidity maps to SHORT. A sweep of low/lower liquidity maps to LONG. Multiple "
+    "valid sweep events inside the same pre-entry window are resolved by the latest "
+    "defensible sweep event; unresolved or cross-source conflicts return UNKNOWN."
+)
+DIRECTION_INFERENCE_RULE_CONFLICT_POLICY = (
+    "If independent pre-entry sources disagree, set final_direction=UNKNOWN, "
+    "direction_source=CONFLICTING_DIRECTION_EVIDENCE, confidence=0, and do not force replay."
+)
+DIRECTION_INFERENCE_RULE_NO_EVIDENCE_POLICY = (
+    "If no existing metadata, explicit side, liquidity-side metadata, valid pre-decision "
+    "sweep, or entry/liquidity relation exists, set final_direction=UNKNOWN."
+)
+CONFIDENCE_2_WARNING = (
+    "Confidence 2 directions are inferred from pre-decision sweep evidence and must not "
+    "be treated as equal to confidence 3 existing visual-pack metadata."
+)
+
 VERDICT_FLAGS_BASE = [
     "DIRECTION_METADATA_RECOVERY_COMPLETE",
     "PRE_ENTRY_ONLY_DIRECTION_RECOVERY",
@@ -114,6 +160,19 @@ def _direction(value: Any) -> str:
 
 def _bool_text(value: bool) -> str:
     return "true" if value else "false"
+
+
+def inference_rule_metadata() -> dict[str, Any]:
+    return {
+        "inference_rule_version": DIRECTION_INFERENCE_RULE_VERSION,
+        "inference_rule_name": DIRECTION_INFERENCE_RULE_NAME,
+        "inference_rule_description": DIRECTION_INFERENCE_RULE_DESCRIPTION,
+        "inference_rule_allowed_inputs": DIRECTION_INFERENCE_RULE_ALLOWED_INPUTS,
+        "inference_rule_forbidden_inputs": DIRECTION_INFERENCE_RULE_FORBIDDEN_INPUTS,
+        "inference_rule_conflict_policy": DIRECTION_INFERENCE_RULE_CONFLICT_POLICY,
+        "inference_rule_no_evidence_policy": DIRECTION_INFERENCE_RULE_NO_EVIDENCE_POLICY,
+        "confidence_2_warning": CONFIDENCE_2_WARNING,
+    }
 
 
 def _load_index_reason_codes(visual_pack_dir: Path) -> dict[str, str]:
@@ -244,6 +303,10 @@ def recover_sample_direction(
         "sample_id": sample.get("sample_id", ""),
         "candidate_id": sample.get("candidate_id", ""),
         "decision_timestamp": sample.get("anchor_timestamp") or sample.get("decision_timestamp") or "",
+        "inference_rule_version": DIRECTION_INFERENCE_RULE_VERSION,
+        "inference_rule_applied": "EXISTING_METADATA" if old_direction in {"LONG", "SHORT"} else "UNRECOVERABLE",
+        "inference_rule_inputs_used": "direction_guess" if old_direction in {"LONG", "SHORT"} else "none",
+        "inference_rule_forbidden_inputs_checked": "|".join(DIRECTION_INFERENCE_RULE_FORBIDDEN_INPUTS),
         "old_direction": old_direction,
         "recovered_direction": "UNKNOWN",
         "final_direction": old_direction if old_direction in {"LONG", "SHORT"} else "UNKNOWN",
@@ -255,6 +318,7 @@ def recover_sample_direction(
         "conflicting_evidence": "",
         "pre_entry_only": True,
         "used_post_entry_data": False,
+        "post_entry_data_used": False,
         "usable_for_directional_replay": old_direction in {"LONG", "SHORT"},
     }
     if old_direction in {"LONG", "SHORT"}:
@@ -283,6 +347,8 @@ def recover_sample_direction(
         base.update(
             {
                 "direction_source": "CONFLICTING_DIRECTION_EVIDENCE",
+                "inference_rule_applied": "CONFLICTING_DIRECTION_EVIDENCE",
+                "inference_rule_inputs_used": "multiple_pre_entry_sources",
                 "direction_recovery_reason": "Conflicting pre-entry direction evidence; direction not forced.",
                 "conflicting_evidence": conflict,
                 "usable_for_directional_replay": False,
@@ -298,6 +364,8 @@ def recover_sample_direction(
             "final_direction": direction,
             "direction_source": source,
             "direction_confidence": confidence,
+            "inference_rule_applied": source,
+            "inference_rule_inputs_used": reason,
             "direction_recovery_reason": reason,
             "usable_for_directional_replay": True,
         }
@@ -334,13 +402,17 @@ def build_summary(rows: Sequence[Mapping[str, Any]], config: RecoveryConfig) -> 
     source_counts = Counter(str(row.get("direction_source") or "UNKNOWN") for row in rows)
     confidence_counts = Counter(str(row.get("direction_confidence")) for row in rows)
     final_counts = Counter(str(row.get("final_direction") or "UNKNOWN") for row in rows)
-    used_post_entry = sum(str(row.get("used_post_entry_data")).lower() == "true" for row in rows)
+    used_post_entry = sum(
+        str(row.get("used_post_entry_data")).lower() == "true"
+        or str(row.get("post_entry_data_used")).lower() == "true"
+        for row in rows
+    )
     flags = list(VERDICT_FLAGS_BASE)
     if recovered == 0:
         flags.append("DIRECTION_RECOVERY_NOT_POSSIBLE_FROM_AVAILABLE_METADATA")
     if final_known > existing:
         flags.append("DIRECTION_COVERAGE_IMPROVED")
-    return {
+    summary = {
         "run_started_at": pd.Timestamp.now(tz=timezone.utc).isoformat(),
         "symbol": config.symbol,
         "visual_pack_dir": str(config.visual_pack_dir),
@@ -349,6 +421,11 @@ def build_summary(rows: Sequence[Mapping[str, Any]], config: RecoveryConfig) -> 
         "existing_direction_count": existing,
         "missing_direction_count": missing,
         "recovered_direction_count": recovered,
+        "recovered_direction_confidence_2_count": sum(
+            str(row.get("recovered_direction")) in {"LONG", "SHORT"}
+            and str(row.get("direction_confidence")) == "2"
+            for row in rows
+        ),
         "unrecoverable_direction_count": unknown,
         "final_direction_known_count": final_known,
         "final_direction_unknown_count": unknown,
@@ -379,6 +456,8 @@ def build_summary(rows: Sequence[Mapping[str, Any]], config: RecoveryConfig) -> 
         },
         "run_finished_at": pd.Timestamp.now(tz=timezone.utc).isoformat(),
     }
+    summary.update(inference_rule_metadata())
+    return summary
 
 
 def run_recovery(config: RecoveryConfig) -> dict[str, Any]:
@@ -408,11 +487,24 @@ def run_recovery(config: RecoveryConfig) -> dict[str, Any]:
     summary = build_summary(rows, config)
     limitations = {
         "limitations": sorted(set(sample_limitations)),
-        "method_limitations": [
-            "PRE_DECISION_SWEEP_INFERENCE_IS_HEURISTIC_AND_RESEARCH_ONLY",
-            "RECOVERED_DIRECTION_DOES_NOT_VALIDATE_ADELIN",
-            "NON_DIRECTIONAL_REPLAY_NOT_USED_AS_PRIMARY",
-        ],
+        "inference_rule": inference_rule_metadata(),
+        "method_limitations": {
+            "confidence_2_is_inferred_not_original_metadata": CONFIDENCE_2_WARNING,
+            "pre_decision_sweep_inference_is_heuristic": (
+                "The PRE_DECISION_SWEEP_INFERENCE rule is a deterministic research proxy. "
+                "It is not an original strategy signal and not a deployment-quality direction source."
+            ),
+            "inferred_directions_must_not_be_treated_as_equal_to_existing_metadata": (
+                "Existing metadata keeps confidence 3; recovered sweep directions use confidence 2."
+            ),
+            "phase_4_blocked_until_human_methodology_gate": (
+                "Matched-control replay remains blocked until recovered direction methodology is accepted."
+            ),
+            "recovered_direction_does_not_validate_adelin": "Direction recovery only repairs diagnostic coverage.",
+            "non_directional_replay_not_used_as_primary": (
+                "Best-move-in-either-direction replay is not used because it changes directional semantics."
+            ),
+        },
     }
 
     recovery_csv = output_dir / DIRECTION_CSV
@@ -505,6 +597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(
             {
                 "output_dir": summary["output_dir"],
+                "inference_rule_version": summary["inference_rule_version"],
                 "total_samples": summary["total_samples"],
                 "existing_direction_count": summary["existing_direction_count"],
                 "missing_direction_count": summary["missing_direction_count"],

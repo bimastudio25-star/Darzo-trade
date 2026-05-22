@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.analyze_adelin_v2_direction_metadata_recovery import (
+    DIRECTION_INFERENCE_RULE_VERSION,
     RecoveryConfig,
     recover_sample_direction,
 )
@@ -52,6 +53,8 @@ def test_existing_direction_is_preserved():
     assert row["final_direction"] == "LONG"
     assert row["direction_source"] == "EXISTING_METADATA"
     assert row["direction_confidence"] == 3
+    assert row["inference_rule_version"] == DIRECTION_INFERENCE_RULE_VERSION
+    assert row["inference_rule_applied"] == "EXISTING_METADATA"
     assert row["used_post_entry_data"] is False
 
 
@@ -82,7 +85,37 @@ def test_missing_direction_recovers_from_pre_decision_sweep():
     assert row["recovered_direction"] == "LONG"
     assert row["direction_source"] == "PRE_DECISION_SWEEP_INFERENCE"
     assert row["direction_confidence"] == 2
+    assert row["inference_rule_version"] == DIRECTION_INFERENCE_RULE_VERSION
+    assert row["inference_rule_applied"] == "PRE_DECISION_SWEEP_INFERENCE"
     assert "POST_ANCHOR_CANDLES_EXCLUDED" in row["direction_recovery_reason"]
+
+
+def test_post_entry_fields_cannot_influence_recovered_direction():
+    sample = {
+        "sample_id": "s_post",
+        "direction_guess": "UNKNOWN",
+        "anchor_timestamp": "2026-01-01T00:10:00+00:00",
+        "outcome": "WIN",
+        "max_favorable_pips": "999",
+        "future_return": "strong_up",
+        "tp_hit": "YES",
+        "sl_hit": "NO",
+    }
+    row_without_outcome = recover_sample_direction(
+        {"sample_id": "s_post", "direction_guess": "UNKNOWN", "anchor_timestamp": "2026-01-01T00:10:00+00:00"},
+        _sweep_frames(),
+        RecoveryConfig(sweep_lookback_minutes=15, sweep_min_anchor_delay_minutes=5),
+        0.1,
+    )
+    row_with_outcome = recover_sample_direction(
+        sample,
+        _sweep_frames(),
+        RecoveryConfig(sweep_lookback_minutes=15, sweep_min_anchor_delay_minutes=5),
+        0.1,
+    )
+    assert row_with_outcome["final_direction"] == row_without_outcome["final_direction"]
+    assert row_with_outcome["used_post_entry_data"] is False
+    assert row_with_outcome["post_entry_data_used"] is False
 
 
 def test_conflicting_pre_entry_evidence_results_in_unknown():
@@ -103,6 +136,25 @@ def test_conflicting_pre_entry_evidence_results_in_unknown():
     assert row["usable_for_directional_replay"] is False
 
 
+def test_no_valid_pre_entry_sweep_returns_unknown():
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {"time": pd.Timestamp(start + timedelta(minutes=i)), "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0}
+            for i in range(10)
+        ]
+    )
+    row = recover_sample_direction(
+        {"sample_id": "s_none", "direction_guess": "UNKNOWN", "anchor_timestamp": "2026-01-01T00:10:00+00:00"},
+        {"M1": frame, "M5": pd.DataFrame()},
+        RecoveryConfig(sweep_lookback_minutes=15, sweep_min_anchor_delay_minutes=5),
+        0.1,
+    )
+    assert row["final_direction"] == "UNKNOWN"
+    assert row["direction_source"] == "UNRECOVERABLE"
+    assert row["inference_rule_applied"] == "UNRECOVERABLE"
+
+
 def test_generated_recovery_summary_counts_and_post_entry_guard():
     path = REPO_ROOT / "backtests" / "reports" / "adelin_v2_direction_metadata_recovery" / "direction_recovery_summary.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -110,9 +162,13 @@ def test_generated_recovery_summary_counts_and_post_entry_guard():
     assert payload["existing_direction_count"] == 21
     assert payload["missing_direction_count"] == 19
     assert payload["recovered_direction_count"] == 19
+    assert payload["recovered_direction_confidence_2_count"] == 19
     assert payload["final_direction_unknown_count"] == 0
     assert payload["used_post_entry_data_count"] == 0
+    assert payload["inference_rule_version"] == DIRECTION_INFERENCE_RULE_VERSION
+    assert payload["confidence_2_warning"]
     assert "DIRECTION_COVERAGE_IMPROVED" in payload["verdict_flags"]
+    assert "PHASE_4_STILL_BLOCKED" in payload["verdict_flags"]
 
 
 def test_direction_recovery_rows_are_pre_entry_only():
@@ -121,6 +177,8 @@ def test_direction_recovery_rows_are_pre_entry_only():
     assert rows
     assert all(row["pre_entry_only"] is True for row in rows)
     assert all(row["used_post_entry_data"] is False for row in rows)
+    assert all(row["post_entry_data_used"] is False for row in rows)
+    assert all(row["inference_rule_version"] == DIRECTION_INFERENCE_RULE_VERSION for row in rows)
 
 
 def test_recovered_diagnostics_remove_unknown_direction_limitation():
