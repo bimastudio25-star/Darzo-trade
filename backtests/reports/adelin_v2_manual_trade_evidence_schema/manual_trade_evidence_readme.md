@@ -10,6 +10,11 @@ Files:
 - `manual_trade_evidence_validation_summary.json`: validator output for the blank template.
 - `summary.json`: branch-level safety and intent summary.
 
+Completion modes:
+
+- `RAPID_CAPTURE`: use for quick entry during or shortly after seeing a trade. Only the minimal viable fields are required; missing full-review fields are warnings.
+- `FULL_REVIEW`: use after a complete review. Missing full-review fields are validation errors.
+
 Validation command:
 
 ```bash

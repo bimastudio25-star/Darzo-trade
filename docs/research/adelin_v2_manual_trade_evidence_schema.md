@@ -37,12 +37,40 @@ No screenshots were analyzed or auto-labeled. No OHLC data was read.
 
 1. Save screenshots in an agreed folder outside the schema itself, or record their existing paths.
 2. Fill one row per trade/sample in `manual_trade_evidence_template.csv`.
-3. Include M1/M5/M15/HTF screenshots when available.
-4. Include entry, SL, TP, and target levels only if visible or explicitly known.
-5. Write the human reasoning in plain language.
-6. Mark uncertainty honestly using `UNCLEAR`, `UNKNOWN`, `PARTIAL`, or `NOT_APPLICABLE`.
-7. Include bad, failed, skipped, and unclear trades, not only winners.
-8. Run the validator before using the file for any later review.
+3. Use `RAPID_CAPTURE` when entering the example quickly during or shortly after seeing a trade.
+4. Upgrade the row to `FULL_REVIEW` later when the trade has been fully reviewed.
+5. Include M1/M5/M15/HTF screenshots when available.
+6. Include entry, SL, TP, and target levels only if visible or explicitly known.
+7. Write the human reasoning in plain language.
+8. Do not invent unknown fields. Use `UNKNOWN`, `UNCLEAR`, `PARTIAL`, or `NOT_APPLICABLE` honestly.
+9. Include bad, failed, skipped, and unclear trades, not only winners.
+10. Run the validator before using the file for any later review.
+
+## Completion Modes
+
+`RAPID_CAPTURE` is the minimal viable row mode. It is meant for fast capture when the human trader wants to avoid losing context. Required minimal fields are:
+
+- `evidence_id`
+- `example_only`
+- `capture_mode`
+- `source_person`
+- `screenshot_path`
+- `screenshot_count`
+- `symbol`
+- `date_observed`
+- `approximate_trade_time`
+- `timeframe_primary`
+- `direction`
+- `human_entry_reason`
+- `result_known`
+- `result_label`
+- `screenshot_quality`
+- `evidence_quality`
+- `human_notes`
+
+In `RAPID_CAPTURE`, missing full-review fields produce validator warnings, not failures.
+
+`FULL_REVIEW` is the strict mode for later review. It requires the broader context, human reasoning, and data-quality fields defined in `manual_trade_evidence_schema.json`. Missing full-review fields fail validation.
 
 Validator command:
 

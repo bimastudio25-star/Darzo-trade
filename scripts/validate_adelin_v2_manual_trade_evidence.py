@@ -67,6 +67,14 @@ def row_text(row: Mapping[str, Any]) -> str:
     return " ".join(str(value or "") for value in row.values()).lower()
 
 
+def required_fields_for_mode(schema: Mapping[str, Any], capture_mode: str) -> list[str]:
+    if capture_mode == "RAPID_CAPTURE":
+        return list(schema.get("required_minimal_fields", []))
+    if capture_mode == "FULL_REVIEW":
+        return list(schema.get("required_full_review_fields", []))
+    return list(schema.get("required_minimal_fields", []))
+
+
 def validate_rows(
     fieldnames: Sequence[str],
     rows: Sequence[Mapping[str, str]],
@@ -91,19 +99,35 @@ def validate_rows(
     example_rows_checked = 0
     example_rows_missing_marker = 0
 
-    required_for_row = [
-        field["name"]
-        for field in schema_fields(schema)
-        if field.get("required_for_nonblank_row")
-    ]
+    full_review_fields = list(schema.get("required_full_review_fields", []))
+    minimal_fields = list(schema.get("required_minimal_fields", []))
 
     for row_number, row in nonblank_rows:
         evidence_id = normalize(row.get("evidence_id"))
         if evidence_id:
             ids[evidence_id] += 1
-        for column in required_for_row:
+        capture_mode = normalize(row.get("capture_mode"))
+        mode_required = required_fields_for_mode(schema, capture_mode)
+        if not capture_mode:
+            errors.append({"type": "missing_capture_mode", "row": row_number})
+        for column in mode_required:
             if normalize(row.get(column)) == "":
-                errors.append({"type": "missing_required_value", "row": row_number, "column": column})
+                errors.append({"type": "missing_required_value", "row": row_number, "column": column, "capture_mode": capture_mode or "MISSING"})
+
+        if capture_mode == "RAPID_CAPTURE":
+            missing_full_review = [
+                column
+                for column in full_review_fields
+                if column not in minimal_fields and normalize(row.get(column)) == ""
+            ]
+            if missing_full_review:
+                warnings.append(
+                    {
+                        "type": "rapid_capture_missing_full_review_fields",
+                        "row": row_number,
+                        "missing_fields": missing_full_review,
+                    }
+                )
 
         screenshot_path = normalize(row.get("screenshot_path"))
         if not screenshot_path:
@@ -114,7 +138,8 @@ def validate_rows(
             if value and value not in allowed:
                 errors.append({"type": "invalid_enum", "row": row_number, "column": column, "value": value, "allowed": sorted(allowed)})
 
-        if normalize(row.get("confidence_human_label")) not in {"0", "1", "2", "3"}:
+        confidence = normalize(row.get("confidence_human_label"))
+        if confidence and confidence not in {"0", "1", "2", "3"}:
             errors.append({"type": "invalid_confidence_human_label", "row": row_number, "value": normalize(row.get("confidence_human_label"))})
 
         lower_text = row_text(row)
@@ -137,6 +162,7 @@ def validate_rows(
 
     quality_counts = Counter(normalize(row.get("evidence_quality")) for _, row in nonblank_rows if normalize(row.get("evidence_quality")))
     result_label_counts = Counter(normalize(row.get("result_label")) for _, row in nonblank_rows if normalize(row.get("result_label")))
+    capture_mode_counts = Counter(normalize(row.get("capture_mode")) for _, row in nonblank_rows if normalize(row.get("capture_mode")))
 
     return {
         "validation_passed": not errors,
@@ -145,6 +171,8 @@ def validate_rows(
         "rows_nonblank": len(nonblank_rows),
         "allow_empty": allow_empty,
         "required_columns_count": len(required),
+        "required_minimal_fields": minimal_fields,
+        "required_full_review_fields": full_review_fields,
         "missing_required_columns": missing_columns,
         "errors": errors,
         "warnings": warnings,
@@ -154,6 +182,7 @@ def validate_rows(
         "example_rows_missing_marker": example_rows_missing_marker,
         "evidence_quality_counts": dict(quality_counts),
         "result_label_counts": dict(result_label_counts),
+        "capture_mode_counts": dict(capture_mode_counts),
         "ohlc_read": False,
         "screenshots_auto_labeled": False,
         "replay_run": False,

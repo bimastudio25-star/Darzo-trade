@@ -48,9 +48,20 @@ def test_required_columns_exist_in_template():
     required = [field["name"] for field in schema["fields"] if field["required_column"]]
     assert required
     assert all(column in fieldnames for column in required)
+    assert "capture_mode" in fieldnames
     assert "direction" in fieldnames
     assert "result_label" in fieldnames
     assert "confidence_human_label" in fieldnames
+
+
+def test_capture_mode_schema_defines_rapid_and_full_review():
+    schema = _load_json(SCHEMA_PATH)
+    fields = {field["name"]: field for field in schema["fields"]}
+    assert fields["capture_mode"]["allowed_values"] == ["RAPID_CAPTURE", "FULL_REVIEW"]
+    assert schema["completion_modes"]["RAPID_CAPTURE"]["missing_full_review_fields_behavior"] == "warn_only"
+    assert schema["completion_modes"]["FULL_REVIEW"]["missing_full_review_fields_behavior"] == "strict_error"
+    assert set(schema["required_minimal_fields"]).issubset(set(schema["required_full_review_fields"]))
+    assert "human_entry_reason" in schema["required_minimal_fields"]
 
 
 def test_example_rows_are_marked_example_only():
@@ -68,6 +79,67 @@ def test_blank_template_passes_with_allow_empty(tmp_path: Path):
     assert output.exists()
 
 
+def test_rapid_capture_accepts_minimal_row_with_warnings():
+    schema = _load_json(SCHEMA_PATH)
+    fieldnames, _ = _csv_rows(TEMPLATE_PATH)
+    row = {name: "" for name in fieldnames}
+    row.update(
+        {
+            "evidence_id": "RAPID_001",
+            "example_only": "false",
+            "capture_mode": "RAPID_CAPTURE",
+            "source_person": "Adelin Bivol",
+            "screenshot_path": "manual_examples/rapid_001.png",
+            "screenshot_count": "1",
+            "symbol": "XAUUSD",
+            "date_observed": "2026-05-22",
+            "approximate_trade_time": "approx 10:00",
+            "timeframe_primary": "M1",
+            "direction": "LONG",
+            "human_entry_reason": "Fast note from live observation.",
+            "result_known": "UNKNOWN",
+            "result_label": "UNKNOWN",
+            "screenshot_quality": "MEDIUM",
+            "evidence_quality": "LOW",
+            "human_notes": "Rapid capture only; review later.",
+        }
+    )
+    summary = validate_rows(fieldnames, [row], schema, allow_empty=False)
+    assert summary["validation_passed"] is True
+    assert summary["capture_mode_counts"] == {"RAPID_CAPTURE": 1}
+    assert any(warning["type"] == "rapid_capture_missing_full_review_fields" for warning in summary["warnings"])
+
+
+def test_full_review_requires_fuller_fields():
+    schema = _load_json(SCHEMA_PATH)
+    fieldnames, _ = _csv_rows(TEMPLATE_PATH)
+    row = {name: "" for name in fieldnames}
+    row.update(
+        {
+            "evidence_id": "FULL_001",
+            "example_only": "false",
+            "capture_mode": "FULL_REVIEW",
+            "source_person": "Adelin Bivol",
+            "screenshot_path": "manual_examples/full_001.png",
+            "screenshot_count": "1",
+            "symbol": "XAUUSD",
+            "date_observed": "2026-05-22",
+            "approximate_trade_time": "approx 10:00",
+            "timeframe_primary": "M1",
+            "direction": "LONG",
+            "human_entry_reason": "Full review missing context on purpose.",
+            "result_known": "UNKNOWN",
+            "result_label": "UNKNOWN",
+            "screenshot_quality": "MEDIUM",
+            "evidence_quality": "LOW",
+            "human_notes": "This should fail in FULL_REVIEW mode.",
+        }
+    )
+    summary = validate_rows(fieldnames, [row], schema, allow_empty=False)
+    assert summary["validation_passed"] is False
+    assert any(error["type"] == "missing_required_value" and error["capture_mode"] == "FULL_REVIEW" for error in summary["errors"])
+
+
 def test_invalid_enum_fails():
     schema = _load_json(SCHEMA_PATH)
     fieldnames, rows = _csv_rows(EXAMPLE_PATH)
@@ -76,6 +148,16 @@ def test_invalid_enum_fails():
     summary = validate_rows(fieldnames, [bad], schema, allow_empty=False)
     assert summary["validation_passed"] is False
     assert any(error["type"] == "invalid_enum" and error["column"] == "direction" for error in summary["errors"])
+
+
+def test_invalid_capture_mode_fails():
+    schema = _load_json(SCHEMA_PATH)
+    fieldnames, rows = _csv_rows(EXAMPLE_PATH)
+    bad = dict(rows[0])
+    bad["capture_mode"] = "QUICK_NOTE"
+    summary = validate_rows(fieldnames, [bad], schema, allow_empty=False)
+    assert summary["validation_passed"] is False
+    assert any(error["type"] == "invalid_enum" and error["column"] == "capture_mode" for error in summary["errors"])
 
 
 def test_forbidden_validation_claims_are_rejected():
@@ -112,6 +194,8 @@ def test_example_rows_missing_marker_fail():
 def test_summary_confirms_schema_only_and_safety_flags():
     summary = _load_json(SUMMARY_PATH)
     assert summary["schema_only"] is True
+    assert summary["rapid_capture_enabled"] is True
+    assert summary["completion_modes"] == ["RAPID_CAPTURE", "FULL_REVIEW"]
     assert summary["manual_examples_analyzed"] is False
     assert summary["screenshots_auto_labeled"] is False
     assert summary["ohlc_read"] is False
@@ -129,6 +213,8 @@ def test_generated_validation_summary_is_safe():
     summary = _load_json(VALIDATION_SUMMARY_PATH)
     assert summary["validation_passed"] is True
     assert summary["schema_only"] is True
+    assert "required_minimal_fields" in summary
+    assert "required_full_review_fields" in summary
     assert summary["ohlc_read"] is False
     assert summary["screenshots_auto_labeled"] is False
     assert summary["replay_run"] is False

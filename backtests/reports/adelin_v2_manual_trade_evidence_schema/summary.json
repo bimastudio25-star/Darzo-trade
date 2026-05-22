@@ -12,6 +12,13 @@
   "profitability_claim_made": false,
   "strategy_validated": false,
   "intended_use": "manual qualitative evidence collection",
+  "completion_modes": [
+    "RAPID_CAPTURE",
+    "FULL_REVIEW"
+  ],
+  "rapid_capture_enabled": true,
+  "rapid_capture_missing_full_review_fields": "warn_only",
+  "full_review_missing_required_fields": "strict_error",
   "verdict_flags": [
     "MANUAL_TRADE_EVIDENCE_SCHEMA_CREATED",
     "QUALITATIVE_EVIDENCE_ONLY",
