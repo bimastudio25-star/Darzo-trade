@@ -1,0 +1,57 @@
+{
+  "plan_version": "adelin_v2_good_fast_expanded_sample_plan_v1",
+  "primary_hypotheses": [
+    {
+      "feature_name": "fvg_ifvg_near_20p",
+      "frozen_interpretation": "Presence of nearby FVG/iFVG may be associated with FAST_FAILURE; treat as a possible negative/failure marker.",
+      "future_test_requirements": [
+        "deterministic definition",
+        "pre-entry only",
+        "no post-entry candles",
+        "same threshold: near 20 pips",
+        "report present/absent by group",
+        "report direction confidence sensitivity",
+        "do not reinterpret as positive unless future data proves otherwise"
+      ],
+      "hypothesis_id": "H1",
+      "prior_observation": {
+        "difference_good_minus_fast": -0.552,
+        "fast_failure": "23/27",
+        "good_fast_reaction": "3/10"
+      },
+      "role": "PRIMARY_HYPOTHESIS"
+    },
+    {
+      "feature_name": "liquidity_htf_recent_level",
+      "frozen_interpretation": "Recent HTF liquidity confluence may be associated with GOOD_FAST_REACTION; treat as a possible positive/good-reaction marker.",
+      "future_test_requirements": [
+        "deterministic definition",
+        "pre-entry only",
+        "define what counts as HTF",
+        "define recency window before execution",
+        "no outcome-derived threshold selection",
+        "report present/absent by group",
+        "report direction confidence sensitivity"
+      ],
+      "hypothesis_id": "H2",
+      "prior_observation": {
+        "difference_good_minus_fast": 0.489,
+        "fast_failure": "3/27",
+        "good_fast_reaction": "6/10"
+      },
+      "role": "PRIMARY_HYPOTHESIS"
+    }
+  ],
+  "secondary_tracked_features": [
+    {
+      "feature_name": "m1_large_body_ge_0_60",
+      "promotion_rule": "May not become a primary hypothesis unless a later plan explicitly promotes it.",
+      "role": "SECONDARY_TRACKED_ONLY"
+    },
+    {
+      "feature_name": "m1_close_high_ge_0_70",
+      "promotion_rule": "May not become a primary hypothesis unless a later plan explicitly promotes it.",
+      "role": "SECONDARY_TRACKED_ONLY"
+    }
+  ]
+}

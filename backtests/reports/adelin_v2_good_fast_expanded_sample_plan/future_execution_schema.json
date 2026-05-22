@@ -1,0 +1,39 @@
+{
+  "allowed": [
+    "collect/select additional samples according to this plan",
+    "compute H1/H2 present/absent by group",
+    "track secondary features as secondary only",
+    "stratify by direction confidence and direction source",
+    "run confidence-3-only sensitivity",
+    "write leakage check report"
+  ],
+  "feature_definitions": {
+    "fvg_ifvg_near_20p": {
+      "feature_role": "primary negative/failure-side hypothesis",
+      "pre_entry_only": true,
+      "threshold": "20 pips"
+    },
+    "liquidity_htf_recent_level": {
+      "excluded_timeframes": [
+        "M5",
+        "M1"
+      ],
+      "feature_role": "primary positive/good-reaction-side hypothesis",
+      "htf_definition": "H1 recent high/low from the prior 24h or M15 recent high/low from the prior 6h.",
+      "pre_entry_only": true,
+      "recency_window": "H1: [decision_timestamp - 24h, decision_timestamp); M15: [decision_timestamp - 6h, decision_timestamp)."
+    }
+  },
+  "forbidden": [
+    "convert H1/H2 into live filters",
+    "build a score",
+    "optimize thresholds",
+    "pick new thresholds after seeing results",
+    "use post-entry candles to define features",
+    "claim profitability",
+    "claim statistical significance",
+    "claim deployability",
+    "unlock Phase 4 automatically",
+    "run matched-control replay"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "exclusion": [
+    "unknown direction after frozen recovery rule",
+    "post-entry direction inference",
+    "missing decision_timestamp",
+    "missing required metadata",
+    "leakage risk",
+    "duplicate sample/candidate",
+    "samples selected manually because they look good or look bad"
+  ],
+  "inclusion": [
+    "XAUUSD only",
+    "Adelin v2 only",
+    "pre-entry metadata available",
+    "direction known or recoverable using frozen rule adelin_v2_pre_decision_sweep_v1",
+    "outcome group is GOOD_FAST_REACTION, FAST_FAILURE, MIXED_REACTION, or CHOP_AFTER_ENTRY"
+  ],
+  "primary_comparison_inclusion": [
+    "GOOD_FAST_REACTION",
+    "FAST_FAILURE"
+  ],
+  "secondary_groups_excluded_from_primary": [
+    "MIXED_REACTION",
+    "CHOP_AFTER_ENTRY"
+  ]
+}

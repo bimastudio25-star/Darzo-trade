@@ -1,0 +1,68 @@
+{
+  "broker_execution_enabled": false,
+  "candles_inspected": false,
+  "forbidden_interpretations": [
+    "convert H1/H2 into live filters",
+    "build a score",
+    "optimize thresholds",
+    "pick new thresholds after seeing results",
+    "use post-entry candles to define features",
+    "claim profitability",
+    "claim statistical significance",
+    "claim deployability",
+    "unlock Phase 4 automatically",
+    "run matched-control replay"
+  ],
+  "live_trading_enabled": false,
+  "matched_control_replay_run": false,
+  "minimum_n_gates": {
+    "direction_confidence": {
+      "confidence_2_only_signal_policy": "mark weak/research-only and do not proceed to Phase 4",
+      "confidence_3_only_sensitivity_mandatory": true,
+      "report_confidence_3_and_2_separately": true
+    },
+    "hard_minimum_fast_failure_n": 25,
+    "hard_minimum_good_fast_reaction_n": 11,
+    "hard_minimum_total_samples_for_useful_expanded_diagnostic": 60,
+    "if_good_fast_reaction_n_lte_10": {
+      "phase_4_blocked": true,
+      "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N"
+    },
+    "previous_gate_clearance_rule": "GOOD_FAST_REACTION N must be > 10 to clear the previous gate.",
+    "target_fast_failure_n": 40,
+    "target_good_fast_reaction_n": 20,
+    "target_total_expanded_samples": 80
+  },
+  "ohlc_read": false,
+  "orders_enabled": false,
+  "phase_4_blocked": true,
+  "plan_only": true,
+  "plan_version": "adelin_v2_good_fast_expanded_sample_plan_v1",
+  "primary_hypotheses": [
+    "fvg_ifvg_near_20p",
+    "liquidity_htf_recent_level"
+  ],
+  "profitability_claim_made": false,
+  "replay_run": false,
+  "runtime_logic_modified": false,
+  "samples_collected": false,
+  "secondary_tracked_features": [
+    "m1_large_body_ge_0_60",
+    "m1_close_high_ge_0_70"
+  ],
+  "strategy_2_touched": false,
+  "strategy_3_touched": false,
+  "telegram_enabled": false,
+  "v3_stash_applied_or_popped": false,
+  "verdict_flags": [
+    "EXPANDED_SAMPLE_PLAN_REGISTERED",
+    "PLAN_ONLY_NO_SAMPLES_COLLECTED",
+    "NO_OHLC_READ",
+    "PRIMARY_HYPOTHESES_FROZEN",
+    "MINIMUM_N_GATES_REGISTERED",
+    "PHASE_4_STILL_BLOCKED",
+    "NO_MATCHED_CONTROL_REPLAY",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ]
+}

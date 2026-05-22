@@ -1,0 +1,18 @@
+{
+  "direction_confidence": {
+    "confidence_2_only_signal_policy": "mark weak/research-only and do not proceed to Phase 4",
+    "confidence_3_only_sensitivity_mandatory": true,
+    "report_confidence_3_and_2_separately": true
+  },
+  "hard_minimum_fast_failure_n": 25,
+  "hard_minimum_good_fast_reaction_n": 11,
+  "hard_minimum_total_samples_for_useful_expanded_diagnostic": 60,
+  "if_good_fast_reaction_n_lte_10": {
+    "phase_4_blocked": true,
+    "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N"
+  },
+  "previous_gate_clearance_rule": "GOOD_FAST_REACTION N must be > 10 to clear the previous gate.",
+  "target_fast_failure_n": 40,
+  "target_good_fast_reaction_n": 20,
+  "target_total_expanded_samples": 80
+}

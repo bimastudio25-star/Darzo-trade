@@ -1,0 +1,35 @@
+{
+  "outcomes": [
+    {
+      "allowed_next_step": "allow bounded confirmatory diagnostic",
+      "condition": "H1/H2 repeat directionally on expanded samples and minimum-N gates pass.",
+      "decision_code": "HYPOTHESES_REPEAT_WITH_SUFFICIENT_N",
+      "phase_4_status": "still blocked; no automatic Phase 4"
+    },
+    {
+      "allowed_next_step": "reject as sample-specific and pause Adelin v2 strategy path",
+      "condition": "Candidate feature directions do not repeat.",
+      "decision_code": "H1_H2_FAIL_TO_REPEAT",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_step": "mark weak and require more confidence-3 samples",
+      "condition": "Signal exists only in confidence-2 direction-inferred samples.",
+      "decision_code": "CONFIDENCE_2_ONLY_SIGNAL",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_step": "verdict capped at MIXED_AMBIGUOUS_SMALL_N; more samples required",
+      "condition": "Minimum-N gates fail.",
+      "decision_code": "MINIMUM_N_NOT_MET",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_step": "reject",
+      "condition": "Feature uses post-entry information.",
+      "decision_code": "LEAKAGE_DETECTED",
+      "phase_4_status": "blocked"
+    }
+  ],
+  "phase_4_blocked": true
+}
