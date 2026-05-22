@@ -1,0 +1,44 @@
+{
+  "comparison_executed": false,
+  "future_row_fields": [
+    "sample_id",
+    "final_diagnostic_outcome",
+    "direction",
+    "direction_confidence",
+    "direction_source",
+    "pre_entry_feature_family",
+    "pre_entry_feature_value",
+    "feature_present",
+    "leakage_check_passed",
+    "notes"
+  ],
+  "plan_version": "adelin_v2_good_vs_fast_failure_diagnostic_plan_v1",
+  "planned_descriptive_outputs_for_future_execution_branch": [
+    "descriptive feature frequency table",
+    "difference in proportions",
+    "confidence-3-only sensitivity",
+    "confidence-2-only caution table",
+    "human review priority list",
+    "leakage check report"
+  ],
+  "primary_group_inclusion_rule": "Only rows whose final diagnostic outcome is GOOD_FAST_REACTION or FAST_FAILURE belong in the primary comparison.",
+  "primary_groups": [
+    "GOOD_FAST_REACTION",
+    "FAST_FAILURE"
+  ],
+  "prohibited_outputs": [
+    "statistical significance claims",
+    "ML classifier",
+    "optimized thresholds",
+    "score generation",
+    "live-entry filter",
+    "profitability claim"
+  ],
+  "real_feature_vs_outcome_statistics_generated": false,
+  "secondary_group_rule": "MIXED_REACTION and CHOP_AFTER_ENTRY may be reviewed separately, but must not be included in primary GOOD vs FAST separation.",
+  "secondary_review_groups": [
+    "MIXED_REACTION",
+    "CHOP_AFTER_ENTRY"
+  ],
+  "small_n_warning": "N=10 GOOD_FAST_REACTION is too small for strong conclusions. Future outputs must be diagnostic only."
+}

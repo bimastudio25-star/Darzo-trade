@@ -1,0 +1,36 @@
+{
+  "outcomes": [
+    {
+      "allowed_next_step": "allow a small confirmatory diagnostic branch",
+      "condition": "One or two pre-entry features show strong descriptive separation and the same pattern appears in confidence-3-only sensitivity.",
+      "decision_code": "STRONG_DESCRIPTIVE_SEPARATION",
+      "phase_4_status": "still blocked until reviewed"
+    },
+    {
+      "allowed_next_step": "mark weak, require more data or manual review",
+      "condition": "Separation exists mainly or only in confidence-2 inferred-direction samples.",
+      "decision_code": "CONFIDENCE_2_ONLY_SEPARATION",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_step": "pause Adelin v2 as a strategy candidate; optionally keep as research lab",
+      "condition": "No stable pre-entry separation exists.",
+      "decision_code": "NO_STABLE_SEPARATION",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_step": "reject the feature and mark leakage risk",
+      "condition": "Separation requires post-entry interpretation or forbidden inputs.",
+      "decision_code": "LEAKAGE_DEPENDENT_SEPARATION",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_step": "require additional samples or stricter sample collection",
+      "condition": "Separation is ambiguous due small N.",
+      "decision_code": "MIXED_AMBIGUOUS_SMALL_N",
+      "phase_4_status": "blocked"
+    }
+  ],
+  "phase_4_blocked": true,
+  "plan_version": "adelin_v2_good_vs_fast_failure_diagnostic_plan_v1"
+}

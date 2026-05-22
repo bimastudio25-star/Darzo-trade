@@ -1,0 +1,134 @@
+{
+  "allowed_features": [
+    {
+      "allowed_inputs": [
+        "decision timestamp",
+        "entry/reference level available before decision"
+      ],
+      "feature_family": "numeric_level_confluence",
+      "leakage_guard": "Do not use whether price later reacted from the level.",
+      "planned_use": "descriptive candidate-group comparison",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "price level available before decision",
+        "frozen numeric grid"
+      ],
+      "feature_family": "round_level_proximity",
+      "leakage_guard": "Do not select grid bands after seeing GOOD vs FAST separation.",
+      "planned_use": "distance/proximity stratum only",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "pre-decision M1/M5 sweep evidence",
+        "direction inference source"
+      ],
+      "feature_family": "pre_decision_sweep_type",
+      "leakage_guard": "Use only candles strictly before decision timestamp.",
+      "planned_use": "sweep source and side stratum",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "last completed pre-decision M1 candles"
+      ],
+      "feature_family": "m1_candle_anatomy_before_decision",
+      "leakage_guard": "Exclude decision candle if not closed and all post-entry candles.",
+      "planned_use": "wick/body/range anatomy before decision",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "last completed pre-decision M5 candles"
+      ],
+      "feature_family": "m5_candle_anatomy_before_decision",
+      "leakage_guard": "Exclude incomplete/current M5 candle unless already closed before decision.",
+      "planned_use": "M5 wick/body/range anatomy before decision",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "closed M15 candles before decision"
+      ],
+      "feature_family": "m15_context_before_decision",
+      "leakage_guard": "No HTF candle may be used before it is closed.",
+      "planned_use": "coarse context annotation",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "pre-decision candle open/high/low/close"
+      ],
+      "feature_family": "wick_body_proxy_before_decision",
+      "leakage_guard": "Thresholds must be pre-declared in execution branch, not selected from outcomes.",
+      "planned_use": "proxy stratum only",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "pre-decision candle ranges and overlap"
+      ],
+      "feature_family": "compression_overlap_proxy_before_decision",
+      "leakage_guard": "Do not include post-entry accumulation/chop.",
+      "planned_use": "range/overlap proxy before decision",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "pre-decision FVG/IFVG metadata or pre-decision candles"
+      ],
+      "feature_family": "fvg_ifvg_proximity_pre_entry",
+      "leakage_guard": "Do not mark a zone because post-entry price respected it.",
+      "planned_use": "reaction-zone proximity if already available before decision",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "decision timestamp"
+      ],
+      "feature_family": "session_hour",
+      "leakage_guard": "Session cannot be optimized after outcome review.",
+      "planned_use": "session/time stratum",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "pre-decision range or volatility proxy"
+      ],
+      "feature_family": "volatility_range_context_before_decision",
+      "leakage_guard": "Do not use future ATR/range after decision.",
+      "planned_use": "range/volatility stratum",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "known pre-decision liquidity/levels"
+      ],
+      "feature_family": "target_space_proxy_at_decision",
+      "leakage_guard": "Do not use actual later target hit or later liquidity behavior.",
+      "planned_use": "available target-space context at decision",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "direction recovery confidence"
+      ],
+      "feature_family": "direction_confidence_stratum",
+      "leakage_guard": "Confidence 2 is weaker than original metadata and must be separated.",
+      "planned_use": "mandatory sensitivity stratum",
+      "pre_entry_only": true
+    },
+    {
+      "allowed_inputs": [
+        "direction recovery source"
+      ],
+      "feature_family": "direction_source_stratum",
+      "leakage_guard": "Do not collapse inferred direction and existing metadata without reporting.",
+      "planned_use": "mandatory provenance stratum",
+      "pre_entry_only": true
+    }
+  ],
+  "plan_version": "adelin_v2_good_vs_fast_failure_diagnostic_plan_v1"
+}

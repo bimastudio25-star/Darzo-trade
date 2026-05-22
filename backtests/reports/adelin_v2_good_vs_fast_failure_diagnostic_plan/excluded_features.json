@@ -1,0 +1,53 @@
+{
+  "excluded_features": [
+    {
+      "forbidden_reason": "post-entry outcome",
+      "name": "TP hit"
+    },
+    {
+      "forbidden_reason": "post-entry outcome",
+      "name": "SL hit"
+    },
+    {
+      "forbidden_reason": "performance outcome",
+      "name": "pnl"
+    },
+    {
+      "forbidden_reason": "performance outcome",
+      "name": "r_multiple"
+    },
+    {
+      "forbidden_reason": "post-entry excursion",
+      "name": "future MFE"
+    },
+    {
+      "forbidden_reason": "post-entry excursion",
+      "name": "future MAE"
+    },
+    {
+      "forbidden_reason": "future price data",
+      "name": "post-entry candles"
+    },
+    {
+      "forbidden_reason": "future market state",
+      "name": "future liquidity behavior"
+    },
+    {
+      "forbidden_reason": "threshold leakage",
+      "name": "outcome-derived thresholds"
+    },
+    {
+      "forbidden_reason": "post-hoc optimization",
+      "name": "feature thresholds selected after GOOD vs FAST separation"
+    },
+    {
+      "forbidden_reason": "label leakage",
+      "name": "any field created after seeing whether setup was GOOD_FAST_REACTION or FAST_FAILURE"
+    },
+    {
+      "forbidden_reason": "optimistic semantic shift",
+      "name": "non-directional max move replay as primary evidence"
+    }
+  ],
+  "plan_version": "adelin_v2_good_vs_fast_failure_diagnostic_plan_v1"
+}

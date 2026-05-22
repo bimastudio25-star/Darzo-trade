@@ -1,0 +1,75 @@
+{
+  "allowed_feature_families": [
+    "numeric_level_confluence",
+    "round_level_proximity",
+    "pre_decision_sweep_type",
+    "m1_candle_anatomy_before_decision",
+    "m5_candle_anatomy_before_decision",
+    "m15_context_before_decision",
+    "wick_body_proxy_before_decision",
+    "compression_overlap_proxy_before_decision",
+    "fvg_ifvg_proximity_pre_entry",
+    "session_hour",
+    "volatility_range_context_before_decision",
+    "target_space_proxy_at_decision",
+    "direction_confidence_stratum",
+    "direction_source_stratum"
+  ],
+  "candles_inspected": false,
+  "comparison_executed": false,
+  "confidence_2_guardrail": "Confidence 2 samples must not be treated as identical to original metadata direction. If separation exists only in confidence 2 samples, treat it as weak and research-only.",
+  "confidence_3_sensitivity_required": true,
+  "feature_vs_outcome_statistics_generated": false,
+  "forbidden_leakage_fields": [
+    "TP hit",
+    "SL hit",
+    "pnl",
+    "r_multiple",
+    "future MFE",
+    "future MAE",
+    "post-entry candles",
+    "future liquidity behavior",
+    "outcome-derived thresholds",
+    "feature thresholds selected after GOOD vs FAST separation",
+    "any field created after seeing whether setup was GOOD_FAST_REACTION or FAST_FAILURE",
+    "non-directional max move replay as primary evidence"
+  ],
+  "matched_control_replay_run": false,
+  "new_outcome_statistics_generated": false,
+  "ohlc_read": false,
+  "phase_4_blocked": true,
+  "plan_only": true,
+  "plan_version": "adelin_v2_good_vs_fast_failure_diagnostic_plan_v1",
+  "primary_groups": [
+    "GOOD_FAST_REACTION",
+    "FAST_FAILURE"
+  ],
+  "replay_run": false,
+  "safety": {
+    "broker_execution_enabled": false,
+    "live_trading_enabled": false,
+    "orders_enabled": false,
+    "runtime_logic_modified": false,
+    "strategy_2_touched": false,
+    "strategy_3_touched": false,
+    "telegram_alerts_enabled": false,
+    "v3_stash_applied_or_popped": false
+  },
+  "secondary_review_groups": [
+    "MIXED_REACTION",
+    "CHOP_AFTER_ENTRY"
+  ],
+  "small_n_warning": "N=10 GOOD_FAST_REACTION is too small for strong conclusions. Future outputs must be diagnostic only.",
+  "verdict_flags": [
+    "GOOD_VS_FAST_FAILURE_PLAN_REGISTERED",
+    "PLAN_ONLY_NO_COMPARISON_EXECUTED",
+    "NO_OHLC_READ",
+    "PRE_ENTRY_FEATURES_ONLY_DEFINED",
+    "FORBIDDEN_LEAKAGE_FEATURES_REGISTERED",
+    "CONFIDENCE_3_SENSITIVITY_REQUIRED",
+    "CONFIDENCE_2_GUARDRAIL_REGISTERED",
+    "PHASE_4_STILL_BLOCKED",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ]
+}

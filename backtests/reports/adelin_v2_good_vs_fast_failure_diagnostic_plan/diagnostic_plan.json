@@ -1,0 +1,49 @@
+{
+  "allowed_feature_family_count": 14,
+  "comparison_executed": false,
+  "comparison_schema_file": "comparison_schema.json",
+  "decision_matrix_file": "decision_matrix.json",
+  "direction_confidence_handling": {
+    "confidence_2_guardrail": "Confidence 2 samples must not be treated as identical to original metadata direction. If separation exists only in confidence 2 samples, treat it as weak and research-only.",
+    "mandatory_sensitivity_analysis": "confidence_3_only",
+    "mandatory_stratification": [
+      "direction_confidence",
+      "direction_source"
+    ],
+    "phase_4_guardrail": "If confidence 3 sensitivity does not support the same direction, do not proceed to Phase 4.",
+    "primary_planned_analysis": "Include confidence 3 and confidence 2 samples."
+  },
+  "forbidden_feature_count": 12,
+  "matched_control_replay_run": false,
+  "ohlc_read": false,
+  "phase_4_blocked": true,
+  "plan_only": true,
+  "plan_version": "adelin_v2_good_vs_fast_failure_diagnostic_plan_v1",
+  "prior_validated_baseline_context": {
+    "direction_coverage": "40/40",
+    "direction_inference_rule_version": "adelin_v2_pre_decision_sweep_v1",
+    "existing_metadata_direction_count": 21,
+    "note": "These are prior validated diagnostic context values only. This branch does not recompute outcomes or produce feature-vs-outcome statistics.",
+    "post_entry_data_used_for_direction_recovery": 0,
+    "pre_decision_sweep_inferred_direction_count": 19,
+    "prior_outcome_counts_context_only": {
+      "CHOP_AFTER_ENTRY": 1,
+      "FAST_FAILURE": 27,
+      "GOOD_FAST_REACTION": 10,
+      "MIXED_REACTION": 2
+    },
+    "total_samples": 40
+  },
+  "purpose": "Pre-register how to compare GOOD_FAST_REACTION samples against FAST_FAILURE samples before any new analysis is executed.",
+  "replay_run": false,
+  "sample_groups": {
+    "primary": [
+      "GOOD_FAST_REACTION",
+      "FAST_FAILURE"
+    ],
+    "secondary_excluded_from_primary": [
+      "MIXED_REACTION",
+      "CHOP_AFTER_ENTRY"
+    ]
+  }
+}
