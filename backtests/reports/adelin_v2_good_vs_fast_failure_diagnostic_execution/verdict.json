@@ -1,0 +1,49 @@
+{
+  "allowed_next_actions": [
+    "more sample collection",
+    "bounded confirmatory diagnostic",
+    "human review of priority samples"
+  ],
+  "broker_execution_enabled": false,
+  "comparison_executed": true,
+  "fast_failure_n": 27,
+  "final_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+  "forbidden_next_actions": [
+    "Phase 4 matched-control replay",
+    "live trading",
+    "scoring or live-entry filtering",
+    "profitability claims"
+  ],
+  "good_fast_reaction_n": 10,
+  "live_trading_enabled": false,
+  "matched_control_replay_run": false,
+  "minimum_n_gate_active": true,
+  "no_confidence_stratum_exception": true,
+  "phase_4_blocked": true,
+  "profitability_claim_made": false,
+  "rule_applied": "GOOD_FAST_REACTION N <= 10 triggers the strict minimum-N gate; the verdict is capped at MIXED_AMBIGUOUS_SMALL_N regardless of observed feature differences.",
+  "runtime_logic_modified": false,
+  "secondary_group_counts": {
+    "CHOP_AFTER_ENTRY": 1,
+    "MIXED_REACTION": 2
+  },
+  "secondary_groups_excluded": [
+    "MIXED_REACTION",
+    "CHOP_AFTER_ENTRY"
+  ],
+  "strong_descriptive_separation_forbidden": true,
+  "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+  "telegram_enabled": false,
+  "verdict_flags": [
+    "GOOD_VS_FAST_DIAGNOSTIC_EXECUTED",
+    "MINIMUM_N_GATE_ACTIVE",
+    "VERDICT_CAPPED_AT_MIXED_AMBIGUOUS_SMALL_N",
+    "STRONG_DESCRIPTIVE_SEPARATION_FORBIDDEN",
+    "PHASE_4_STILL_BLOCKED",
+    "DESCRIPTIVE_ONLY",
+    "NO_PROFITABILITY_CLAIM",
+    "NO_LIVE_DEPLOYMENT_DECISION",
+    "NO_MATCHED_CONTROL_REPLAY",
+    "ADELIN_REMAINS_RESEARCH_ONLY"
+  ]
+}

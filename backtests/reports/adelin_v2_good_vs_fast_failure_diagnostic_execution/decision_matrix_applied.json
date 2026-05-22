@@ -1,0 +1,30 @@
+{
+  "allowed_next_actions": [
+    "more sample collection",
+    "bounded confirmatory diagnostic",
+    "human review of priority samples"
+  ],
+  "fast_failure_n": 27,
+  "final_verdict": "MIXED_AMBIGUOUS_SMALL_N",
+  "forbidden_next_actions": [
+    "Phase 4 matched-control replay",
+    "live trading",
+    "scoring or live-entry filtering",
+    "profitability claims"
+  ],
+  "good_fast_reaction_n": 10,
+  "minimum_n_gate_active": true,
+  "no_confidence_stratum_exception": true,
+  "phase_4_blocked": true,
+  "rule_applied": "GOOD_FAST_REACTION N <= 10 triggers the strict minimum-N gate; the verdict is capped at MIXED_AMBIGUOUS_SMALL_N regardless of observed feature differences.",
+  "secondary_group_counts": {
+    "CHOP_AFTER_ENTRY": 1,
+    "MIXED_REACTION": 2
+  },
+  "secondary_groups_excluded": [
+    "MIXED_REACTION",
+    "CHOP_AFTER_ENTRY"
+  ],
+  "strong_descriptive_separation_forbidden": true,
+  "strongest_allowed_verdict": "MIXED_AMBIGUOUS_SMALL_N"
+}
