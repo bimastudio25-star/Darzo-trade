@@ -1,0 +1,66 @@
+{
+  "sample_sourcing_must_not_be_ambiguous": true,
+  "allowed_sources": [
+    {
+      "source_id": "A",
+      "name": "existing_unprocessed_adelin_v2_artifacts",
+      "allowed": true,
+      "conditions": [
+        "lineage is clear",
+        "decision_timestamp is present",
+        "direction is present",
+        "direction_source is present",
+        "direction_confidence is present",
+        "reference_or_entry_fields are present or reconstructable without future leakage",
+        "different sample definitions are not silently mixed"
+      ]
+    },
+    {
+      "source_id": "B",
+      "name": "forward_new_collection",
+      "allowed": true,
+      "conditions": [
+        "collected with pre-registered criteria",
+        "direction_source and direction_confidence are preserved",
+        "not selected based on H3/H4 states",
+        "not selected based on outcomes",
+        "not selected based on TP/SL, PnL, MFE/MAE, or post-entry behavior"
+      ]
+    },
+    {
+      "source_id": "C",
+      "name": "broader_historical_ohlc_mining",
+      "allowed": false,
+      "reason": "Requires a separate pre-registered mining rule because it introduces different discovery bias."
+    }
+  ],
+  "recommended_primary_sourcing_rule": {
+    "preferred_sources": [
+      "existing Adelin v2 candidate/sample artifacts with explicit EXISTING_METADATA direction confidence-3",
+      "newly collected Adelin v2 candidate/sample artifacts with explicit EXISTING_METADATA direction confidence-3"
+    ],
+    "must_not_use_for_selection": [
+      "H3/H4 proxy states",
+      "outcome labels",
+      "TP/SL",
+      "PnL",
+      "R multiple",
+      "MFE/MAE",
+      "future liquidity behavior",
+      "post-entry behavior"
+    ],
+    "insufficient_sample_policy": "If fewer than 60 total confidence-3 samples are available, report INSUFFICIENT_CONFIDENCE_3_SAMPLE rather than lowering the gate."
+  },
+  "h3_h4_states_are_not_sampling_quotas": true,
+  "reason_h3_h4_not_quotas": "H3/H4 are the proxies being evaluated. Selecting samples based on H3/H4 states would bias the diagnostic.",
+  "mandatory_future_stratification": [
+    "direction_source",
+    "direction_confidence",
+    "confidence_3_only",
+    "confidence_2_only",
+    "combined_global_sample",
+    "session_if_available",
+    "date_week_if_available",
+    "direction_long_short_if_available"
+  ]
+}

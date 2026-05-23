@@ -1,0 +1,75 @@
+{
+  "minimum_methodology_usability_requirements": {
+    "primary_sample_size": {
+      "confidence_3_existing_metadata_samples_minimum_total": 60,
+      "existing_confidence_3_samples_count_toward_total": true,
+      "existing_confidence_3_samples_already_analyzed": 21,
+      "minimum_additional_confidence_3_samples_required": 39
+    },
+    "leakage": {
+      "post_entry_data_used_must_equal": 0,
+      "leakage_failures_must_equal": 0
+    },
+    "input_lineage": {
+      "all_input_artifacts_documented": true,
+      "no_silent_mixing_of_sample_sources": true,
+      "direction_source_required_or_explicitly_marked_missing": true,
+      "direction_confidence_required_or_explicitly_marked_missing": true,
+      "ambiguous_lineage_policy": "fail_closed"
+    },
+    "reporting": {
+      "confidence_3_distribution_required": true,
+      "confidence_2_distribution_required": true,
+      "combined_distribution_descriptive_only": true,
+      "h3_wide_count_reported_even_if_zero": true,
+      "h3_missing_states_reported": true,
+      "h4_retest_failed_pre_decision_reported": true,
+      "h4_no_zone_available_reported": true,
+      "low_count_cells_marked_descriptive_only": true,
+      "h3_h4_states_not_sampling_quotas": true
+    },
+    "gate_status": {
+      "phase_4_remains_blocked": true,
+      "matched_control_remains_blocked": true,
+      "scoring_remains_blocked": true,
+      "runtime_remains_unchanged": true,
+      "live_remains_blocked": true
+    }
+  },
+  "future_decision_outcomes": [
+    {
+      "verdict": "LARGER_DIAGNOSTIC_USABLE_FOR_METHODOLOGY_REVIEW",
+      "meaning": ">=60 total confidence-3 samples including existing 21, leakage clean, lineage clean, and H3/H4 distributions can be reviewed methodologically.",
+      "unlocks_phase_4": false
+    },
+    {
+      "verdict": "INSUFFICIENT_CONFIDENCE_3_SAMPLE",
+      "meaning": "Fewer than 60 total confidence-3 samples; report remains descriptive only and more samples are required or the path pauses.",
+      "unlocks_phase_4": false
+    },
+    {
+      "verdict": "DIRECTION_SOURCE_BIAS_PERSISTS",
+      "meaning": "Confidence-2 and confidence-3 distributions remain materially different; confidence-2 stays secondary only.",
+      "unlocks_phase_4": false
+    },
+    {
+      "verdict": "PROXY_SPEC_REVIEW_REQUIRED",
+      "meaning": "Missing states, zero WIDE, or H4 failures indicate proxy definition may not separate useful states; any revision must be pre-registered.",
+      "unlocks_phase_4": false
+    },
+    {
+      "verdict": "BLOCK_H3_H4_PROXY_PATH",
+      "meaning": "Larger diagnostic shows H3/H4 are not useful or stable enough; keep Adelin research-only and do not continue this path.",
+      "unlocks_phase_4": false
+    }
+  ],
+  "no_future_outcome_may_unlock": [
+    "Phase 4",
+    "matched-control",
+    "scoring",
+    "live",
+    "Telegram alerts",
+    "broker execution",
+    "order_send"
+  ]
+}
