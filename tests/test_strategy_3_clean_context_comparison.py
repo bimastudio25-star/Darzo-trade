@@ -10,8 +10,8 @@ def _module():
     return importlib.import_module("scripts.compare_strategy_3_paper_vs_backtest")
 
 
-def _row(timestamp: str, *, accepted: bool = True, context_hash: str | None = "ctx") -> dict[str, object]:
-    return {
+def _row(timestamp: str, *, accepted: bool = True, context_hash: str | None = "ctx", **updates: object) -> dict[str, object]:
+    row = {
         "signal_timestamp": timestamp,
         "symbol": "XAUUSD",
         "strategy": "strategy_3_vwap_1r",
@@ -31,6 +31,8 @@ def _row(timestamp: str, *, accepted: bool = True, context_hash: str | None = "c
         "telegram_sent": "False",
         "broker_called": "False",
     }
+    row.update(updates)
+    return row
 
 
 def _backtest(timestamp: str, *, accepted: bool = True) -> dict[str, object]:
@@ -71,7 +73,13 @@ def _data_context(hash_value: str = "ctx") -> dict[str, object]:
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     module = _module()
-    fields = list(dict.fromkeys(module.REQUIRED_FIELDS + ["data_context_hash"] + list(_row("2026-05-21T02:30:00+00:00").keys())))
+    fields = list(
+        dict.fromkeys(
+            module.REQUIRED_FIELDS
+            + ["data_context_hash", "h4_hash", "h4_latest_timestamp", "m15_hash", "m15_latest_timestamp"]
+            + list(_row("2026-05-21T02:30:00+00:00").keys())
+        )
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -196,8 +204,75 @@ def test_multiple_data_context_hashes_are_detected_and_block_clean_verdict(monke
     summary = module.run_comparison(cfg)
 
     assert summary["unique_data_context_hashes"] == 2
-    assert "MULTIPLE_DATA_CONTEXTS_REQUIRE_SEGMENTATION" in summary["verdict_flags"]
+    assert "MULTIPLE_DATA_CONTEXTS_SEGMENTED" in summary["verdict_flags"]
+    assert "DATA_CONTEXT_PREFIX_INSUFFICIENT" in summary["verdict_flags"]
     assert "CLEAN_CONTEXT_ACCEPTED_MATCH_OK" not in summary["verdict_flags"]
+
+
+def test_multiple_prefix_compatible_contexts_allow_clean_verdict(monkeypatch, tmp_path):
+    module = _module()
+    context_module = importlib.import_module("scripts.strategy_3_data_context")
+    cfg = _config(tmp_path)
+    data_dir = tmp_path / "data"
+    data_path = data_dir / "XAUUSD"
+    data_path.mkdir(parents=True)
+    m15_path = data_path / "M15.csv"
+    h4_path = data_path / "H4.csv"
+    m15_path.write_text(
+        "time,open,high,low,close,tick_volume,spread\n"
+        "2026-05-21T02:30:00+00:00,1,2,0,1,10,4\n",
+        encoding="utf-8",
+    )
+    h4_path.write_text(
+        "time,open,high,low,close,tick_volume,spread\n"
+        "2026-05-21T00:00:00+00:00,1,2,0,1,10,4\n",
+        encoding="utf-8",
+    )
+    first_m15 = context_module.summarize_timeframe_prefix(m15_path, "2026-05-21T02:30:00+00:00")
+    first_h4 = context_module.summarize_timeframe_prefix(h4_path, "2026-05-21T00:00:00+00:00")
+    m15_path.write_text(
+        "time,open,high,low,close,tick_volume,spread\n"
+        "2026-05-21T02:30:00+00:00,1,2,0,1,10,4\n"
+        "2026-05-21T03:00:00+00:00,2,3,1,2,11,4\n",
+        encoding="utf-8",
+    )
+    second_m15 = context_module.summarize_timeframe_prefix(m15_path, "2026-05-21T03:00:00+00:00")
+    second_h4 = context_module.summarize_timeframe_prefix(h4_path, "2026-05-21T00:00:00+00:00")
+    _write_csv(
+        cfg.paper_signals_path,
+        [
+            _row(
+                "2026-05-21T02:30:00+00:00",
+                context_hash="ctx-a",
+                m15_hash=first_m15["raw_prefix_hash"],
+                m15_latest_timestamp="2026-05-21T02:30:00+00:00",
+                h4_hash=first_h4["raw_prefix_hash"],
+                h4_latest_timestamp="2026-05-21T00:00:00+00:00",
+            ),
+            _row(
+                "2026-05-21T03:00:00+00:00",
+                context_hash="ctx-b",
+                m15_hash=second_m15["raw_prefix_hash"],
+                m15_latest_timestamp="2026-05-21T03:00:00+00:00",
+                h4_hash=second_h4["raw_prefix_hash"],
+                h4_latest_timestamp="2026-05-21T00:00:00+00:00",
+            ),
+        ],
+    )
+    cfg = module.PaperVsBacktestConfig(**{**cfg.__dict__, "data_dir": str(data_dir)})
+    monkeypatch.setattr(module, "compute_data_context", lambda **kwargs: _data_context("ctx"))
+    monkeypatch.setattr(
+        module,
+        "build_backtest_comparable_signals",
+        lambda _cfg, _window: [_backtest("2026-05-21T02:30:00+00:00"), _backtest("2026-05-21T03:00:00+00:00")],
+    )
+
+    summary = module.run_comparison(cfg)
+
+    assert summary["unique_data_context_hashes"] == 2
+    assert summary["prefix_compatible_rows"] == 2
+    assert "DATA_CONTEXT_FULL_HASH_DIFF_BUT_PREFIX_OK" in summary["verdict_flags"]
+    assert "CLEAN_CONTEXT_ACCEPTED_MATCH_OK" in summary["verdict_flags"]
 
 
 def test_data_context_missing_blocks_clean_validation(monkeypatch, tmp_path):

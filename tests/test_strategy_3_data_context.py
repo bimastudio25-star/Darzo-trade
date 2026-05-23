@@ -92,3 +92,137 @@ def test_diff_contexts_reports_match_missing_and_mismatch(tmp_path):
     missing = module.diff_contexts(None, changed)
     assert missing["data_context_missing"] is True
     assert "DATA_CONTEXT_MISSING" in missing["verdict_flags"]
+
+
+def test_prefix_hash_stays_compatible_when_future_rows_are_appended(tmp_path):
+    module = _module()
+    data_dir = tmp_path / "data"
+    path = data_dir / "XAUUSD" / "M15.csv"
+    _write_csv(
+        path,
+        [
+            "2026-05-21T02:15:00+00:00,1,2,0,1,10,4",
+            "2026-05-21T02:30:00+00:00,2,3,1,2,11,4",
+        ],
+    )
+    before = module.summarize_timeframe_prefix(path, "2026-05-21T02:30:00+00:00")
+    _write_csv(
+        path,
+        [
+            "2026-05-21T02:15:00+00:00,1,2,0,1,10,4",
+            "2026-05-21T02:30:00+00:00,2,3,1,2,11,4",
+            "2026-05-21T02:45:00+00:00,3,4,2,3,12,4",
+        ],
+    )
+    after = module.summarize_timeframe_prefix(path, "2026-05-21T02:30:00+00:00")
+    full = module.summarize_timeframe_file(path)
+
+    assert before["raw_prefix_hash"] == after["raw_prefix_hash"]
+    assert before["canonical_prefix_hash"] == after["canonical_prefix_hash"]
+    assert full["latest_timestamp"] == "2026-05-21T02:45:00+00:00"
+
+
+def test_prefix_hash_changes_when_historical_row_changes(tmp_path):
+    module = _module()
+    data_dir = tmp_path / "data"
+    path = data_dir / "XAUUSD" / "M15.csv"
+    _write_csv(
+        path,
+        [
+            "2026-05-21T02:15:00+00:00,1,2,0,1,10,4",
+            "2026-05-21T02:30:00+00:00,2,3,1,2,11,4",
+        ],
+    )
+    before = module.summarize_timeframe_prefix(path, "2026-05-21T02:30:00+00:00")
+    _write_csv(
+        path,
+        [
+            "2026-05-21T02:15:00+00:00,1,5,0,1,10,4",
+            "2026-05-21T02:30:00+00:00,2,3,1,2,11,4",
+        ],
+    )
+    after = module.summarize_timeframe_prefix(path, "2026-05-21T02:30:00+00:00")
+
+    assert before["raw_prefix_hash"] != after["raw_prefix_hash"]
+    assert before["canonical_prefix_hash"] != after["canonical_prefix_hash"]
+
+
+def test_utf16_no_header_prefix_hash_is_supported(tmp_path):
+    module = _module()
+    data_dir = tmp_path / "data"
+    path = data_dir / "XAUUSD" / "H4.csv"
+    _write_csv(
+        path,
+        ["2026.05.21 00:00,1,2,0,1,10,4", "2026.05.21 04:00,2,3,1,2,12,4"],
+        encoding="utf-16",
+        header=False,
+    )
+
+    prefix = module.summarize_timeframe_prefix(path, "2026-05-21T00:00:00+00:00")
+
+    assert prefix["detected_encoding"] == "utf-16"
+    assert prefix["header_present"] is False
+    assert prefix["row_count_in_prefix"] == 1
+    assert prefix["latest_timestamp_in_prefix"] == "2026-05-21T00:00:00+00:00"
+    assert prefix["raw_prefix_hash"]
+
+
+def test_recorded_prefix_compatibility_detects_append_only_context(tmp_path):
+    module = _module()
+    data_dir = tmp_path / "data"
+    path = data_dir / "XAUUSD" / "M15.csv"
+    _write_csv(
+        path,
+        [
+            "2026-05-21T02:15:00+00:00,1,2,0,1,10,4",
+            "2026-05-21T02:30:00+00:00,2,3,1,2,11,4",
+        ],
+    )
+    recorded = module.summarize_timeframe_prefix(path, "2026-05-21T02:30:00+00:00")
+    _write_csv(
+        path,
+        [
+            "2026-05-21T02:15:00+00:00,1,2,0,1,10,4",
+            "2026-05-21T02:30:00+00:00,2,3,1,2,11,4",
+            "2026-05-21T02:45:00+00:00,3,4,2,3,12,4",
+        ],
+    )
+
+    result = module.evaluate_recorded_prefix_compatibility(
+        {
+            "signal_timestamp": "2026-05-21T02:30:00+00:00",
+            "data_context_hash": "full-file-at-signal",
+            "m15_hash": recorded["raw_prefix_hash"],
+            "m15_latest_timestamp": "2026-05-21T02:30:00+00:00",
+        },
+        symbol="XAUUSD",
+        data_dir=data_dir,
+        timeframes=["M15"],
+    )
+
+    assert result["prefix_compatible"] is True
+    assert result["checked_timeframes"] == ["M15"]
+
+
+def test_recorded_prefix_compatibility_blocks_historical_mismatch(tmp_path):
+    module = _module()
+    data_dir = tmp_path / "data"
+    path = data_dir / "XAUUSD" / "M15.csv"
+    _write_csv(path, ["2026-05-21T02:30:00+00:00,2,3,1,2,11,4"])
+    recorded = module.summarize_timeframe_prefix(path, "2026-05-21T02:30:00+00:00")
+    _write_csv(path, ["2026-05-21T02:30:00+00:00,2,4,1,2,11,4"])
+
+    result = module.evaluate_recorded_prefix_compatibility(
+        {
+            "signal_timestamp": "2026-05-21T02:30:00+00:00",
+            "data_context_hash": "full-file-at-signal",
+            "m15_hash": recorded["raw_prefix_hash"],
+            "m15_latest_timestamp": "2026-05-21T02:30:00+00:00",
+        },
+        symbol="XAUUSD",
+        data_dir=data_dir,
+        timeframes=["M15"],
+    )
+
+    assert result["prefix_compatible"] is False
+    assert result["incompatible_timeframes"] == ["M15"]

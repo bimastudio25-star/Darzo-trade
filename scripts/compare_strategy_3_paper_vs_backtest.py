@@ -22,7 +22,12 @@ from scripts.compare_strategy_3_shadow_vs_backtest import (  # noqa: E402
     build_backtest_comparable_signals,
     compare_signals,
 )
-from scripts.strategy_3_data_context import compute_data_context, diff_contexts, write_context
+from scripts.strategy_3_data_context import (
+    build_prefix_compatibility_report,
+    compute_data_context,
+    diff_contexts,
+    write_context,
+)
 
 STRATEGY_NAME = "strategy_3_vwap_1r"
 DEFAULT_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4", "D1"]
@@ -83,6 +88,9 @@ class PaperVsBacktestConfig:
     require_data_context: bool = False
     exclude_legacy_without_context: bool = False
     clean_context_only: bool = False
+    context_compatibility_mode: str = "prefix_compatible"
+    context_cutoff_policy: str = "paper_latest_per_timeframe"
+    segmentation_output_dir: Path | None = None
     h4_repair_report_path: Path = Path("backtests/reports/strategy_3_h4_safe_repair/h4_repair_report.json")
     h4_post_repair_diagnostic_path: Path = Path(
         "backtests/reports/strategy_3_h4_data_source_diagnostic_post_repair/h4_data_source_diagnostic.json"
@@ -108,6 +116,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--require-data-context", action="store_true", default=False)
     parser.add_argument("--exclude-legacy-without-context", action="store_true", default=False)
     parser.add_argument("--clean-context-only", action="store_true", default=False)
+    parser.add_argument(
+        "--context-compatibility-mode",
+        choices=["strict_full_hash", "prefix_compatible", "sidecar_only"],
+        default="prefix_compatible",
+    )
+    parser.add_argument(
+        "--context-cutoff-policy",
+        choices=["signal_timestamp", "paper_latest_per_timeframe"],
+        default="paper_latest_per_timeframe",
+    )
+    parser.add_argument("--segmentation-output-dir", default="backtests/reports/strategy_3_data_context_segmentation")
     parser.add_argument("--signal-pre-buffer-minutes", type=int, default=60)
     parser.add_argument("--post-signal-buffer-minutes", type=int, default=5)
     parser.add_argument("--data-warmup-days", type=int, default=1)
@@ -181,6 +200,7 @@ def clean_context_data_context_diff(
     backtest_context: dict[str, Any],
     segmentation: dict[str, Any],
     cfg: PaperVsBacktestConfig,
+    prefix_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     base = diff_contexts(paper_context, backtest_context)
     row_hashes = sorted(segmentation.get("data_context_hash_counts", {}).keys())
@@ -200,10 +220,14 @@ def clean_context_data_context_diff(
             "row_hash_matches_backtest": bool(selected_hash and selected_hash == backtest_hash),
             "scanner_or_sidecar_context_matches_backtest": bool(base.get("data_context_match")),
             "scanner_or_sidecar_data_context_hash": base.get("paper_data_context_hash"),
+            "context_compatibility_mode": cfg.context_compatibility_mode,
+            "context_cutoff_policy": cfg.context_cutoff_policy,
+            "prefix_compatibility": prefix_report or {},
         }
     verdict: list[str] = []
     data_context_missing = bool(base.get("data_context_missing"))
     base_context_matches = bool(base.get("data_context_match"))
+    prefix_report = prefix_report or {}
     if data_context_missing:
         verdict.extend(["DATA_CONTEXT_MISSING", "COMPARISON_NOT_CLEAN_VALIDATION"])
     elif base_context_matches:
@@ -218,20 +242,52 @@ def clean_context_data_context_diff(
         verdict.append("LEGACY_ROWS_EXCLUDED")
     if cfg.clean_context_only:
         verdict.append("CLEAN_CONTEXT_ONLY")
-    if len(row_hashes) > 1:
-        verdict.extend(["MULTIPLE_DATA_CONTEXTS_REQUIRE_SEGMENTATION", "COMPARISON_NOT_CLEAN_VALIDATION"])
     row_hash_matches_backtest = bool(selected_hash and selected_hash == backtest_hash)
     strict_match = bool(base_context_matches and row_hash_matches_backtest and len(row_hashes) == 1)
-    if not strict_match and row_hashes:
-        verdict.extend(["DATA_CONTEXT_MISMATCH", "COMPARISON_NOT_CLEAN_VALIDATION"])
-    if cfg.allow_data_context_mismatch and not strict_match:
+    prefix_all_compatible = bool(prefix_report.get("all_required_rows_compatible"))
+    prefix_incompatible = int(prefix_report.get("prefix_incompatible_rows") or 0)
+    prefix_insufficient = int(prefix_report.get("insufficient_context_rows") or 0)
+    prefix_match = bool(base_context_matches and prefix_all_compatible)
+    if cfg.context_compatibility_mode == "strict_full_hash":
+        if len(row_hashes) > 1:
+            verdict.extend(["MULTIPLE_DATA_CONTEXTS_REQUIRE_SEGMENTATION", "COMPARISON_NOT_CLEAN_VALIDATION"])
+        data_context_match = strict_match
+        if not strict_match and row_hashes:
+            verdict.extend(["DATA_CONTEXT_MISMATCH", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    elif cfg.context_compatibility_mode == "sidecar_only":
+        data_context_match = base_context_matches and not data_context_missing
+        verdict.append("DATA_CONTEXT_SIDECAR_ONLY")
+        if data_context_match and len(row_hashes) > 1:
+            verdict.append("MULTIPLE_DATA_CONTEXTS_SEGMENTED")
+        if not data_context_match and row_hashes:
+            verdict.extend(["DATA_CONTEXT_MISMATCH", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    else:
+        data_context_match = strict_match or prefix_match
+        if len(row_hashes) > 1:
+            verdict.append("MULTIPLE_DATA_CONTEXTS_SEGMENTED")
+        verdict.extend(prefix_report.get("verdict_flags", []))
+        if prefix_match and not strict_match:
+            verdict.extend(
+                [
+                    "DATA_CONTEXT_FULL_HASH_DIFF_BUT_PREFIX_OK",
+                    "DATA_CONTEXT_PREFIX_COMPATIBLE",
+                    "DATA_CONTEXT_SEGMENTED_COMPATIBLE",
+                ]
+            )
+        if prefix_incompatible:
+            verdict.extend(["DATA_CONTEXT_PREFIX_MISMATCH", "COMPARISON_NOT_CLEAN_VALIDATION"])
+        if prefix_insufficient and not strict_match:
+            verdict.extend(["DATA_CONTEXT_PREFIX_INSUFFICIENT", "COMPARISON_NOT_CLEAN_VALIDATION"])
+        if not data_context_match and row_hashes and not prefix_incompatible and not prefix_insufficient:
+            verdict.extend(["DATA_CONTEXT_MISMATCH", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    if cfg.allow_data_context_mismatch and not data_context_match:
         verdict.append("DATA_CONTEXT_MISMATCH_ALLOWED_DIAGNOSTIC")
-    if strict_match:
+    if data_context_match:
         verdict.extend(["DATA_CONTEXT_MATCH", "PAPER_BACKTEST_CONTEXT_MATCH"])
 
     return {
         **base,
-        "data_context_match": strict_match,
+        "data_context_match": bool(data_context_match),
         "data_context_missing": data_context_missing,
         "row_data_context_hashes": row_hashes,
         "row_data_context_hash_count": len(row_hashes),
@@ -241,6 +297,11 @@ def clean_context_data_context_diff(
         "paper_data_context_hash": selected_hash or base.get("paper_data_context_hash"),
         "scanner_or_sidecar_data_context_hash": base.get("paper_data_context_hash"),
         "backtest_data_context_hash": backtest_hash,
+        "context_compatibility_mode": cfg.context_compatibility_mode,
+        "context_cutoff_policy": cfg.context_cutoff_policy,
+        "strict_full_hash_match": strict_match,
+        "prefix_compatible_match": prefix_match,
+        "prefix_compatibility": prefix_report,
         "verdict_flags": list(dict.fromkeys(verdict)),
     }
 
@@ -411,6 +472,143 @@ def write_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None
             writer.writerow({field: row.get(field, "") for field in fields})
 
 
+def _prefix_detail_rows(prefix_report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, item in enumerate(prefix_report.get("details", []), start=1):
+        timeframe_status = {}
+        for timeframe, detail in item.get("timeframes", {}).items():
+            timeframe_status[str(timeframe)] = {
+                "status": detail.get("status"),
+                "recorded_latest_timestamp": detail.get("recorded_latest_timestamp"),
+                "current_latest_timestamp_in_prefix": detail.get("current_latest_timestamp_in_prefix"),
+            }
+        rows.append(
+            {
+                "row_number": idx,
+                "signal_timestamp": item.get("signal_timestamp"),
+                "data_context_hash": item.get("data_context_hash"),
+                "prefix_compatible": item.get("prefix_compatible"),
+                "prefix_insufficient": item.get("prefix_insufficient"),
+                "checked_timeframes": ",".join(item.get("checked_timeframes", [])),
+                "compatible_timeframes": ",".join(item.get("compatible_timeframes", [])),
+                "incompatible_timeframes": ",".join(item.get("incompatible_timeframes", [])),
+                "insufficient_timeframes": ",".join(item.get("insufficient_timeframes", [])),
+                "unverified_timeframes": ",".join(item.get("unverified_timeframes", [])),
+                "context_generation_mode": item.get("context_generation_mode"),
+                "timeframe_status": json.dumps(timeframe_status, sort_keys=True),
+            }
+        )
+    return rows
+
+
+def _segment_rows(segmentation: dict[str, Any], prefix_report: dict[str, Any]) -> list[dict[str, Any]]:
+    details = prefix_report.get("details", [])
+    status_by_hash: dict[str, dict[str, int]] = {}
+    for item in details:
+        key = str(item.get("data_context_hash") or "")
+        status = status_by_hash.setdefault(key, {"rows": 0, "prefix_compatible": 0, "prefix_incompatible": 0, "insufficient": 0})
+        status["rows"] += 1
+        if item.get("prefix_compatible"):
+            status["prefix_compatible"] += 1
+        if item.get("incompatible_timeframes"):
+            status["prefix_incompatible"] += 1
+        if item.get("prefix_insufficient"):
+            status["insufficient"] += 1
+    output: list[dict[str, Any]] = []
+    for context_hash, count in sorted(segmentation.get("data_context_hash_counts", {}).items()):
+        status = status_by_hash.get(context_hash, {})
+        output.append(
+            {
+                "data_context_hash": context_hash,
+                "row_count": count,
+                "prefix_compatible_rows": status.get("prefix_compatible", 0),
+                "prefix_incompatible_rows": status.get("prefix_incompatible", 0),
+                "insufficient_context_rows": status.get("insufficient", 0),
+            }
+        )
+    return output
+
+
+def write_segmentation_outputs(output_dir: Path, summary: dict[str, Any]) -> None:
+    prefix_report = summary.get("data_context", {}).get("prefix_compatibility", {})
+    if not prefix_report:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    segmentation_summary = {
+        "run_finished_at": summary.get("run_finished_at"),
+        "symbol": summary.get("symbol"),
+        "total_paper_rows": summary.get("total_paper_rows"),
+        "legacy_without_context_rows": summary.get("legacy_without_context_rows"),
+        "context_tagged_rows": summary.get("context_tagged_rows"),
+        "unique_full_data_contexts": summary.get("unique_data_context_hashes"),
+        "prefix_compatible_rows": prefix_report.get("prefix_compatible_rows"),
+        "prefix_incompatible_rows": prefix_report.get("prefix_incompatible_rows"),
+        "insufficient_context_rows": prefix_report.get("insufficient_context_rows"),
+        "context_cutoff_policy": prefix_report.get("context_cutoff_policy"),
+        "verdict_flags": summary.get("verdict_flags", []),
+    }
+    (output_dir / "data_context_segmentation_summary.json").write_text(
+        json.dumps(segmentation_summary, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    detail_rows = _prefix_detail_rows(prefix_report)
+    detail_fields = [
+        "row_number",
+        "signal_timestamp",
+        "data_context_hash",
+        "prefix_compatible",
+        "prefix_insufficient",
+        "checked_timeframes",
+        "compatible_timeframes",
+        "incompatible_timeframes",
+        "insufficient_timeframes",
+        "unverified_timeframes",
+        "context_generation_mode",
+        "timeframe_status",
+    ]
+    write_csv(output_dir / "data_context_prefix_compatibility.csv", detail_rows, detail_fields)
+    segment_rows = _segment_rows(
+        {
+            "data_context_hash_counts": summary.get("data_context_hash_counts", {}),
+        },
+        prefix_report,
+    )
+    write_csv(
+        output_dir / "data_context_segment_details.csv",
+        segment_rows,
+        ["data_context_hash", "row_count", "prefix_compatible_rows", "prefix_incompatible_rows", "insufficient_context_rows"],
+    )
+    (output_dir / "clean_context_comparison_segmented_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    lines = [
+        "# Strategy 3 Data Context Segmentation",
+        "",
+        "This report distinguishes full-file data context changes caused by appended future bars from changes inside the historical prefix used by each paper signal.",
+        "",
+        "## Results",
+        "",
+        f"- total_paper_rows: `{summary.get('total_paper_rows')}`",
+        f"- legacy_without_context_rows: `{summary.get('legacy_without_context_rows')}`",
+        f"- clean_context_rows: `{summary.get('context_tagged_rows')}`",
+        f"- unique_full_data_contexts: `{summary.get('unique_data_context_hashes')}`",
+        f"- prefix_compatible_rows: `{prefix_report.get('prefix_compatible_rows')}`",
+        f"- prefix_incompatible_rows: `{prefix_report.get('prefix_incompatible_rows')}`",
+        f"- insufficient_context_rows: `{prefix_report.get('insufficient_context_rows')}`",
+        f"- context_cutoff_policy: `{prefix_report.get('context_cutoff_policy')}`",
+        f"- all-detected match rate: `{summary.get('match_rate_all_detected')}`",
+        f"- accepted-only match rate: `{summary.get('match_rate_accepted_only')}`",
+        f"- verdict_flags: `{', '.join(summary.get('verdict_flags', []))}`",
+        "",
+        "## Interpretation",
+        "",
+        "Prefix compatibility is consistency evidence only. It does not validate profitability and it does not approve live trading.",
+        "",
+    ]
+    (output_dir / "strategy_3_data_context_segmentation.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def h4_integrity(scanner_summary: dict[str, Any], pipeline_summary: dict[str, Any], repair_report: dict[str, Any], post_diag: dict[str, Any]) -> dict[str, Any]:
     overlap = post_diag.get("overlap", {}) if isinstance(post_diag.get("overlap"), dict) else {}
     local_h4 = post_diag.get("local_h4", {}) if isinstance(post_diag.get("local_h4"), dict) else {}
@@ -479,6 +677,7 @@ def verdict_flags(summary: dict[str, Any]) -> list[str]:
     if accepted_rate is not None and accepted_rate >= 0.95 and not critical and h4_clean and paper_clean and data_context_match:
         if clean_context_only:
             flags.append("CLEAN_CONTEXT_ACCEPTED_MATCH_OK")
+            flags.append("PAPER_BACKTEST_RUNTIME_CONSISTENCY_OK")
         flags.append("SHADOW_BACKTEST_ACCEPTED_MATCH_OK")
     elif accepted_rate is not None and accepted_rate >= 0.80 and (data_context_match or not clean_context_only):
         if clean_context_only:
@@ -543,6 +742,10 @@ def write_report(output_dir: Path, summary: dict[str, Any]) -> None:
         f"- data_context_match: `{summary['data_context']['data_context_match']}`",
         f"- data_context_missing: `{summary['data_context']['data_context_missing']}`",
         f"- mismatched_timeframes: `{summary['data_context']['mismatched_timeframes']}`",
+        f"- context_compatibility_mode: `{summary['data_context'].get('context_compatibility_mode')}`",
+        f"- prefix_compatible_rows: `{summary['data_context'].get('prefix_compatibility', {}).get('prefix_compatible_rows')}`",
+        f"- prefix_incompatible_rows: `{summary['data_context'].get('prefix_compatibility', {}).get('prefix_incompatible_rows')}`",
+        f"- insufficient_context_rows: `{summary['data_context'].get('prefix_compatibility', {}).get('insufficient_context_rows')}`",
         f"- data_context_verdict_flags: `{summary['data_context']['data_context_verdict_flags']}`",
         "",
         "## Results",
@@ -610,6 +813,11 @@ def write_report(output_dir: Path, summary: dict[str, Any]) -> None:
             f"- data_context_match: `{summary['data_context'].get('data_context_match')}`",
             f"- scanner_or_sidecar_context_matches_backtest: `{summary['data_context'].get('scanner_or_sidecar_context_matches_backtest')}`",
             f"- row_hash_matches_backtest: `{summary['data_context'].get('row_hash_matches_backtest')}`",
+            f"- context_compatibility_mode: `{summary['data_context'].get('context_compatibility_mode')}`",
+            f"- context_cutoff_policy: `{summary['data_context'].get('context_cutoff_policy')}`",
+            f"- prefix_compatible_rows: `{summary['data_context'].get('prefix_compatibility', {}).get('prefix_compatible_rows')}`",
+            f"- prefix_incompatible_rows: `{summary['data_context'].get('prefix_compatibility', {}).get('prefix_incompatible_rows')}`",
+            f"- insufficient_context_rows: `{summary['data_context'].get('prefix_compatibility', {}).get('insufficient_context_rows')}`",
             f"- data_context_verdict_flags: `{summary['data_context'].get('data_context_verdict_flags')}`",
             "",
             "## Window",
@@ -638,6 +846,14 @@ def write_report(output_dir: Path, summary: dict[str, Any]) -> None:
             "",
         ]
         (output_dir / "strategy_3_clean_context_shadow_vs_backtest_comparison.md").write_text("\n".join(clean_lines), encoding="utf-8")
+        if summary.get("context_compatibility_mode") == "prefix_compatible":
+            (output_dir / "strategy_3_clean_context_shadow_vs_backtest_comparison_segmented.md").write_text(
+                "\n".join(clean_lines).replace(
+                    "# Strategy 3 Clean-Context Shadow vs Backtest Comparison",
+                    "# Strategy 3 Clean-Context Shadow vs Backtest Comparison - Segmented",
+                ),
+                encoding="utf-8",
+            )
 
 
 def write_outputs(output_dir: Path, summary: dict[str, Any], all_detected: dict[str, Any], accepted_only: dict[str, Any], missing_fields: dict[str, Any]) -> None:
@@ -674,7 +890,22 @@ def write_outputs(output_dir: Path, summary: dict[str, Any], all_detected: dict[
         excluded = summary.get("excluded_legacy_rows", [])
         excluded_fields = sorted({key for row in excluded for key in row.keys()})
         write_csv(output_dir / "clean_context_excluded_legacy_rows.csv", excluded, excluded_fields or ["signal_timestamp"])
+        if summary.get("context_compatibility_mode") == "prefix_compatible":
+            (output_dir / "segmented_comparison_summary.json").write_text(
+                json.dumps(summary, indent=2, sort_keys=True, default=str),
+                encoding="utf-8",
+            )
+            (output_dir / "segmented_data_context_report.json").write_text(
+                json.dumps(summary["data_context"].get("prefix_compatibility", {}), indent=2, sort_keys=True, default=str),
+                encoding="utf-8",
+            )
+            write_csv(output_dir / "segmented_comparison_all_detected.csv", all_rows, MATCH_OUTPUT_FIELDS)
+            write_csv(output_dir / "segmented_comparison_accepted_only.csv", accepted_rows, MATCH_OUTPUT_FIELDS)
+            write_csv(output_dir / "segmented_mismatch_details.csv", all_rows + accepted_rows, MATCH_OUTPUT_FIELDS)
+            write_csv(output_dir / "segmented_excluded_rows.csv", excluded, excluded_fields or ["signal_timestamp"])
     write_report(output_dir, summary)
+    if summary.get("segmentation_output_dir"):
+        write_segmentation_outputs(Path(summary["segmentation_output_dir"]), summary)
 
 
 def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
@@ -689,11 +920,21 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
     post_diag = read_json(cfg.h4_post_repair_diagnostic_path)
     paper_data_context = load_paper_data_context(cfg.scanner_summary_path, cfg.paper_signals_path)
     backtest_data_context = compute_data_context(symbol=cfg.symbol, data_dir=cfg.data_dir, timeframes=DEFAULT_TIMEFRAMES)
+    prefix_report: dict[str, Any] = {}
+    if cfg.context_compatibility_mode == "prefix_compatible" and (cfg.clean_context_only or cfg.require_data_context):
+        prefix_report = build_prefix_compatibility_report(
+            list(segmentation["selected_rows"]),
+            symbol=cfg.symbol,
+            data_dir=cfg.data_dir,
+            timeframes=DEFAULT_TIMEFRAMES,
+            context_cutoff_policy=cfg.context_cutoff_policy,
+        )
     data_context_diff = clean_context_data_context_diff(
         paper_context=paper_data_context,
         backtest_context=backtest_data_context,
         segmentation=segmentation,
         cfg=cfg,
+        prefix_report=prefix_report,
     )
     window = derive_comparison_window(comparison_paper_rows, cfg)
     backtest_context_rows: list[dict[str, Any]] = []
@@ -734,6 +975,9 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         "require_data_context": cfg.require_data_context,
         "exclude_legacy_without_context": cfg.exclude_legacy_without_context,
         "clean_context_only": cfg.clean_context_only,
+        "context_compatibility_mode": cfg.context_compatibility_mode,
+        "context_cutoff_policy": cfg.context_cutoff_policy,
+        "segmentation_output_dir": str(cfg.segmentation_output_dir) if cfg.segmentation_output_dir else None,
         "symbol": cfg.symbol,
         "strategy": STRATEGY_NAME,
         "data_dir": cfg.data_dir,
@@ -755,6 +999,10 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         "context_tagged_accepted": segmentation["context_tagged_accepted"],
         "context_tagged_blocked": segmentation["context_tagged_blocked"],
         "unique_data_context_hashes": segmentation["unique_data_context_hashes"],
+        "unique_full_data_contexts": segmentation["unique_data_context_hashes"],
+        "prefix_compatible_rows": prefix_report.get("prefix_compatible_rows"),
+        "prefix_incompatible_rows": prefix_report.get("prefix_incompatible_rows"),
+        "insufficient_context_rows": prefix_report.get("insufficient_context_rows"),
         "selected_data_context_hash": segmentation["selected_data_context_hash"],
         "data_context_hash_counts": segmentation["data_context_hash_counts"],
         "excluded_legacy_window": segmentation["excluded_legacy_window"],
@@ -843,6 +1091,9 @@ def main(argv: list[str] | None = None) -> int:
         require_data_context=bool(args.require_data_context),
         exclude_legacy_without_context=bool(args.exclude_legacy_without_context),
         clean_context_only=bool(args.clean_context_only),
+        context_compatibility_mode=str(args.context_compatibility_mode),
+        context_cutoff_policy=str(args.context_cutoff_policy),
+        segmentation_output_dir=Path(args.segmentation_output_dir) if args.segmentation_output_dir else None,
         h4_repair_report_path=Path(args.h4_repair_report_path),
         h4_post_repair_diagnostic_path=Path(args.h4_post_repair_diagnostic_path),
         signal_pre_buffer_minutes=int(args.signal_pre_buffer_minutes),
