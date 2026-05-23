@@ -1,0 +1,13 @@
+field,value,count
+h3_state,MEDIUM,4
+h3_state,NO_VALID_INVALIDATION_EXTREME,5
+h3_state,TIGHT,31
+h4_state,INSIDE_ZONE,23
+h4_state,NO_ZONE_AVAILABLE,1
+h4_state,RECLAIM_CONFIRMED,6
+h4_state,RETEST_FAILED_PRE_DECISION,10
+h3_normalizer_source,M1_30_CLOSED_PRE_DECISION,40
+direction_confidence,2,19
+direction_confidence,3,21
+direction_source,EXISTING_METADATA,21
+direction_source,PRE_DECISION_SWEEP_INFERENCE,19

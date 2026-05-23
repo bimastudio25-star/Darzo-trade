@@ -1,0 +1,64 @@
+{
+  "broker_execution": false,
+  "executable_samples": 40,
+  "h3_approval_verified": true,
+  "h3_normalizer_source_counts": {
+    "M1_30_CLOSED_PRE_DECISION": 40
+  },
+  "h3_state_counts": {
+    "MEDIUM": 4,
+    "NO_VALID_INVALIDATION_EXTREME": 5,
+    "TIGHT": 31
+  },
+  "h4_approval_verified": true,
+  "h4_state_counts": {
+    "INSIDE_ZONE": 23,
+    "NO_ZONE_AVAILABLE": 1,
+    "RECLAIM_CONFIRMED": 6,
+    "RETEST_FAILED_PRE_DECISION": 10
+  },
+  "input_file": "backtests\\reports\\adelin_v2_preentry_outcome_diagnostics_direction_recovered\\sample_diagnostics.csv",
+  "input_lineage_reason": "Chosen because it is the approved direction-recovered Adelin v2 sample artifact with 40 samples, decision timestamps, final directions, direction confidence/source, and entry reference prices.",
+  "leakage_check_failed_count": 0,
+  "leakage_check_passed_count": 40,
+  "limitations": [
+    "H4 zone availability depends on existing pre-entry metadata fields such as FVG/iFVG zone bounds and numeric levels.",
+    "H3 invalidation extreme selection is deterministic but remains a research proxy, not a trading rule.",
+    "The output is descriptive diagnostic evidence only and does not unlock Phase 4."
+  ],
+  "live_trading": false,
+  "matched_control_run": false,
+  "ohlc_read": true,
+  "ohlc_scope_read": [
+    "data/XAUUSD/M1.csv loaded; per-sample computations use candles with time < decision_timestamp",
+    "data/XAUUSD/M5.csv loaded; per-sample computations use candles with time < decision_timestamp"
+  ],
+  "order_send": false,
+  "phase_4_unlocked": false,
+  "post_entry_data_used_count": 0,
+  "pre_entry_only": true,
+  "precheck_passed": true,
+  "run_started_at": "2026-05-23T13:54:14.486746+00:00",
+  "runtime_logic_changed": false,
+  "signoff_decision_verified": true,
+  "skip_reasons": {},
+  "skipped_samples": 0,
+  "source_artifact": "adelin_v2_preentry_outcome_diagnostics_direction_recovered/sample_diagnostics.csv",
+  "strategy_2_modified": false,
+  "strategy_3_modified": false,
+  "telegram_alerts": false,
+  "total_samples": 40,
+  "verdict_flags": [
+    "ADELIN_V2_H3_H4_PROXY_DIAGNOSTIC_COMPLETE",
+    "PRE_ENTRY_ONLY_CONFIRMED",
+    "POST_ENTRY_DATA_NOT_USED",
+    "MATCHED_CONTROL_NOT_RUN",
+    "PHASE_4_REMAINS_BLOCKED",
+    "NO_RUNTIME_LOGIC_CHANGE",
+    "NO_LIVE_DEPLOYMENT_DECISION",
+    "NO_ORDER_SEND",
+    "NO_BROKER_EXECUTION",
+    "STRATEGY_2_UNTOUCHED",
+    "STRATEGY_3_UNTOUCHED"
+  ]
+}
