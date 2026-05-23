@@ -11,6 +11,21 @@ Strategy 3 remains Level 3 / Paper Candidate. This dashboard is diagnostics/logg
 - clean acceptance rate: `0.3662`
 - accepted sample status: `INSUFFICIENT_N`
 
+## Accumulation Projection
+
+- first clean signal: `2026-05-21T02:30:00+00:00`
+- latest clean signal: `2026-05-22T22:30:00+00:00`
+- days since first clean signal: `1.8333`
+- clean rows/day: `38.7273`
+- accepted rows/day: `14.1818`
+- exploratory accepted target: `100`
+- pre-registered diagnostic accepted target: `200`
+- gap to exploratory target: `74`
+- gap to pre-registered diagnostic target: `174`
+- projected days to exploratory target: `5.22`
+- projected days to pre-registered diagnostic target: `12.27`
+- regime-level claims: `NOT_ALLOWED_FROM_DASHBOARD`
+
 ## Context Gate
 
 - context_gate_passed: `True`
@@ -44,6 +59,16 @@ Strategy 3 remains Level 3 / Paper Candidate. This dashboard is diagnostics/logg
 | h4_bias | up | 33 | 15 | INSUFFICIENT_N |
 | price_vs_vwap | above_vwap | 30 | 11 | INSUFFICIENT_N |
 
+## Risk Distance / Stop Loss
+
+- pip convention: `PROJECT_PIP_CONVENTION: 1 USD = 10 pips`
+- all clean median SL distance: `0.96` USD / `9.6` pips
+- all clean p90 SL distance: `3.46` USD / `34.6` pips
+- accepted median SL distance: `1.35` USD / `13.5` pips
+- accepted p90 SL distance: `4.705` USD / `47.05` pips
+
+Risk stats are descriptive only. Large SL outliers require review, not automatic parameter changes. No SL/TP/cooldown/entry logic is modified.
+
 ## Metadata Schema
 
 Future paper logging may record the following non-decision metadata fields:
@@ -67,6 +92,7 @@ These fields are metadata only. They must not be used to accept, block, filter, 
 
 - 26 accepted clean signals is insufficient for regime-level conclusions.
 - n>=100 accepted may be enough only for exploratory watchlist status, not robust inference.
+- n>=200 accepted is the current dashboard target for considering a pre-registered diagnostic, not deployment.
 - Regime comparisons may require much larger samples, especially when looking for modest win-rate differences.
 - No trading recommendation is emitted from this power planning section.
 

@@ -25,6 +25,9 @@ def _paper_row(timestamp: str, *, context: bool = True, accepted: bool = True) -
         "signal_timestamp": timestamp,
         "direction": "LONG",
         "session": "London",
+        "entry_price": "4500.00",
+        "stop_loss": "4498.50",
+        "risk_distance": "1.50",
         "data_context_hash": "ctx" if context else "",
         "cooldown_accepted": str(accepted),
         "cooldown_block_reason": "" if accepted else "STRATEGY_3_COOLDOWN_BLOCKED",
@@ -100,7 +103,7 @@ def _fixture(tmp_path: Path):
         docs_path=tmp_path / "docs" / "dashboard.md",
         min_bucket_total=30,
         watchlist_accepted_threshold=100,
-        pre_registered_accepted_threshold=300,
+        pre_registered_accepted_threshold=200,
         dry_run=True,
     )
     return module, cfg, data
@@ -110,6 +113,7 @@ def test_import_safe_and_cli_defaults():
     module = _module()
     args = module.parse_args([])
     assert args.watchlist_accepted_threshold == 100
+    assert args.pre_registered_accepted_threshold == 200
     assert hasattr(module, "run_dashboard")
 
 
@@ -122,6 +126,7 @@ def test_dashboard_generation_and_legacy_exclusion(tmp_path):
     assert summary["paper_rows"]["clean_context_rows"] == 2
     assert (cfg.output_dir / "paper_accumulation_summary.json").exists()
     assert (cfg.output_dir / "accepted_sample_by_regime.csv").exists()
+    assert (cfg.output_dir / "risk_distance_summary.csv").exists()
 
 
 def test_cooldown_is_summarized_not_changed(tmp_path):
@@ -146,11 +151,45 @@ def test_small_n_marked_insufficient_and_no_deployment_recommendation(tmp_path):
     module, cfg, _data = _fixture(tmp_path)
     summary = module.run_dashboard(cfg)
     assert summary["sample_size"]["sample_size_status"] == "INSUFFICIENT_N"
+    assert summary["accumulation_projection"]["target_accepted_n_exploratory"] == 100
+    assert summary["accumulation_projection"]["target_accepted_n_pre_registered_diagnostic"] == 200
     assert summary["deployment_recommendation_emitted"] is False
     assert summary["parameter_or_filter_recommendation_emitted"] is False
     with (cfg.output_dir / "regime_sample_size_status.csv").open(newline="", encoding="utf-8") as f:
         row = next(csv.DictReader(f))
-    assert row["sample_size_status"] == "INSUFFICIENT_N"
+    assert row["sample_status"] == "INSUFFICIENT_N"
+    assert row["gap_to_100_accepted"] == "99"
+    assert row["gap_to_200_accepted"] == "199"
+    assert row["allowed_interpretation"] == "INSUFFICIENT_N_DESCRIPTIVE_ONLY"
+
+
+def test_projection_handles_invalid_timestamps_without_crash(tmp_path):
+    module, cfg, _data = _fixture(tmp_path)
+    rows = [{"signal_timestamp": "", "data_context_hash": "ctx", "cooldown_accepted": "True"}]
+    projection = module.accumulation_projection(rows, rows, cfg)
+    assert projection["projection_status"] == "INSUFFICIENT_TIMESTAMP_DATA"
+    assert projection["projected_days_to_exploratory_n"] is None
+
+
+def test_risk_distance_stats_compute_from_entry_and_stop(tmp_path):
+    module, cfg, _data = _fixture(tmp_path)
+    summary = module.run_dashboard(cfg)
+    all_clean = {row["group"]: row for row in summary["risk_distance"]["summary_rows"]}["all_clean_rows"]
+    assert all_clean["count"] == 2
+    assert all_clean["usd_median"] == 1.5
+    assert all_clean["pips_median"] == 15.0
+    assert all_clean["pip_convention"] == "PROJECT_PIP_CONVENTION: 1 USD = 10 pips"
+
+
+def test_risk_distance_stats_compute_from_fallback_risk_distance():
+    module = _module()
+    rows = [
+        {"risk_distance": "2.0", "cooldown_accepted": "True"},
+        {"risk_distance_usd": "3.0", "cooldown_accepted": "False"},
+    ]
+    summary = {row["group"]: row for row in module.risk_distance_summary(rows, [])}
+    assert summary["all_clean_rows"]["usd_mean"] == 2.5
+    assert summary["all_clean_rows"]["pips_mean"] == 25.0
 
 
 def test_dashboard_does_not_mutate_data_files(tmp_path):
