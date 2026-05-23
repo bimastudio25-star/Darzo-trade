@@ -1,0 +1,118 @@
+{
+  "accepted_count": 29,
+  "accepted_count_by_rr_mode": {
+    "fixed_2r": 9,
+    "fixed_3r": 6,
+    "partial_2r_runner_3r": 6,
+    "structural_min_2r": 8
+  },
+  "candidates_count": 13056,
+  "config": {
+    "max_context_candles": 900,
+    "max_forward_candles": 32,
+    "max_retest_candles": 6,
+    "min_rr": 2.0,
+    "pip_buffer": 0.3,
+    "structural_cap_r": 4.0,
+    "symbol": "XAUUSD",
+    "timeframe": "M15"
+  },
+  "long_short_split": {
+    "LONG": 6216,
+    "SHORT": 6840
+  },
+  "min_rr_gate": {
+    "fail": 12966,
+    "pass": 90
+  },
+  "mode_comparison": [
+    {
+      "accepted": 9,
+      "rr_mode": "fixed_2r",
+      "still_open_timeout_eod": 0,
+      "stop_hit": 6,
+      "target_hit": 2
+    },
+    {
+      "accepted": 6,
+      "rr_mode": "fixed_3r",
+      "still_open_timeout_eod": 0,
+      "stop_hit": 4,
+      "target_hit": 1
+    },
+    {
+      "accepted": 6,
+      "rr_mode": "partial_2r_runner_3r",
+      "still_open_timeout_eod": 0,
+      "stop_hit": 4,
+      "target_hit": 1
+    },
+    {
+      "accepted": 8,
+      "rr_mode": "structural_min_2r",
+      "still_open_timeout_eod": 0,
+      "stop_hit": 7,
+      "target_hit": 0
+    }
+  ],
+  "outcome_distribution": {
+    "AMBIGUOUS_SAME_CANDLE": 4,
+    "STOP_HIT": 21,
+    "TARGET_HIT": 4
+  },
+  "rejected_count": 13027,
+  "rejection_reason_distribution": {
+    "NO_CISD_OR_MSS": 1376,
+    "NO_DISPLACEMENT_ZONE": 524,
+    "NO_RECLAIM": 10856,
+    "NO_RETEST_ENTRY": 192,
+    "OPPOSING_RESISTANCE_BEFORE_2R": 61,
+    "TARGET_BELOW_2R": 18
+  },
+  "safety": {
+    "broker_execution": false,
+    "live_trading": false,
+    "optimization": false,
+    "order_send": false,
+    "parameter_mining": false,
+    "research_only": true,
+    "telegram_trade_alerts": false,
+    "xauusd_only": true
+  },
+  "session_split": {
+    "asia": 2236,
+    "london": 3220,
+    "ny_am": 3248,
+    "ny_pm": 3644,
+    "rollover": 708
+  },
+  "strategy": "strategy_5_asymmetric_liquidity_reclaim_2r3r",
+  "swept_level_type_split": {
+    "asia_range_high": 1036,
+    "asia_range_low": 992,
+    "h1_swing_high": 100,
+    "h1_swing_low": 68,
+    "london_range_high": 708,
+    "london_range_low": 540,
+    "ny_opening_range_high": 548,
+    "ny_opening_range_low": 548,
+    "previous_day_high": 564,
+    "previous_day_low": 372,
+    "session_midpoint": 3720,
+    "vwap": 3860
+  },
+  "tag_distribution": {
+    "bpr": 0,
+    "cisd": 404,
+    "fvg": 408,
+    "ifvg": 0,
+    "mss": 656
+  },
+  "verdicts": [
+    "MECHANICS_BUILT_RESEARCH_ONLY",
+    "REQUIRES_MANUAL_VISUAL_REVIEW",
+    "ASYMMETRIC_RR_PROMISING_REQUIRES_OOS",
+    "MODE_3R_TOO_STRICT",
+    "STRUCTURAL_TARGET_MODE_REQUIRES_REVIEW"
+  ]
+}

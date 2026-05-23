@@ -1,0 +1,5 @@
+rr_mode,accepted,target_hit,stop_hit,still_open_timeout_eod
+fixed_2r,9,2,6,0
+fixed_3r,6,1,4,0
+partial_2r_runner_3r,6,1,4,0
+structural_min_2r,8,0,7,0
