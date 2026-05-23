@@ -20,7 +20,12 @@
     "post_entry_data_used": false,
     "pre_entry_only": true
   },
+  "h3_fixed_thresholds": {
+    "medium_max": 0.5,
+    "tight_max": 0.25
+  },
   "manual_cherry_picking_forbidden": true,
+  "percentile_thresholds_for_h3_forbidden": true,
   "phase_4_blocked": true,
   "pre_entry_only_required": true,
   "threshold_tuning_from_results_forbidden": true

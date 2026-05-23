@@ -11,7 +11,41 @@
   ],
   "candidate_reference_price_definition": "Use the existing candidate entry/reference price when present; otherwise the future execution branch must stop or use a separately pre-registered fallback, not infer from outcome.",
   "concept_id": "TIGHT_SL_BEHIND_SPIKE_OR_SWING",
-  "deterministic_formula_description": "For the candidate direction, inspect completed pre-decision M1 and M5 candles in fixed lookback windows. For LONG, the invalidation extreme is the nearest qualifying local low/sweep low below the candidate reference price. For SHORT, the invalidation extreme is the nearest qualifying local high/sweep high above the candidate reference price. Compute invalidation_distance_usd, invalidation_distance_pips, and invalidation_distance_to_recent_range_ratio.",
+  "deterministic_formula_description": "For the candidate direction, inspect completed pre-decision M1 and M5 candles in fixed lookback windows. For LONG, the invalidation extreme is the nearest qualifying local low/sweep low below the candidate reference price. For SHORT, the invalidation extreme is the nearest qualifying local high/sweep high above the candidate reference price. Compute invalidation_distance, local_range, and normalized_invalidation_distance using the explicit frozen formula.",
+  "explicit_formula": {
+    "candidate_reference_price": {
+      "definition": "Use the candidate entry/reference price already available in the future execution schema.",
+      "missing_state": "UNKNOWN_REFERENCE_PRICE"
+    },
+    "invalidation_distance": {
+      "invalid_geometry_condition": "distance <= 0",
+      "invalid_geometry_state": "INVALID_GEOMETRY",
+      "long_formula": "candidate_reference_price - local_invalidation_extreme",
+      "short_formula": "local_invalidation_extreme - candidate_reference_price"
+    },
+    "local_invalidation_extreme": {
+      "conflict_or_missing_state": "NO_VALID_INVALIDATION_EXTREME",
+      "long_definition": "Use the nearest relevant pre-decision swing low or sweep low below/near candidate_reference_price.",
+      "multiple_candidate_policy": "Choose the closest invalidation extreme in absolute price distance that occurred before decision_timestamp.",
+      "short_definition": "Use the nearest relevant pre-decision swing high or sweep high above/near candidate_reference_price."
+    },
+    "local_range_denominator": {
+      "fallback_lookback_candles": 12,
+      "fallback_rule": "If fewer than 20 M1 candles are available, use the last 12 closed M5 candles before decision_timestamp; exclude decision/anchor candle and post-decision candles.",
+      "fallback_timeframe": "M5",
+      "formula": "highest_high - lowest_low over the frozen pre-decision lookback window",
+      "missing_state": "INSUFFICIENT_PRE_DECISION_RANGE",
+      "primary_lookback_candles": 30,
+      "primary_minimum_candles": 20,
+      "primary_rule": "Use the last 30 closed M1 candles before decision_timestamp; exclude decision/anchor candle and post-decision candles.",
+      "primary_timeframe": "M1"
+    },
+    "normalized_invalidation_distance": {
+      "denominator": "local_range",
+      "formula": "invalidation_distance / local_range",
+      "metric_normalized": "invalidation_distance"
+    }
+  },
   "forbidden_inputs": [
     "post_entry_candles",
     "tp_hit",
@@ -29,14 +63,19 @@
     "fast_failure_outcome_group_for_threshold_selection"
   ],
   "future_execution_outputs": [
-    "tight_sl_band",
-    "invalidation_distance_usd",
-    "invalidation_distance_pips",
-    "invalidation_distance_to_recent_range_ratio",
-    "invalidation_source_timeframe",
-    "invalidation_source_type",
-    "proxy_computable",
-    "proxy_limitations"
+    "h3_state",
+    "candidate_reference_price",
+    "local_invalidation_extreme",
+    "invalidation_distance",
+    "local_range",
+    "normalization_timeframe",
+    "normalization_lookback_candles",
+    "normalized_invalidation_distance",
+    "h3_band",
+    "h3_missing_reason",
+    "pre_entry_only",
+    "post_entry_data_used",
+    "leakage_check_passed"
   ],
   "human_concept_description": "A discretionary entry is more attractive when invalidation sits close behind a local spike, sweep extreme, or completed swing structure.",
   "leakage_risks": [
@@ -44,10 +83,21 @@
     "Using swing highs/lows formed after decision_timestamp.",
     "Using future MAE/MFE to choose invalidation point."
   ],
+  "missing_data_states": [
+    "UNKNOWN_REFERENCE_PRICE",
+    "NO_VALID_INVALIDATION_EXTREME",
+    "INVALID_GEOMETRY",
+    "INSUFFICIENT_PRE_DECISION_RANGE"
+  ],
   "normalization_method": {
-    "normalized_distance": "invalidation_distance_usd / max(recent_range_proxy_usd, small_positive_floor)",
+    "denominator": "local_range = highest_high - lowest_low over the frozen pre-decision lookback window",
+    "fallback_range_window": "M5 last 12 closed candles before decision_timestamp, excluding decision/anchor and post-decision candles.",
+    "metric_normalized": "invalidation_distance",
+    "normalized_distance": "normalized_invalidation_distance = invalidation_distance / local_range",
     "pips_conversion": "For XAUUSD, 1 pip = 0.1 USD unless a future instrument-specific metadata file pre-registers otherwise.",
-    "recent_range_proxy": "Median high-low range over completed pre-decision M1 candles in a fixed 30-minute window plus M5 range cross-check."
+    "primary_minimum": "At least 20 M1 candles are required to use M1 normalization.",
+    "primary_range_window": "M1 last 30 closed candles before decision_timestamp, excluding decision/anchor and post-decision candles.",
+    "range_missing_state": "INSUFFICIENT_PRE_DECISION_RANGE"
   },
   "pre_decision_only_rule": "All swing/spike candidates and range proxies must use candles with timestamp < decision_timestamp.",
   "proxy_id": "H3",
@@ -61,16 +111,27 @@
   ],
   "threshold_policy": {
     "bands": {
-      "MEDIUM": "1.0 < normalized_distance <= 2.0",
-      "TIGHT": "normalized_distance <= 1.0",
-      "WIDE": "normalized_distance > 2.0"
+      "MEDIUM": "0.25 < normalized_invalidation_distance <= 0.50",
+      "TIGHT": "normalized_invalidation_distance <= 0.25",
+      "WIDE": "normalized_invalidation_distance > 0.50"
     },
     "fixed_usd_reference_band": "Record <=2.0 USD / <=20 pips as a descriptive reference only, not as an optimized pass threshold.",
     "forbidden": [
+      "Do not use percentile thresholds.",
       "Do not choose thresholds after observing GOOD/FAST separation.",
+      "Do not change 0.25 / 0.50 after seeing GOOD/FAST results.",
       "Do not change bands during execution.",
-      "Do not select the best-performing band as a final rule."
+      "Do not select the best-performing band as a final rule.",
+      "Do not use actual SL hit or whether SL held.",
+      "Do not use post-entry MFE/MAE.",
+      "Do not use future swing levels."
     ],
+    "numeric_thresholds": {
+      "medium_max": 0.5,
+      "tight_max": 0.25
+    },
+    "percentile_thresholds_allowed": false,
+    "threshold_basis": "fixed_not_percentile",
     "type": "multi_band_descriptive_pre_registered"
   },
   "validation_requirements": [

@@ -15,6 +15,27 @@
     "profitability claims"
   ],
   "future_execution_required_in_separate_branch": true,
+  "h3_audit_fields": [
+    "h3_state",
+    "candidate_reference_price",
+    "local_invalidation_extreme",
+    "invalidation_distance",
+    "local_range",
+    "normalization_timeframe",
+    "normalization_lookback_candles",
+    "normalized_invalidation_distance",
+    "h3_band",
+    "h3_missing_reason",
+    "pre_entry_only",
+    "post_entry_data_used",
+    "leakage_check_passed"
+  ],
+  "h3_missing_data_states": [
+    "UNKNOWN_REFERENCE_PRICE",
+    "NO_VALID_INVALIDATION_EXTREME",
+    "INVALID_GEOMETRY",
+    "INSUFFICIENT_PRE_DECISION_RANGE"
+  ],
   "required_outputs": [
     "proxy_computability_report",
     "h3_tight_sl_proxy_results",

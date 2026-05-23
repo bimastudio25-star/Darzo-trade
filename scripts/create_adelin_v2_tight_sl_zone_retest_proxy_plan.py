@@ -32,6 +32,29 @@ FORBIDDEN_INPUTS = [
     "fast_failure_outcome_group_for_threshold_selection",
 ]
 
+H3_MISSING_DATA_STATES = [
+    "UNKNOWN_REFERENCE_PRICE",
+    "NO_VALID_INVALIDATION_EXTREME",
+    "INVALID_GEOMETRY",
+    "INSUFFICIENT_PRE_DECISION_RANGE",
+]
+
+H3_AUDIT_FIELDS = [
+    "h3_state",
+    "candidate_reference_price",
+    "local_invalidation_extreme",
+    "invalidation_distance",
+    "local_range",
+    "normalization_timeframe",
+    "normalization_lookback_candles",
+    "normalized_invalidation_distance",
+    "h3_band",
+    "h3_missing_reason",
+    "pre_entry_only",
+    "post_entry_data_used",
+    "leakage_check_passed",
+]
+
 ALLOWED_INPUTS = {
     "global_rules": [
         "Use only candles and metadata with timestamp strictly before decision_timestamp.",
@@ -63,8 +86,43 @@ H3_SPEC: dict[str, Any] = {
         "For the candidate direction, inspect completed pre-decision M1 and M5 candles in fixed lookback windows. "
         "For LONG, the invalidation extreme is the nearest qualifying local low/sweep low below the candidate reference price. "
         "For SHORT, the invalidation extreme is the nearest qualifying local high/sweep high above the candidate reference price. "
-        "Compute invalidation_distance_usd, invalidation_distance_pips, and invalidation_distance_to_recent_range_ratio."
+        "Compute invalidation_distance, local_range, and normalized_invalidation_distance using the explicit frozen formula."
     ),
+    "explicit_formula": {
+        "candidate_reference_price": {
+            "definition": "Use the candidate entry/reference price already available in the future execution schema.",
+            "missing_state": "UNKNOWN_REFERENCE_PRICE",
+        },
+        "local_invalidation_extreme": {
+            "long_definition": "Use the nearest relevant pre-decision swing low or sweep low below/near candidate_reference_price.",
+            "short_definition": "Use the nearest relevant pre-decision swing high or sweep high above/near candidate_reference_price.",
+            "multiple_candidate_policy": "Choose the closest invalidation extreme in absolute price distance that occurred before decision_timestamp.",
+            "conflict_or_missing_state": "NO_VALID_INVALIDATION_EXTREME",
+        },
+        "invalidation_distance": {
+            "long_formula": "candidate_reference_price - local_invalidation_extreme",
+            "short_formula": "local_invalidation_extreme - candidate_reference_price",
+            "invalid_geometry_state": "INVALID_GEOMETRY",
+            "invalid_geometry_condition": "distance <= 0",
+        },
+        "local_range_denominator": {
+            "formula": "highest_high - lowest_low over the frozen pre-decision lookback window",
+            "primary_timeframe": "M1",
+            "primary_lookback_candles": 30,
+            "primary_minimum_candles": 20,
+            "primary_rule": "Use the last 30 closed M1 candles before decision_timestamp; exclude decision/anchor candle and post-decision candles.",
+            "fallback_timeframe": "M5",
+            "fallback_lookback_candles": 12,
+            "fallback_rule": "If fewer than 20 M1 candles are available, use the last 12 closed M5 candles before decision_timestamp; exclude decision/anchor candle and post-decision candles.",
+            "missing_state": "INSUFFICIENT_PRE_DECISION_RANGE",
+        },
+        "normalized_invalidation_distance": {
+            "formula": "invalidation_distance / local_range",
+            "metric_normalized": "invalidation_distance",
+            "denominator": "local_range",
+        },
+    },
+    "missing_data_states": H3_MISSING_DATA_STATES,
     "allowed_timeframes": ["M1", "M5"],
     "required_inputs": [
         "decision_timestamp",
@@ -83,22 +141,38 @@ H3_SPEC: dict[str, Any] = {
     "pre_decision_only_rule": "All swing/spike candidates and range proxies must use candles with timestamp < decision_timestamp.",
     "candidate_reference_price_definition": "Use the existing candidate entry/reference price when present; otherwise the future execution branch must stop or use a separately pre-registered fallback, not infer from outcome.",
     "normalization_method": {
-        "recent_range_proxy": "Median high-low range over completed pre-decision M1 candles in a fixed 30-minute window plus M5 range cross-check.",
-        "normalized_distance": "invalidation_distance_usd / max(recent_range_proxy_usd, small_positive_floor)",
+        "metric_normalized": "invalidation_distance",
+        "denominator": "local_range = highest_high - lowest_low over the frozen pre-decision lookback window",
+        "primary_range_window": "M1 last 30 closed candles before decision_timestamp, excluding decision/anchor and post-decision candles.",
+        "primary_minimum": "At least 20 M1 candles are required to use M1 normalization.",
+        "fallback_range_window": "M5 last 12 closed candles before decision_timestamp, excluding decision/anchor and post-decision candles.",
+        "normalized_distance": "normalized_invalidation_distance = invalidation_distance / local_range",
         "pips_conversion": "For XAUUSD, 1 pip = 0.1 USD unless a future instrument-specific metadata file pre-registers otherwise.",
+        "range_missing_state": "INSUFFICIENT_PRE_DECISION_RANGE",
     },
     "threshold_policy": {
         "type": "multi_band_descriptive_pre_registered",
+        "threshold_basis": "fixed_not_percentile",
+        "percentile_thresholds_allowed": False,
         "bands": {
-            "TIGHT": "normalized_distance <= 1.0",
-            "MEDIUM": "1.0 < normalized_distance <= 2.0",
-            "WIDE": "normalized_distance > 2.0",
+            "TIGHT": "normalized_invalidation_distance <= 0.25",
+            "MEDIUM": "0.25 < normalized_invalidation_distance <= 0.50",
+            "WIDE": "normalized_invalidation_distance > 0.50",
+        },
+        "numeric_thresholds": {
+            "tight_max": 0.25,
+            "medium_max": 0.5,
         },
         "fixed_usd_reference_band": "Record <=2.0 USD / <=20 pips as a descriptive reference only, not as an optimized pass threshold.",
         "forbidden": [
+            "Do not use percentile thresholds.",
             "Do not choose thresholds after observing GOOD/FAST separation.",
+            "Do not change 0.25 / 0.50 after seeing GOOD/FAST results.",
             "Do not change bands during execution.",
             "Do not select the best-performing band as a final rule.",
+            "Do not use actual SL hit or whether SL held.",
+            "Do not use post-entry MFE/MAE.",
+            "Do not use future swing levels.",
         ],
     },
     "leakage_risks": [
@@ -114,14 +188,7 @@ H3_SPEC: dict[str, Any] = {
         "Treat all outputs as descriptive diagnostics only.",
     ],
     "future_execution_outputs": [
-        "tight_sl_band",
-        "invalidation_distance_usd",
-        "invalidation_distance_pips",
-        "invalidation_distance_to_recent_range_ratio",
-        "invalidation_source_timeframe",
-        "invalidation_source_type",
-        "proxy_computable",
-        "proxy_limitations",
+        *H3_AUDIT_FIELDS,
     ],
 }
 
@@ -233,6 +300,11 @@ def leakage_guards_payload() -> dict[str, Any]:
         },
         "forbidden_inputs": FORBIDDEN_INPUTS,
         "threshold_tuning_from_results_forbidden": True,
+        "percentile_thresholds_for_h3_forbidden": True,
+        "h3_fixed_thresholds": {
+            "tight_max": 0.25,
+            "medium_max": 0.5,
+        },
         "manual_cherry_picking_forbidden": True,
         "phase_4_blocked": True,
     }
@@ -263,6 +335,8 @@ def future_execution_schema_payload() -> dict[str, Any]:
             "leakage_check_report",
             "threshold_policy_compliance_report",
         ],
+        "h3_audit_fields": H3_AUDIT_FIELDS,
+        "h3_missing_data_states": H3_MISSING_DATA_STATES,
     }
 
 
@@ -320,6 +394,13 @@ def summary_payload() -> dict[str, Any]:
         "primary_proxy_concepts": PRIMARY_PROXY_CONCEPTS,
         "volume_profile_deferred": True,
         "proxy_execution_required_future_branch": True,
+        "h3_normalization_formula_frozen": True,
+        "h3_thresholds_fixed_not_percentile": True,
+        "h3_fixed_thresholds": {
+            "tight_max": 0.25,
+            "medium_max": 0.5,
+        },
+        "h3_missing_data_states": H3_MISSING_DATA_STATES,
         "verdict_flags": [
             "OHLC_PROXY_PLAN_CREATED",
             "PROXY_FORMULAS_PRE_REGISTERED",
@@ -341,6 +422,13 @@ def validate_plan_payloads() -> None:
         policy = json.dumps(spec["threshold_policy"]).lower()
         if "after observing" not in policy and "after seeing" not in policy:
             raise ValueError(f"{spec['proxy_id']} threshold policy does not forbid result tuning")
+    h3_policy = H3_SPEC["threshold_policy"]
+    if h3_policy.get("threshold_basis") != "fixed_not_percentile":
+        raise ValueError("H3 thresholds must be fixed, not percentile-based")
+    if h3_policy.get("numeric_thresholds") != {"tight_max": 0.25, "medium_max": 0.5}:
+        raise ValueError("H3 fixed thresholds must be 0.25 and 0.50")
+    if H3_SPEC.get("missing_data_states") != H3_MISSING_DATA_STATES:
+        raise ValueError("H3 missing-data states drifted")
 
 
 def write_plan(output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, Any]:

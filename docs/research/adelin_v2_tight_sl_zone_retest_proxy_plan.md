@@ -32,19 +32,42 @@ Formula plan:
 - Use completed pre-decision M1 and M5 candles only.
 - For LONG, find the nearest qualifying local low or sweep low below the candidate reference price.
 - For SHORT, find the nearest qualifying local high or sweep high above the candidate reference price.
-- Compute invalidation distance in USD and pips.
-- Normalize invalidation distance by a fixed pre-decision local range proxy.
+- If multiple invalidation candidates exist, choose the closest price-distance candidate that occurred before `decision_timestamp`.
+- If candidate reference price is missing, set `h3_state = UNKNOWN_REFERENCE_PRICE`.
+- If no defensible local invalidation extreme exists, set `h3_state = NO_VALID_INVALIDATION_EXTREME`.
+- Compute `invalidation_distance`.
+- Compute `local_range`.
+- Compute `normalized_invalidation_distance = invalidation_distance / local_range`.
+
+Distance formula:
+
+- LONG: `invalidation_distance = candidate_reference_price - local_invalidation_extreme`
+- SHORT: `invalidation_distance = local_invalidation_extreme - candidate_reference_price`
+- If `invalidation_distance <= 0`, set `h3_state = INVALID_GEOMETRY`.
+
+Normalization denominator:
+
+- Primary denominator: `local_range = highest_high - lowest_low` over the last 30 closed M1 candles before `decision_timestamp`.
+- The decision/anchor candle and all post-decision candles are excluded.
+- At least 20 M1 candles are required.
+- If fewer than 20 M1 candles are available, use the last 12 closed M5 candles before `decision_timestamp`.
+- If neither range is available, set `h3_state = INSUFFICIENT_PRE_DECISION_RANGE`.
 
 Future output fields:
 
-- `tight_sl_band`
-- `invalidation_distance_usd`
-- `invalidation_distance_pips`
-- `invalidation_distance_to_recent_range_ratio`
-- `invalidation_source_timeframe`
-- `invalidation_source_type`
-- `proxy_computable`
-- `proxy_limitations`
+- `h3_state`
+- `candidate_reference_price`
+- `local_invalidation_extreme`
+- `invalidation_distance`
+- `local_range`
+- `normalization_timeframe`
+- `normalization_lookback_candles`
+- `normalized_invalidation_distance`
+- `h3_band`
+- `h3_missing_reason`
+- `pre_entry_only`
+- `post_entry_data_used`
+- `leakage_check_passed`
 
 ## H4 Proxy Spec
 
@@ -111,10 +134,11 @@ Thresholds must not be optimized from prior GOOD/FAST results.
 Allowed policies:
 
 - H3 uses pre-registered descriptive bands:
-  - `TIGHT`: normalized distance `<= 1.0`
-  - `MEDIUM`: normalized distance `> 1.0` and `<= 2.0`
-  - `WIDE`: normalized distance `> 2.0`
+  - `TIGHT`: `normalized_invalidation_distance <= 0.25`
+  - `MEDIUM`: `normalized_invalidation_distance > 0.25` and `<= 0.50`
+  - `WIDE`: `normalized_invalidation_distance > 0.50`
 - H3 also records `<=2.0 USD / <=20 pips` as a descriptive reference only.
+- H3 thresholds are fixed, not percentile-based.
 - H4 uses categorical states:
   - `NO_ZONE_AVAILABLE`
   - `INSIDE_ZONE`
@@ -125,9 +149,14 @@ Allowed policies:
 Forbidden:
 
 - choosing thresholds after observing GOOD/FAST separation;
+- using percentile thresholds;
+- changing `0.25 / 0.50` after seeing GOOD/FAST results;
 - changing bands during execution;
 - selecting the best-performing band as a final rule;
-- tuning zone width after seeing outcomes.
+- tuning zone width after seeing outcomes;
+- using actual SL hit or whether SL held;
+- using post-entry MFE/MAE;
+- using future swing levels.
 
 ## Leakage Guards
 

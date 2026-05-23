@@ -1,5 +1,17 @@
 {
   "broker_execution_enabled": false,
+  "h3_fixed_thresholds": {
+    "medium_max": 0.5,
+    "tight_max": 0.25
+  },
+  "h3_missing_data_states": [
+    "UNKNOWN_REFERENCE_PRICE",
+    "NO_VALID_INVALIDATION_EXTREME",
+    "INVALID_GEOMETRY",
+    "INSUFFICIENT_PRE_DECISION_RANGE"
+  ],
+  "h3_normalization_formula_frozen": true,
+  "h3_thresholds_fixed_not_percentile": true,
   "live_trading_enabled": false,
   "matched_control_replay_run": false,
   "ohlc_read": false,
