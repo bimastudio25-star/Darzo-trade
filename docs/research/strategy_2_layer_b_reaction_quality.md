@@ -2,7 +2,7 @@
 
 ## Context
 
-Layer A taxonomy is now clean. Only `VALID_LONG` and `VALID_SHORT` states are eligible for Layer B reaction-quality descriptors. Behavioral Layer B remains unvalidated.
+Layer A taxonomy is now clean. Only `VALID_LONG` and `VALID_SHORT` states enter the Layer B funnel. Reaction-quality descriptors are measurable only when a real decision/re-entry timestamp exists. Behavioral Layer B remains unvalidated.
 
 ## Method
 
@@ -15,8 +15,14 @@ Layer A taxonomy is now clean. Only `VALID_LONG` and `VALID_SHORT` states are el
 ## Eligibility
 
 - samples loaded: `1089`
-- eligible VALID_LONG: `99`
-- eligible VALID_SHORT: `87`
+- original VALID_LONG: `99`
+- original VALID_SHORT: `87`
+- original Layer A valid count: `186`
+- measurable Layer B count: `135`
+- REENTRY_NOT_REACHED count: `51`
+- MISSING_DECISION_TIME_BUG count: `0`
+- true NOT_ENOUGH_DATA count: `0`
+- original NOT_ENOUGH_DATA before reclassification: `51`
 - excluded count: `903`
 - MAE_NOT_REACHED reported separately: `93`
 
@@ -28,32 +34,39 @@ Excluded states:
 - `MAE_NOT_REACHED`: `93`
 - `TRUE_DUAL_DIRECTION_INVALIDATED`: `2`
 
+## Funnel / Attrition
+
+`REENTRY_NOT_REACHED` rows remain in the export but are outside the measurable reaction-quality denominator.
+
 ## Feature Distributions
 
 | Type | Value | Count | Rate |
 |---|---|---:|---:|
-| reaction_descriptor | CHOP_AFTER_SWEEP_CANDIDATE | 79 | 0.4247 |
-| reaction_descriptor | FAST_REENTRY | 56 | 0.3011 |
-| reaction_descriptor | NOT_ENOUGH_DATA | 51 | 0.2742 |
-| layer_b_candidate_label | CHOPPY_REACTION_CANDIDATE | 79 | 0.4247 |
-| layer_b_candidate_label | STRONG_REACTION_CANDIDATE | 56 | 0.3011 |
-| layer_b_candidate_label | UNKNOWN_REACTION_CANDIDATE | 51 | 0.2742 |
+| reaction_descriptor_all_layer_a_valid | CHOP_AFTER_SWEEP_CANDIDATE | 79 | 0.4247 |
+| reaction_descriptor_all_layer_a_valid | FAST_REENTRY | 56 | 0.3011 |
+| reaction_descriptor_all_layer_a_valid | NO_ENTRY_REENTRY_NOT_REACHED | 51 | 0.2742 |
+| layer_b_candidate_label_all_layer_a_valid | CHOPPY_REACTION_CANDIDATE | 79 | 0.4247 |
+| layer_b_candidate_label_all_layer_a_valid | STRONG_REACTION_CANDIDATE | 56 | 0.3011 |
+| layer_b_candidate_label_all_layer_a_valid | UNKNOWN_REACTION_CANDIDATE | 51 | 0.2742 |
+| reaction_descriptor_measurable | CHOP_AFTER_SWEEP_CANDIDATE | 79 | 0.5852 |
+| reaction_descriptor_measurable | FAST_REENTRY | 56 | 0.4148 |
+| layer_b_candidate_label_measurable | CHOPPY_REACTION_CANDIDATE | 79 | 0.5852 |
+| layer_b_candidate_label_measurable | STRONG_REACTION_CANDIDATE | 56 | 0.4148 |
 
 ## Null / Missing Data
 
 | Feature | Null Or Unknown | Rate |
 |---|---:|---:|
 | sweep_timestamp | 0 | 0.0 |
-| decision_time | 51 | 0.2742 |
-| range_reentry_detected | 51 | 0.2742 |
-| time_to_reentry_seconds | 51 | 0.2742 |
-| reentry_distance_usd | 51 | 0.2742 |
-| rejection_wick_ratio | 51 | 0.2742 |
-| body_displacement_usd | 51 | 0.2742 |
-| post_sweep_compression_seconds | 51 | 0.2742 |
-| micro_range_size_usd | 51 | 0.2742 |
-| clean_vs_dirty_path_candidate | 53 | 0.2849 |
-| reason::DECISION_TIME_MISSING | 51 | 0.2742 |
+| decision_time | 0 | 0.0 |
+| range_reentry_detected | 0 | 0.0 |
+| time_to_reentry_seconds | 0 | 0.0 |
+| reentry_distance_usd | 0 | 0.0 |
+| rejection_wick_ratio | 0 | 0.0 |
+| body_displacement_usd | 0 | 0.0 |
+| post_sweep_compression_seconds | 0 | 0.0 |
+| micro_range_size_usd | 0 | 0.0 |
+| clean_vs_dirty_path_candidate | 2 | 0.0148 |
 
 ## Leakage Audit
 

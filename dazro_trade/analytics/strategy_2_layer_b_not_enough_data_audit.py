@@ -13,6 +13,8 @@ from dazro_trade.analytics.strategy_2_layer_b_reaction_quality import load_ohlc_
 
 
 NED_DESCRIPTOR = "NOT_ENOUGH_DATA"
+REENTRY_NOT_REACHED_DESCRIPTOR = "NO_ENTRY_REENTRY_NOT_REACHED"
+REENTRY_NOT_REACHED_FUNNEL_STATE = "REENTRY_NOT_REACHED"
 VALID_STATES = {"VALID_LONG", "VALID_SHORT"}
 CAUSE_EDGE_OF_DATASET = "EDGE_OF_DATASET"
 CAUSE_WEEKEND_OR_MARKET_GAP = "WEEKEND_OR_MARKET_GAP"
@@ -90,6 +92,18 @@ def load_layer_b_features(path: str | Path) -> pd.DataFrame:
 def normalize_layer_b_frame(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     out["layer_b_eligible"] = out["layer_b_eligible"].map(_boolish)
+    if "layer_a_valid" not in out.columns:
+        out["layer_a_valid"] = out["layer_a_state"].astype(str).isin(VALID_STATES)
+    else:
+        out["layer_a_valid"] = out["layer_a_valid"].map(_boolish)
+    if "layer_b_measurable" not in out.columns:
+        out["layer_b_measurable"] = out["layer_b_eligible"]
+    else:
+        out["layer_b_measurable"] = out["layer_b_measurable"].map(_boolish)
+    if "layer_b_funnel_state" not in out.columns:
+        out["layer_b_funnel_state"] = out["reaction_descriptor"].map(
+            lambda value: "NOT_ENOUGH_DATA" if str(value) == NED_DESCRIPTOR else "MEASURABLE_REACTION_WINDOW"
+        )
     for column in ["sample_id", "h1_context_id", "direction_candidate", "layer_a_state", "reaction_descriptor", "layer_b_candidate_label"]:
         out[column] = out[column].fillna("").astype(str)
     for column in ["sweep_timestamp", "decision_time", "data_window_start", "data_window_end"]:
@@ -112,19 +126,21 @@ def build_not_enough_data_audit(
     dataset_start = ohlc["time"].min() if not ohlc.empty else pd.NaT
     dataset_end = ohlc["time"].max() if not ohlc.empty else pd.NaT
     enriched = add_audit_columns(frame, ohlc=ohlc, dataset_start=dataset_start, dataset_end=dataset_end)
-    eligible = enriched[enriched["layer_b_eligible"]].copy()
-    ned = eligible[eligible["reaction_descriptor"].eq(NED_DESCRIPTOR)].copy()
-    available = eligible[~eligible["reaction_descriptor"].eq(NED_DESCRIPTOR)].copy()
-    by_direction = grouped_rate_table(eligible, ned, "direction_candidate", "direction_candidate")
-    by_hour = grouped_rate_table(eligible, ned, "hour_utc", "hour_utc")
-    by_session = grouped_rate_table(eligible, ned, "session_bucket", "session_bucket")
-    by_weekday = grouped_rate_table(eligible, ned, "weekday", "weekday")
-    by_h1_context = grouped_rate_table(eligible, ned, "h1_context_id", "h1_context_id").sort_values(
+    layer_a_valid = enriched[enriched["layer_a_valid"]].copy()
+    measurable = enriched[enriched["layer_b_eligible"]].copy()
+    reentry_not_reached = layer_a_valid[layer_a_valid["layer_b_funnel_state"].eq(REENTRY_NOT_REACHED_FUNNEL_STATE)].copy()
+    ned = measurable[measurable["reaction_descriptor"].eq(NED_DESCRIPTOR)].copy()
+    available = measurable[~measurable["reaction_descriptor"].eq(NED_DESCRIPTOR)].copy()
+    by_direction = grouped_rate_table(layer_a_valid, ned, "direction_candidate", "direction_candidate")
+    by_hour = grouped_rate_table(layer_a_valid, ned, "hour_utc", "hour_utc")
+    by_session = grouped_rate_table(layer_a_valid, ned, "session_bucket", "session_bucket")
+    by_weekday = grouped_rate_table(layer_a_valid, ned, "weekday", "weekday")
+    by_h1_context = grouped_rate_table(layer_a_valid, ned, "h1_context_id", "h1_context_id").sort_values(
         ["not_enough_data_count", "not_enough_data_rate"], ascending=[False, False]
     )
     cause_breakdown = cause_distribution(ned)
     comparison = available_comparison(ned, available)
-    critical = critical_conclusion(ned, eligible, cause_breakdown)
+    critical = critical_conclusion(ned, layer_a_valid, cause_breakdown, reentry_not_reached_count=len(reentry_not_reached))
     summary = {
         "runtime_seconds": round(time.perf_counter() - started, 4),
         "input_path": str(Path(input_path)),
@@ -132,10 +148,14 @@ def build_not_enough_data_audit(
         "data_dir": str(Path(data_dir)),
         "symbol": symbol,
         "samples_processed": int(len(frame)),
-        "layer_b_eligible_samples": int(len(eligible)),
+        "original_layer_a_valid_samples": int(len(layer_a_valid)),
+        "layer_b_eligible_samples": int(len(measurable)),
+        "layer_b_measurable_samples": int(len(measurable)),
+        "reentry_not_reached_count": int(len(reentry_not_reached)),
         "not_enough_data_count": int(len(ned)),
-        "not_enough_data_rate": _rate(len(ned), len(eligible)),
-        "descriptor_distribution": dict(sorted(Counter(eligible["reaction_descriptor"]).items())),
+        "not_enough_data_rate": _rate(len(ned), len(measurable)),
+        "descriptor_distribution": dict(sorted(Counter(layer_a_valid["reaction_descriptor"]).items())),
+        "measurable_descriptor_distribution": dict(sorted(Counter(measurable["reaction_descriptor"]).items())),
         "not_enough_data_by_direction": _records_by_key(by_direction, "direction_candidate"),
         "not_enough_data_by_session": _records_by_key(by_session, "session_bucket"),
         "not_enough_data_by_weekday": _records_by_key(by_weekday, "weekday"),
@@ -333,8 +353,16 @@ def available_comparison(ned: pd.DataFrame, available: pd.DataFrame) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-def critical_conclusion(ned: pd.DataFrame, eligible: pd.DataFrame, cause_breakdown: pd.DataFrame) -> str:
+def critical_conclusion(
+    ned: pd.DataFrame,
+    eligible: pd.DataFrame,
+    cause_breakdown: pd.DataFrame,
+    *,
+    reentry_not_reached_count: int = 0,
+) -> str:
     if ned.empty:
+        if reentry_not_reached_count:
+            return "NOT_ENOUGH_DATA_RECLASSIFIED_AS_REENTRY_NOT_REACHED"
         return "RANDOM_DISTRIBUTED_LOW_RISK"
     cause_counts = Counter(ned["likely_not_enough_data_cause"])
     top_cause, top_count = cause_counts.most_common(1)[0]
@@ -356,6 +384,8 @@ def critical_conclusion(ned: pd.DataFrame, eligible: pd.DataFrame, cause_breakdo
 
 
 def recommended_next_step(conclusion: str) -> str:
+    if conclusion == "NOT_ENOUGH_DATA_RECLASSIFIED_AS_REENTRY_NOT_REACHED":
+        return "rerun manual validation planning with REENTRY_NOT_REACHED outside the measurable Layer B denominator"
     if conclusion == "WINDOW_CONFIGURATION_ISSUE":
         return "fix data-window/reporting issue before manual validation"
     if conclusion == "CLUSTERED_DATA_QUALITY_RISK":
@@ -419,7 +449,7 @@ def render_audit_report(
         "",
         "## Context",
         "",
-        "Layer B diagnostics produced 51/186 eligible samples as `NOT_ENOUGH_DATA`. Manual validation should wait until this missing-data cluster is understood.",
+        "Layer B diagnostics originally produced 51/186 Layer A-valid samples as `NOT_ENOUGH_DATA`. The denominator audit separates no-entry/no-reentry attrition from true missing-data cases.",
         "",
         "## Method",
         "",
@@ -431,9 +461,12 @@ def render_audit_report(
         "## Findings",
         "",
         f"- samples processed: `{summary['samples_processed']}`",
-        f"- Layer B eligible samples: `{summary['layer_b_eligible_samples']}`",
+        f"- original Layer A valid samples: `{summary['original_layer_a_valid_samples']}`",
+        f"- measurable Layer B samples: `{summary['layer_b_measurable_samples']}`",
+        f"- REENTRY_NOT_REACHED count: `{summary['reentry_not_reached_count']}`",
         f"- NOT_ENOUGH_DATA count/rate: `{summary['not_enough_data_count']}` / `{summary['not_enough_data_rate']}`",
-        f"- descriptor distribution: `{summary['descriptor_distribution']}`",
+        f"- descriptor distribution after reclassification: `{summary['descriptor_distribution']}`",
+        f"- measurable descriptor distribution: `{summary['measurable_descriptor_distribution']}`",
         "",
         "### Direction",
         "",

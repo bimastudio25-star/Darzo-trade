@@ -2,7 +2,7 @@
 
 ## Context
 
-Layer B diagnostics produced 51/186 eligible samples as `NOT_ENOUGH_DATA`. Manual validation should wait until this missing-data cluster is understood.
+Layer B diagnostics originally produced 51/186 Layer A-valid samples as `NOT_ENOUGH_DATA`. The denominator audit separates no-entry/no-reentry attrition from true missing-data cases.
 
 ## Method
 
@@ -14,69 +14,70 @@ Layer B diagnostics produced 51/186 eligible samples as `NOT_ENOUGH_DATA`. Manua
 ## Findings
 
 - samples processed: `1089`
-- Layer B eligible samples: `186`
-- NOT_ENOUGH_DATA count/rate: `51` / `0.2742`
-- descriptor distribution: `{'CHOP_AFTER_SWEEP_CANDIDATE': 79, 'FAST_REENTRY': 56, 'NOT_ENOUGH_DATA': 51}`
+- original Layer A valid samples: `186`
+- measurable Layer B samples: `135`
+- REENTRY_NOT_REACHED count: `51`
+- NOT_ENOUGH_DATA count/rate: `0` / `0.0`
+- descriptor distribution after reclassification: `{'CHOP_AFTER_SWEEP_CANDIDATE': 79, 'FAST_REENTRY': 56, 'NO_ENTRY_REENTRY_NOT_REACHED': 51}`
+- measurable descriptor distribution: `{'CHOP_AFTER_SWEEP_CANDIDATE': 79, 'FAST_REENTRY': 56}`
 
 ### Direction
 
 | direction_candidate | eligible_count | not_enough_data_count | not_enough_data_rate |
 | --- | --- | --- | --- |
-| LONG | 99 | 27 | 0.2727 |
-| SHORT | 87 | 24 | 0.2759 |
+| LONG | 99 | 0 | 0.0 |
+| SHORT | 87 | 0 | 0.0 |
 
 ### Session
 
 | session_bucket | eligible_count | not_enough_data_count | not_enough_data_rate |
 | --- | --- | --- | --- |
-| ASIA | 77 | 21 | 0.2727 |
-| LONDON | 38 | 14 | 0.3684 |
-| NY | 56 | 12 | 0.2143 |
-| OFF_HOURS | 15 | 4 | 0.2667 |
+| ASIA | 77 | 0 | 0.0 |
+| LONDON | 38 | 0 | 0.0 |
+| NY | 56 | 0 | 0.0 |
+| OFF_HOURS | 15 | 0 | 0.0 |
 
 ### Weekday
 
 | weekday | eligible_count | not_enough_data_count | not_enough_data_rate |
 | --- | --- | --- | --- |
-| Friday | 26 | 7 | 0.2692 |
-| Monday | 45 | 13 | 0.2889 |
-| Thursday | 37 | 11 | 0.2973 |
-| Tuesday | 37 | 10 | 0.2703 |
-| Wednesday | 41 | 10 | 0.2439 |
+| Friday | 26 | 0 | 0.0 |
+| Monday | 45 | 0 | 0.0 |
+| Thursday | 37 | 0 | 0.0 |
+| Tuesday | 37 | 0 | 0.0 |
+| Wednesday | 41 | 0 | 0.0 |
 
 ### Top H1 Contexts
 
 | h1_context_id | eligible_count | not_enough_data_count | not_enough_data_rate |
 | --- | --- | --- | --- |
-| XAUUSD_20260420010000+0000 | 2 | 2 | 1.0 |
-| XAUUSD_20260427010000+0000 | 2 | 2 | 1.0 |
-| XAUUSD_20260428080000+0000 | 2 | 2 | 1.0 |
-| XAUUSD_20260430020000+0000 | 2 | 2 | 1.0 |
-| XAUUSD_20260318030000+0000 | 1 | 1 | 1.0 |
-| XAUUSD_20260318140000+0000 | 1 | 1 | 1.0 |
-| XAUUSD_20260319060000+0000 | 1 | 1 | 1.0 |
-| XAUUSD_20260319210000+0000 | 1 | 1 | 1.0 |
-| XAUUSD_20260320110000+0000 | 1 | 1 | 1.0 |
-| XAUUSD_20260327040000+0000 | 1 | 1 | 1.0 |
+| XAUUSD_20260316000000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260316070000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260316130000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260317080000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260317120000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260318030000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260318130000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260318140000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260318150000+0000 | 1 | 0 | 0.0 |
+| XAUUSD_20260318210000+0000 | 1 | 0 | 0.0 |
 
 ### Cause Breakdown
 
-| likely_not_enough_data_cause | count | rate |
-| --- | --- | --- |
-| WINDOW_TOO_SHORT | 51 | 1.0 |
+_No rows._
 
 ### NOT_ENOUGH_DATA Vs Available Descriptor
 
 | group | sample_count | avg_available_candle_count | median_available_candle_count | avg_expected_candle_count | avg_missing_candle_count | avg_data_window_seconds | missing_decision_time_count | near_dataset_boundary_count | weekend_or_market_gap_count |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| NOT_ENOUGH_DATA | 51 | 0.0 | 0.0 | 0.0 | 0.0 | nan | 51 | 0 | 0 |
+| NOT_ENOUGH_DATA | 0 | nan | nan | nan | nan | nan | 0 | 0 | 0 |
 | AVAILABLE_DESCRIPTOR | 135 | 15.2296 | 8.0 | 15.2296 | 0.0 | 853.7778 | 0 | 0 | 5 |
 
 ## Critical Conclusion
 
-`WINDOW_CONFIGURATION_ISSUE`
+`NOT_ENOUGH_DATA_RECLASSIFIED_AS_REENTRY_NOT_REACHED`
 
-Recommended next step: fix data-window/reporting issue before manual validation.
+Recommended next step: rerun manual validation planning with REENTRY_NOT_REACHED outside the measurable Layer B denominator.
 
 ## Safety
 

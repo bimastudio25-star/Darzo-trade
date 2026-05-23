@@ -13,6 +13,13 @@ import pandas as pd
 VALID_LAYER_A_STATES = {"VALID_LONG", "VALID_SHORT"}
 MAE_NOT_REACHED_STATE = "MAE_NOT_REACHED"
 DEFAULT_MECHANICAL_PATH = Path("backtests/reports/strategy_2_mechanical_spec_correction/corrected_mechanical_samples.csv")
+DESCRIPTOR_NO_ENTRY_REENTRY_NOT_REACHED = "NO_ENTRY_REENTRY_NOT_REACHED"
+DESCRIPTOR_MISSING_DECISION_TIME_BUG = "MISSING_DECISION_TIME_BUG"
+FUNNEL_LAYER_A_EXCLUDED = "LAYER_A_EXCLUDED"
+FUNNEL_REENTRY_NOT_REACHED = "REENTRY_NOT_REACHED"
+FUNNEL_MISSING_DECISION_TIME_BUG = "MISSING_DECISION_TIME_BUG"
+FUNNEL_NOT_ENOUGH_DATA = "NOT_ENOUGH_DATA"
+FUNNEL_MEASURABLE_REACTION_WINDOW = "MEASURABLE_REACTION_WINDOW"
 REACTION_DESCRIPTORS = [
     "FAST_REENTRY",
     "WICK_REJECTION_CANDIDATE",
@@ -20,6 +27,8 @@ REACTION_DESCRIPTORS = [
     "COMPRESSION_THEN_SHIFT_CANDIDATE",
     "WEAK_REACTION_CANDIDATE",
     "CHOP_AFTER_SWEEP_CANDIDATE",
+    DESCRIPTOR_NO_ENTRY_REENTRY_NOT_REACHED,
+    DESCRIPTOR_MISSING_DECISION_TIME_BUG,
     "NOT_ENOUGH_DATA",
     "UNKNOWN",
 ]
@@ -64,6 +73,7 @@ VERDICT_FLAGS = [
 class LayerBReactionQualityResult:
     per_sample: pd.DataFrame
     descriptor_distribution: pd.DataFrame
+    funnel_attrition: pd.DataFrame
     null_report: pd.DataFrame
     future_data_audit: pd.DataFrame
     summary: dict[str, Any]
@@ -141,15 +151,22 @@ def build_layer_b_reaction_quality(
     ]
     per_sample = pd.DataFrame(per_sample_rows, columns=OUTPUT_COLUMNS)
     descriptor_distribution = build_descriptor_distribution(per_sample)
+    funnel_attrition = build_funnel_attrition(per_sample)
     null_report = build_null_report(per_sample)
     future_data_audit = build_future_data_audit()
     state_counts = Counter(state_frame["final_state"]) if not state_frame.empty else Counter()
+    layer_a_valid = per_sample[per_sample["layer_a_valid"]]
     eligible = per_sample[per_sample["layer_b_eligible"]]
     excluded_counts = {str(state): int(count) for state, count in state_counts.items() if state not in VALID_LAYER_A_STATES}
     descriptor_counts = Counter(eligible["reaction_descriptor"]) if not eligible.empty else Counter()
     label_counts = Counter(eligible["layer_b_candidate_label"]) if not eligible.empty else Counter()
+    all_valid_descriptor_counts = Counter(layer_a_valid["reaction_descriptor"]) if not layer_a_valid.empty else Counter()
+    funnel_counts = Counter(per_sample["layer_b_funnel_state"]) if not per_sample.empty else Counter()
     missing_data_count = int(eligible["missing_required_data"].sum()) if not eligible.empty else 0
     future_count = int(eligible["uses_future_data"].sum()) if not eligible.empty else 0
+    reentry_not_reached_count = int(funnel_counts.get(FUNNEL_REENTRY_NOT_REACHED, 0))
+    missing_decision_bug_count = int(funnel_counts.get(FUNNEL_MISSING_DECISION_TIME_BUG, 0))
+    true_not_enough_data_count = int(funnel_counts.get(FUNNEL_NOT_ENOUGH_DATA, 0))
     summary = {
         "runtime_seconds": round(time.perf_counter() - started, 4),
         "input_path": str(Path(input_path)),
@@ -158,12 +175,24 @@ def build_layer_b_reaction_quality(
         "samples_loaded": int(len(state_frame)),
         "eligible_valid_long_count": int(state_counts.get("VALID_LONG", 0)),
         "eligible_valid_short_count": int(state_counts.get("VALID_SHORT", 0)),
+        "original_layer_a_valid_count": int(len(layer_a_valid)),
+        "original_not_enough_data_count_before_reclassification": int(
+            reentry_not_reached_count + missing_decision_bug_count + true_not_enough_data_count
+        ),
         "layer_b_eligible_count": int(len(eligible)),
-        "excluded_count": int(len(state_frame) - len(eligible)),
+        "layer_b_measurable_count": int(len(eligible)),
+        "reentry_not_reached_count": reentry_not_reached_count,
+        "missing_decision_time_bug_count": missing_decision_bug_count,
+        "true_not_enough_data_count": true_not_enough_data_count,
+        "excluded_count": int(len(state_frame) - len(layer_a_valid)),
+        "layer_a_excluded_count": int(len(state_frame) - len(layer_a_valid)),
+        "layer_b_non_measurable_count": int(len(layer_a_valid) - len(eligible)),
         "excluded_states": excluded_counts,
         "mae_not_reached_count": int(state_counts.get(MAE_NOT_REACHED_STATE, 0)),
         "reaction_descriptor_distribution": dict(sorted(descriptor_counts.items())),
+        "reaction_descriptor_distribution_all_layer_a_valid": dict(sorted(all_valid_descriptor_counts.items())),
         "layer_b_candidate_label_distribution": dict(sorted(label_counts.items())),
+        "layer_b_funnel_distribution": dict(sorted(funnel_counts.items())),
         "missing_data_count": missing_data_count,
         "future_data_diagnostic_only_count": future_count,
         "future_data_features_are_diagnostic_only": True,
@@ -177,6 +206,7 @@ def build_layer_b_reaction_quality(
     return LayerBReactionQualityResult(
         per_sample=per_sample,
         descriptor_distribution=descriptor_distribution,
+        funnel_attrition=funnel_attrition,
         null_report=null_report,
         future_data_audit=future_data_audit,
         summary=summary,
@@ -190,8 +220,14 @@ def derive_reaction_features(row: dict[str, Any], *, ohlc: pd.DataFrame, pip_fac
     direction = _clean(row.get("direction_candidate")).upper()
     eligible = layer_a_state in VALID_LAYER_A_STATES
     sweep_ts = _timestamp(row.get("h1_level_take_timestamp"))
-    reentry_ts = _timestamp(row.get("range_reentry_timestamp")) or _timestamp(row.get("entry_timestamp"))
+    entry_status = _clean(row.get("entry_status"))
+    raw_range_reentry_ts = _clean(row.get("range_reentry_timestamp"))
+    raw_entry_ts = _clean(row.get("entry_timestamp"))
+    range_reentry_ts = _timestamp(row.get("range_reentry_timestamp"))
+    entry_ts = _timestamp(row.get("entry_timestamp"))
+    reentry_ts = range_reentry_ts or entry_ts
     decision_time = reentry_ts
+    has_entry_or_reentry_raw = bool(raw_range_reentry_ts or raw_entry_ts)
     h1_start = _timestamp(row.get("h1_context_timestamp"))
     h1_level = _to_float(row.get("h1_liquidity_level"))
     data_window_start = sweep_ts or h1_start
@@ -210,16 +246,57 @@ def derive_reaction_features(row: dict[str, Any], *, ohlc: pd.DataFrame, pip_fac
             pip_factor=pip_factor,
             descriptor="UNKNOWN",
             label="UNKNOWN_REACTION_CANDIDATE",
+            funnel_state=FUNNEL_LAYER_A_EXCLUDED,
+            layer_a_valid=False,
+            layer_b_measurable=False,
             missing=True,
             null_reasons=f"EXCLUDED_LAYER_A_STATE_{layer_a_state}",
             warnings="Layer A state excluded from Layer B derivation",
+        )
+    if decision_time is None and not has_entry_or_reentry_raw:
+        descriptor = DESCRIPTOR_NO_ENTRY_REENTRY_NOT_REACHED
+        return _base_output(
+            row,
+            layer_a_state=layer_a_state,
+            eligible=False,
+            sweep_ts=sweep_ts,
+            decision_time=decision_time,
+            data_window_start=data_window_start,
+            data_window_end=data_window_end,
+            pip_factor=pip_factor,
+            descriptor=descriptor,
+            label="UNKNOWN_REACTION_CANDIDATE",
+            funnel_state=FUNNEL_REENTRY_NOT_REACHED,
+            layer_a_valid=True,
+            layer_b_measurable=False,
+            missing=False,
+            null_reasons=descriptor,
+            warnings="Layer A valid but no entry/re-entry event exists; excluded from measurable Layer B denominator",
+        )
+    if decision_time is None and has_entry_or_reentry_raw:
+        descriptor = DESCRIPTOR_MISSING_DECISION_TIME_BUG
+        return _base_output(
+            row,
+            layer_a_state=layer_a_state,
+            eligible=False,
+            sweep_ts=sweep_ts,
+            decision_time=decision_time,
+            data_window_start=data_window_start,
+            data_window_end=data_window_end,
+            pip_factor=pip_factor,
+            descriptor=descriptor,
+            label="UNKNOWN_REACTION_CANDIDATE",
+            funnel_state=FUNNEL_MISSING_DECISION_TIME_BUG,
+            layer_a_valid=True,
+            layer_b_measurable=False,
+            missing=True,
+            null_reasons=descriptor,
+            warnings="Entry/re-entry timestamp exists but decision_time could not be parsed",
         )
     if ohlc.empty:
         null_reasons.append("M1_DATA_UNAVAILABLE")
     if sweep_ts is None:
         null_reasons.append("SWEEP_TIMESTAMP_MISSING")
-    if decision_time is None:
-        null_reasons.append("DECISION_TIME_MISSING")
     if h1_level is None:
         null_reasons.append("H1_LIQUIDITY_LEVEL_MISSING")
     if direction not in {"LONG", "SHORT"}:
@@ -236,9 +313,12 @@ def derive_reaction_features(row: dict[str, Any], *, ohlc: pd.DataFrame, pip_fac
             pip_factor=pip_factor,
             descriptor="NOT_ENOUGH_DATA",
             label="UNKNOWN_REACTION_CANDIDATE",
+            funnel_state=FUNNEL_NOT_ENOUGH_DATA,
+            layer_a_valid=True,
+            layer_b_measurable=True,
             missing=True,
             null_reasons=_join(null_reasons),
-            warnings="Required decision-time data missing",
+            warnings="Decision-time event exists, but required reaction-window data is unavailable",
         )
 
     window = ohlc[(ohlc["time"] >= sweep_ts) & (ohlc["time"] <= decision_time)].copy()
@@ -255,6 +335,9 @@ def derive_reaction_features(row: dict[str, Any], *, ohlc: pd.DataFrame, pip_fac
             pip_factor=pip_factor,
             descriptor="NOT_ENOUGH_DATA",
             label="UNKNOWN_REACTION_CANDIDATE",
+            funnel_state=FUNNEL_NOT_ENOUGH_DATA,
+            layer_a_valid=True,
+            layer_b_measurable=True,
             missing=True,
             null_reasons="REACTION_WINDOW_EMPTY",
             warnings="No M1 candles inside sweep-to-decision window",
@@ -287,7 +370,11 @@ def derive_reaction_features(row: dict[str, Any], *, ohlc: pd.DataFrame, pip_fac
         "h1_context_id": _clean(row.get("h1_context_id")),
         "direction_candidate": direction,
         "layer_a_state": layer_a_state,
+        "layer_a_valid": True,
         "layer_b_eligible": True,
+        "layer_b_measurable": True,
+        "layer_b_funnel_state": FUNNEL_MEASURABLE_REACTION_WINDOW,
+        "entry_status_audit": entry_status,
         "sweep_timestamp": _format_ts(sweep_ts),
         "decision_time": _format_ts(decision_time),
         "feature_time_boundary": _format_ts(decision_time),
@@ -329,6 +416,9 @@ def _base_output(
     pip_factor: float,
     descriptor: str,
     label: str,
+    funnel_state: str,
+    layer_a_valid: bool,
+    layer_b_measurable: bool,
     missing: bool,
     null_reasons: str,
     warnings: str,
@@ -339,6 +429,10 @@ def _base_output(
         "direction_candidate": _clean(row.get("direction_candidate")).upper(),
         "layer_a_state": layer_a_state,
         "layer_b_eligible": bool(eligible),
+        "layer_a_valid": bool(layer_a_valid),
+        "layer_b_measurable": bool(layer_b_measurable),
+        "layer_b_funnel_state": funnel_state,
+        "entry_status_audit": _clean(row.get("entry_status")),
         "sweep_timestamp": _format_ts(sweep_ts),
         "decision_time": _format_ts(decision_time),
         "feature_time_boundary": _format_ts(decision_time),
@@ -466,14 +560,34 @@ def candle_at_or_before(ohlc: pd.DataFrame, timestamp: pd.Timestamp) -> pd.Serie
 
 
 def build_descriptor_distribution(per_sample: pd.DataFrame) -> pd.DataFrame:
+    layer_a_valid = per_sample[per_sample["layer_a_valid"]].copy()
     eligible = per_sample[per_sample["layer_b_eligible"]].copy()
     rows: list[dict[str, Any]] = []
-    total = len(eligible)
-    for column, dist_type in (("reaction_descriptor", "reaction_descriptor"), ("layer_b_candidate_label", "layer_b_candidate_label")):
-        counts = eligible[column].value_counts().sort_index() if total else pd.Series(dtype="int64")
+    groups = [
+        (layer_a_valid, "reaction_descriptor", "reaction_descriptor_all_layer_a_valid"),
+        (layer_a_valid, "layer_b_candidate_label", "layer_b_candidate_label_all_layer_a_valid"),
+        (eligible, "reaction_descriptor", "reaction_descriptor_measurable"),
+        (eligible, "layer_b_candidate_label", "layer_b_candidate_label_measurable"),
+    ]
+    for subset, column, dist_type in groups:
+        total = len(subset)
+        counts = subset[column].value_counts().sort_index() if total else pd.Series(dtype="int64")
         for value, count in counts.items():
             rows.append({"distribution_type": dist_type, "value": value, "count": int(count), "rate": _rate(int(count), total)})
     return pd.DataFrame(rows, columns=["distribution_type", "value", "count", "rate"])
+
+
+def build_funnel_attrition(per_sample: pd.DataFrame) -> pd.DataFrame:
+    total = len(per_sample)
+    counts = per_sample["layer_b_funnel_state"].value_counts().sort_index() if total else pd.Series(dtype="int64")
+    rows = [
+        {"layer_b_funnel_state": state, "count": int(count), "rate_of_all_samples": _rate(int(count), total)}
+        for state, count in counts.items()
+    ]
+    layer_a_valid_total = int(per_sample["layer_a_valid"].sum()) if total else 0
+    for row in rows:
+        row["rate_of_layer_a_valid"] = _rate(row["count"], layer_a_valid_total) if row["layer_b_funnel_state"] != FUNNEL_LAYER_A_EXCLUDED else 0.0
+    return pd.DataFrame(rows, columns=["layer_b_funnel_state", "count", "rate_of_all_samples", "rate_of_layer_a_valid"])
 
 
 def build_null_report(per_sample: pd.DataFrame) -> pd.DataFrame:
@@ -590,6 +704,7 @@ def write_layer_b_outputs(
     paths = {
         "per_sample": output / "layer_b_reaction_features_per_sample.csv",
         "descriptor_distribution": output / "layer_b_reaction_descriptor_distribution.csv",
+        "funnel_attrition": output / "layer_b_funnel_attrition.csv",
         "null_report": output / "layer_b_feature_null_report.csv",
         "future_data_audit": output / "layer_b_future_data_audit.csv",
         "summary": output / "layer_b_eligible_sample_summary.json",
@@ -597,6 +712,7 @@ def write_layer_b_outputs(
     }
     result.per_sample.to_csv(paths["per_sample"], index=False)
     result.descriptor_distribution.to_csv(paths["descriptor_distribution"], index=False)
+    result.funnel_attrition.to_csv(paths["funnel_attrition"], index=False)
     result.null_report.to_csv(paths["null_report"], index=False)
     result.future_data_audit.to_csv(paths["future_data_audit"], index=False)
     paths["summary"].write_text(json.dumps(result.summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
@@ -620,7 +736,7 @@ def render_layer_b_report(
         "",
         "## Context",
         "",
-        "Layer A taxonomy is now clean. Only `VALID_LONG` and `VALID_SHORT` states are eligible for Layer B reaction-quality descriptors. Behavioral Layer B remains unvalidated.",
+        "Layer A taxonomy is now clean. Only `VALID_LONG` and `VALID_SHORT` states enter the Layer B funnel. Reaction-quality descriptors are measurable only when a real decision/re-entry timestamp exists. Behavioral Layer B remains unvalidated.",
         "",
         "## Method",
         "",
@@ -633,8 +749,14 @@ def render_layer_b_report(
         "## Eligibility",
         "",
         f"- samples loaded: `{summary['samples_loaded']}`",
-        f"- eligible VALID_LONG: `{summary['eligible_valid_long_count']}`",
-        f"- eligible VALID_SHORT: `{summary['eligible_valid_short_count']}`",
+        f"- original VALID_LONG: `{summary['eligible_valid_long_count']}`",
+        f"- original VALID_SHORT: `{summary['eligible_valid_short_count']}`",
+        f"- original Layer A valid count: `{summary['original_layer_a_valid_count']}`",
+        f"- measurable Layer B count: `{summary['layer_b_measurable_count']}`",
+        f"- REENTRY_NOT_REACHED count: `{summary['reentry_not_reached_count']}`",
+        f"- MISSING_DECISION_TIME_BUG count: `{summary['missing_decision_time_bug_count']}`",
+        f"- true NOT_ENOUGH_DATA count: `{summary['true_not_enough_data_count']}`",
+        f"- original NOT_ENOUGH_DATA before reclassification: `{summary['original_not_enough_data_count_before_reclassification']}`",
         f"- excluded count: `{summary['excluded_count']}`",
         f"- MAE_NOT_REACHED reported separately: `{summary['mae_not_reached_count']}`",
         "",
@@ -643,7 +765,19 @@ def render_layer_b_report(
     ]
     for state, count in summary["excluded_states"].items():
         lines.append(f"- `{state}`: `{count}`")
-    lines.extend(["", "## Feature Distributions", "", "| Type | Value | Count | Rate |", "|---|---|---:|---:|"])
+    lines.extend(
+        [
+            "",
+            "## Funnel / Attrition",
+            "",
+            "`REENTRY_NOT_REACHED` rows remain in the export but are outside the measurable reaction-quality denominator.",
+            "",
+            "## Feature Distributions",
+            "",
+            "| Type | Value | Count | Rate |",
+            "|---|---|---:|---:|",
+        ]
+    )
     for row in descriptor_distribution.to_dict("records"):
         lines.append(f"| {row['distribution_type']} | {row['value']} | {row['count']} | {row['rate']} |")
     lines.extend(["", "## Null / Missing Data", "", "| Feature | Null Or Unknown | Rate |", "|---|---:|---:|"])
@@ -684,7 +818,11 @@ OUTPUT_COLUMNS = [
     "h1_context_id",
     "direction_candidate",
     "layer_a_state",
+    "layer_a_valid",
     "layer_b_eligible",
+    "layer_b_measurable",
+    "layer_b_funnel_state",
+    "entry_status_audit",
     "sweep_timestamp",
     "decision_time",
     "feature_time_boundary",
@@ -774,9 +912,14 @@ def _rate(count: int, total: int) -> float:
 
 __all__ = [
     "LayerBReactionQualityResult",
+    "DESCRIPTOR_MISSING_DECISION_TIME_BUG",
+    "DESCRIPTOR_NO_ENTRY_REENTRY_NOT_REACHED",
+    "FUNNEL_MISSING_DECISION_TIME_BUG",
+    "FUNNEL_REENTRY_NOT_REACHED",
     "VALID_LAYER_A_STATES",
     "build_layer_b_reaction_quality",
     "build_descriptor_distribution",
+    "build_funnel_attrition",
     "build_future_data_audit",
     "build_null_report",
     "candidate_label_for_descriptor",

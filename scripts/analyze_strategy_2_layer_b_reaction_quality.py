@@ -41,8 +41,18 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "samples_loaded": result.summary["samples_loaded"],
         "eligible_valid_long_count": result.summary["eligible_valid_long_count"],
         "eligible_valid_short_count": result.summary["eligible_valid_short_count"],
+        "original_layer_a_valid_count": result.summary["original_layer_a_valid_count"],
+        "layer_b_measurable_count": result.summary["layer_b_measurable_count"],
+        "reentry_not_reached_count": result.summary["reentry_not_reached_count"],
+        "missing_decision_time_bug_count": result.summary["missing_decision_time_bug_count"],
+        "true_not_enough_data_count": result.summary["true_not_enough_data_count"],
+        "original_not_enough_data_count_before_reclassification": result.summary[
+            "original_not_enough_data_count_before_reclassification"
+        ],
         "excluded_states": result.summary["excluded_states"],
         "reaction_descriptor_distribution": result.summary["reaction_descriptor_distribution"],
+        "reaction_descriptor_distribution_all_layer_a_valid": result.summary["reaction_descriptor_distribution_all_layer_a_valid"],
+        "layer_b_funnel_distribution": result.summary["layer_b_funnel_distribution"],
         "layer_b_candidate_label_distribution": result.summary["layer_b_candidate_label_distribution"],
         "missing_data_count": result.summary["missing_data_count"],
         "future_data_diagnostic_only_count": result.summary["future_data_diagnostic_only_count"],

@@ -219,6 +219,65 @@ def test_write_outputs_creates_required_files(tmp_path: Path):
         assert Path(paths[key]).exists()
 
 
+def test_reentry_not_reached_is_not_counted_as_not_enough_data(tmp_path: Path):
+    input_path = tmp_path / "layer_b_reaction_features_per_sample.csv"
+    pd.DataFrame(
+        [
+            {
+                "sample_id": "XAUUSD_20260101000000+0000_previous_h1_containing_LONG",
+                "h1_context_id": "XAUUSD_20260101000000+0000",
+                "direction_candidate": "LONG",
+                "layer_a_state": "VALID_LONG",
+                "layer_a_valid": True,
+                "layer_b_eligible": False,
+                "layer_b_measurable": False,
+                "layer_b_funnel_state": "REENTRY_NOT_REACHED",
+                "reaction_descriptor": "NO_ENTRY_REENTRY_NOT_REACHED",
+                "layer_b_candidate_label": "UNKNOWN_REACTION_CANDIDATE",
+                "sweep_timestamp": "2026-01-01T00:00:00+00:00",
+                "decision_time": "",
+                "data_window_start": "2026-01-01T00:00:00+00:00",
+                "data_window_end": "",
+            },
+            {
+                "sample_id": "XAUUSD_20260101010000+0000_previous_h1_containing_LONG",
+                "h1_context_id": "XAUUSD_20260101010000+0000",
+                "direction_candidate": "LONG",
+                "layer_a_state": "VALID_LONG",
+                "layer_a_valid": True,
+                "layer_b_eligible": True,
+                "layer_b_measurable": True,
+                "layer_b_funnel_state": "MEASURABLE_REACTION_WINDOW",
+                "reaction_descriptor": "FAST_REENTRY",
+                "layer_b_candidate_label": "STRONG_REACTION_CANDIDATE",
+                "sweep_timestamp": "2026-01-01T01:00:00+00:00",
+                "decision_time": "2026-01-01T01:02:00+00:00",
+                "data_window_start": "2026-01-01T01:00:00+00:00",
+                "data_window_end": "2026-01-01T01:02:00+00:00",
+            },
+        ]
+    ).to_csv(input_path, index=False)
+    state_split = tmp_path / "state_split_per_sample.csv"
+    pd.DataFrame({"sample_id": ["placeholder"]}).to_csv(state_split, index=False)
+    data_dir = tmp_path / "data"
+    symbol_dir = data_dir / "XAUUSD"
+    symbol_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            ["2026.01.01 00:00", 100, 101, 99, 100, 1, 0],
+            ["2026.01.01 01:00", 100, 101, 99, 100, 1, 0],
+            ["2026.01.01 01:01", 100, 101, 99, 100, 1, 0],
+            ["2026.01.01 01:02", 100, 101, 99, 100, 1, 0],
+        ]
+    ).to_csv(symbol_dir / "M1.csv", index=False, header=False)
+    result = build_not_enough_data_audit(input_path, state_split_path=state_split, data_dir=data_dir)
+    assert result.summary["original_layer_a_valid_samples"] == 2
+    assert result.summary["layer_b_measurable_samples"] == 1
+    assert result.summary["reentry_not_reached_count"] == 1
+    assert result.summary["not_enough_data_count"] == 0
+    assert result.summary["critical_conclusion"] == "NOT_ENOUGH_DATA_RECLASSIFIED_AS_REENTRY_NOT_REACHED"
+
+
 def test_no_forbidden_imports_no_data_writes_no_manual_pack_or_metrics():
     paths = [
         Path("dazro_trade/analytics/strategy_2_layer_b_not_enough_data_audit.py"),

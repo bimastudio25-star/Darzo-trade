@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 
 from dazro_trade.analytics.strategy_2_layer_b_reaction_quality import (
+    DESCRIPTOR_NO_ENTRY_REENTRY_NOT_REACHED,
+    FUNNEL_REENTRY_NOT_REACHED,
     VALID_LAYER_A_STATES,
     build_layer_b_reaction_quality,
     build_future_data_audit,
@@ -54,6 +56,7 @@ def _mechanical_row(
         "entry_timestamp": reentry or "",
         "h1_liquidity_level": 100.0,
         "range_reentry_reached": bool(reentry),
+        "entry_status": "ENTRY_TRIGGERED_MAE_AND_RANGE_REENTRY" if reentry else "NO_ENTRY_NO_RANGE_REENTRY",
     }
 
 
@@ -114,6 +117,27 @@ def test_excluded_and_mae_not_reached_states_are_not_processed(tmp_path: Path):
     assert set(excluded["layer_a_state"]) == {"INVALIDATED_LONG", "MAE_NOT_REACHED"}
     assert result.summary["mae_not_reached_count"] == 1
     assert excluded["reaction_descriptor"].eq("UNKNOWN").all()
+
+
+def test_valid_without_entry_or_reentry_is_reentry_not_reached_not_missing_data(tmp_path: Path):
+    state_path, mechanical_path, data_dir = _write_fixture(tmp_path)
+    no_reentry = "XAUUSD_20260101040000+0000_previous_h1_containing_LONG"
+    state_frame = pd.read_csv(state_path)
+    state_frame = pd.concat([state_frame, pd.DataFrame([_state_row(no_reentry, state="VALID_LONG", direction="LONG")])], ignore_index=True)
+    state_frame.to_csv(state_path, index=False)
+    mechanical = pd.read_csv(mechanical_path)
+    mechanical = pd.concat([mechanical, pd.DataFrame([_mechanical_row(no_reentry, direction="LONG", sweep="2026-01-01T04:00:00+00:00", reentry=None)])], ignore_index=True)
+    mechanical.to_csv(mechanical_path, index=False)
+    result = build_layer_b_reaction_quality(state_path, data_dir=data_dir, mechanical_path=mechanical_path)
+    row = result.per_sample[result.per_sample["sample_id"].eq(no_reentry)].iloc[0]
+    assert bool(row["layer_a_valid"]) is True
+    assert bool(row["layer_b_eligible"]) is False
+    assert bool(row["layer_b_measurable"]) is False
+    assert row["layer_b_funnel_state"] == FUNNEL_REENTRY_NOT_REACHED
+    assert row["reaction_descriptor"] == DESCRIPTOR_NO_ENTRY_REENTRY_NOT_REACHED
+    assert bool(row["missing_required_data"]) is False
+    assert result.summary["reentry_not_reached_count"] == 1
+    assert result.summary["true_not_enough_data_count"] == 0
 
 
 def test_reaction_descriptors_are_candidate_descriptive_only(tmp_path: Path):
@@ -189,7 +213,7 @@ def test_write_outputs_creates_required_files(tmp_path: Path):
     state_path, mechanical_path, data_dir = _write_fixture(tmp_path)
     result = build_layer_b_reaction_quality(state_path, data_dir=data_dir, mechanical_path=mechanical_path)
     paths = write_layer_b_outputs(result, tmp_path / "output", docs_path=tmp_path / "doc.md")
-    for key in ["per_sample", "descriptor_distribution", "null_report", "future_data_audit", "summary", "report", "docs"]:
+    for key in ["per_sample", "descriptor_distribution", "funnel_attrition", "null_report", "future_data_audit", "summary", "report", "docs"]:
         assert Path(paths[key]).exists()
 
 
