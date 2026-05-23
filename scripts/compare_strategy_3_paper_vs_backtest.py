@@ -80,6 +80,9 @@ class PaperVsBacktestConfig:
     price_tolerance: float
     dry_run: bool
     allow_data_context_mismatch: bool = False
+    require_data_context: bool = False
+    exclude_legacy_without_context: bool = False
+    clean_context_only: bool = False
     h4_repair_report_path: Path = Path("backtests/reports/strategy_3_h4_safe_repair/h4_repair_report.json")
     h4_post_repair_diagnostic_path: Path = Path(
         "backtests/reports/strategy_3_h4_data_source_diagnostic_post_repair/h4_data_source_diagnostic.json"
@@ -102,6 +105,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--price-tolerance", type=float, default=0.01)
     parser.add_argument("--dry-run", action="store_true", default=True)
     parser.add_argument("--allow-data-context-mismatch", action="store_true", default=False)
+    parser.add_argument("--require-data-context", action="store_true", default=False)
+    parser.add_argument("--exclude-legacy-without-context", action="store_true", default=False)
+    parser.add_argument("--clean-context-only", action="store_true", default=False)
     parser.add_argument("--signal-pre-buffer-minutes", type=int, default=60)
     parser.add_argument("--post-signal-buffer-minutes", type=int, default=5)
     parser.add_argument("--data-warmup-days", type=int, default=1)
@@ -132,6 +138,111 @@ def read_paper_signals(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
         rows = [dict(row) for row in reader]
     missing = [field for field in REQUIRED_FIELDS if field not in fieldnames]
     return rows, missing
+
+
+def _has_data_context_hash(row: dict[str, Any]) -> bool:
+    return bool(str(row.get("data_context_hash") or "").strip())
+
+
+def segment_paper_rows(rows: list[dict[str, Any]], cfg: PaperVsBacktestConfig) -> dict[str, Any]:
+    legacy = [row for row in rows if not _has_data_context_hash(row)]
+    context_tagged = [row for row in rows if _has_data_context_hash(row)]
+    selected = context_tagged if (cfg.clean_context_only or cfg.exclude_legacy_without_context) else list(rows)
+    context_hash_counts: dict[str, int] = {}
+    for row in context_tagged:
+        value = str(row.get("data_context_hash") or "").strip()
+        context_hash_counts[value] = context_hash_counts.get(value, 0) + 1
+    clean_accepted = [row for row in context_tagged if _bool(row.get("cooldown_accepted"))]
+    excluded_window = None
+    if legacy:
+        excluded_window = {
+            "earliest_legacy_signal_timestamp": min(_parse_ts(row["signal_timestamp"]) for row in legacy).isoformat(),
+            "latest_legacy_signal_timestamp": max(_parse_ts(row["signal_timestamp"]) for row in legacy).isoformat(),
+        }
+    return {
+        "total_paper_rows": len(rows),
+        "legacy_without_context_rows": len(legacy),
+        "context_tagged_rows": len(context_tagged),
+        "context_tagged_accepted": len(clean_accepted),
+        "context_tagged_blocked": len(context_tagged) - len(clean_accepted),
+        "unique_data_context_hashes": len(context_hash_counts),
+        "data_context_hash_counts": context_hash_counts,
+        "selected_data_context_hash": next(iter(context_hash_counts), None) if len(context_hash_counts) == 1 else None,
+        "legacy_rows": legacy,
+        "context_tagged_rows_data": context_tagged,
+        "selected_rows": selected,
+        "excluded_legacy_window": excluded_window,
+    }
+
+
+def clean_context_data_context_diff(
+    *,
+    paper_context: dict[str, Any] | None,
+    backtest_context: dict[str, Any],
+    segmentation: dict[str, Any],
+    cfg: PaperVsBacktestConfig,
+) -> dict[str, Any]:
+    base = diff_contexts(paper_context, backtest_context)
+    row_hashes = sorted(segmentation.get("data_context_hash_counts", {}).keys())
+    backtest_hash = backtest_context.get("combined_data_context_hash")
+    selected_hash = row_hashes[0] if len(row_hashes) == 1 else None
+    enforce_row_context = bool(cfg.clean_context_only or cfg.require_data_context or cfg.exclude_legacy_without_context)
+    if not enforce_row_context:
+        base_flags = list(base.get("verdict_flags", []))
+        if cfg.allow_data_context_mismatch and not base.get("data_context_match"):
+            base_flags.append("DATA_CONTEXT_MISMATCH_ALLOWED_DIAGNOSTIC")
+        return {
+            **base,
+            "verdict_flags": list(dict.fromkeys(base_flags)),
+            "row_data_context_hashes": row_hashes,
+            "row_data_context_hash_count": len(row_hashes),
+            "selected_data_context_hash": selected_hash,
+            "row_hash_matches_backtest": bool(selected_hash and selected_hash == backtest_hash),
+            "scanner_or_sidecar_context_matches_backtest": bool(base.get("data_context_match")),
+            "scanner_or_sidecar_data_context_hash": base.get("paper_data_context_hash"),
+        }
+    verdict: list[str] = []
+    data_context_missing = bool(base.get("data_context_missing"))
+    base_context_matches = bool(base.get("data_context_match"))
+    if data_context_missing:
+        verdict.extend(["DATA_CONTEXT_MISSING", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    elif base_context_matches:
+        verdict.append("SCANNER_SIDECAR_DATA_CONTEXT_MATCH")
+    else:
+        verdict.extend([flag for flag in base.get("verdict_flags", []) if flag != "DATA_CONTEXT_MATCH"])
+
+    if cfg.require_data_context and not segmentation.get("context_tagged_rows"):
+        data_context_missing = True
+        verdict.extend(["NO_CLEAN_CONTEXT_ROWS", "DATA_CONTEXT_MISSING", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    if cfg.exclude_legacy_without_context and segmentation.get("legacy_without_context_rows"):
+        verdict.append("LEGACY_ROWS_EXCLUDED")
+    if cfg.clean_context_only:
+        verdict.append("CLEAN_CONTEXT_ONLY")
+    if len(row_hashes) > 1:
+        verdict.extend(["MULTIPLE_DATA_CONTEXTS_REQUIRE_SEGMENTATION", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    row_hash_matches_backtest = bool(selected_hash and selected_hash == backtest_hash)
+    strict_match = bool(base_context_matches and row_hash_matches_backtest and len(row_hashes) == 1)
+    if not strict_match and row_hashes:
+        verdict.extend(["DATA_CONTEXT_MISMATCH", "COMPARISON_NOT_CLEAN_VALIDATION"])
+    if cfg.allow_data_context_mismatch and not strict_match:
+        verdict.append("DATA_CONTEXT_MISMATCH_ALLOWED_DIAGNOSTIC")
+    if strict_match:
+        verdict.extend(["DATA_CONTEXT_MATCH", "PAPER_BACKTEST_CONTEXT_MATCH"])
+
+    return {
+        **base,
+        "data_context_match": strict_match,
+        "data_context_missing": data_context_missing,
+        "row_data_context_hashes": row_hashes,
+        "row_data_context_hash_count": len(row_hashes),
+        "selected_data_context_hash": selected_hash,
+        "row_hash_matches_backtest": row_hash_matches_backtest,
+        "scanner_or_sidecar_context_matches_backtest": base_context_matches,
+        "paper_data_context_hash": selected_hash or base.get("paper_data_context_hash"),
+        "scanner_or_sidecar_data_context_hash": base.get("paper_data_context_hash"),
+        "backtest_data_context_hash": backtest_hash,
+        "verdict_flags": list(dict.fromkeys(verdict)),
+    }
 
 
 def load_paper_data_context(scanner_summary_path: Path, paper_signals_path: Path) -> dict[str, Any] | None:
@@ -347,6 +458,7 @@ def verdict_flags(summary: dict[str, Any]) -> list[str]:
     data_context = summary.get("data_context", {})
     data_context_match = bool(data_context.get("data_context_match"))
     data_context_missing = bool(data_context.get("data_context_missing"))
+    clean_context_only = bool(summary.get("clean_context_only"))
 
     if not h4_clean:
         flags.append("HTF_CONTEXT_CAVEAT_REQUIRES_DATA_DIAGNOSTIC")
@@ -358,16 +470,26 @@ def verdict_flags(summary: dict[str, Any]) -> list[str]:
     else:
         flags.append("PAPER_SIGNALS_NOT_CLEAN_FOR_VALIDATION")
 
+    if clean_context_only and (data_context_missing or not data_context_match):
+        if accepted_rate is not None and all_rate is not None and accepted_rate >= 0.95 and all_rate >= 0.95 and not critical:
+            flags.append("CLEAN_CONTEXT_SIGNAL_MATCH_OK_DIAGNOSTIC")
+        flags.extend(["NO_LIVE_DEPLOYMENT_DECISION", "STRATEGY_3_REMAINS_PAPER_ONLY"])
+        return list(dict.fromkeys(flags))
+
     if accepted_rate is not None and accepted_rate >= 0.95 and not critical and h4_clean and paper_clean and data_context_match:
+        if clean_context_only:
+            flags.append("CLEAN_CONTEXT_ACCEPTED_MATCH_OK")
         flags.append("SHADOW_BACKTEST_ACCEPTED_MATCH_OK")
-    elif accepted_rate is not None and accepted_rate >= 0.80:
+    elif accepted_rate is not None and accepted_rate >= 0.80 and (data_context_match or not clean_context_only):
+        if clean_context_only:
+            flags.append("CLEAN_CONTEXT_MINOR_MISMATCHES")
         flags.append("SHADOW_BACKTEST_MINOR_MISMATCHES")
     else:
         flags.append("SHADOW_BACKTEST_RUNTIME_MISMATCH")
 
-    if all_rate is not None and all_rate >= 0.95:
+    if all_rate is not None and all_rate >= 0.95 and (data_context_match or not clean_context_only):
         flags.append("SHADOW_BACKTEST_ALL_DETECTED_MATCH_OK")
-    elif all_rate is not None and all_rate >= 0.80 and "SHADOW_BACKTEST_MINOR_MISMATCHES" not in flags:
+    elif all_rate is not None and all_rate >= 0.80 and "SHADOW_BACKTEST_MINOR_MISMATCHES" not in flags and (data_context_match or not clean_context_only):
         flags.append("SHADOW_BACKTEST_MINOR_MISMATCHES")
 
     flags.extend(["NO_LIVE_DEPLOYMENT_DECISION", "STRATEGY_3_REMAINS_PAPER_ONLY"])
@@ -452,6 +574,70 @@ def write_report(output_dir: Path, summary: dict[str, Any]) -> None:
         "",
     ]
     (output_dir / "strategy_3_shadow_vs_backtest_comparison_post_fix.md").write_text("\n".join(lines), encoding="utf-8")
+    if summary.get("clean_context_only"):
+        clean_lines = [
+            "# Strategy 3 Clean-Context Shadow vs Backtest Comparison",
+            "",
+            "This report excludes legacy paper rows without `data_context_hash`. It validates runtime/backtest consistency only, not profitability or live readiness.",
+            "",
+            "## Context",
+            "",
+            "- H4 repair completed and market-session HTF freshness checks are active.",
+            "- Legacy paper rows without data context are excluded from clean validation.",
+            "- Strategy 3 remains paper-only.",
+            "",
+            "## Safety",
+            "",
+            "- no live trading",
+            "- no Telegram",
+            "- no orders",
+            "- no broker execution",
+            "- no Strategy 3, VWAP, sigma, or cooldown changes",
+            "",
+            "## Segmentation",
+            "",
+            f"- total_paper_rows: `{summary.get('total_paper_rows')}`",
+            f"- legacy_without_context_rows: `{summary.get('legacy_without_context_rows')}`",
+            f"- context_tagged_rows: `{summary.get('context_tagged_rows')}`",
+            f"- context_tagged_accepted: `{summary.get('context_tagged_accepted')}`",
+            f"- context_tagged_blocked: `{summary.get('context_tagged_blocked')}`",
+            f"- unique_data_context_hashes: `{summary.get('unique_data_context_hashes')}`",
+            "",
+            "## Data Context Integrity",
+            "",
+            f"- selected_data_context_hash: `{summary['data_context'].get('selected_data_context_hash')}`",
+            f"- backtest_data_context_hash: `{summary['data_context'].get('backtest_data_context_hash')}`",
+            f"- data_context_match: `{summary['data_context'].get('data_context_match')}`",
+            f"- scanner_or_sidecar_context_matches_backtest: `{summary['data_context'].get('scanner_or_sidecar_context_matches_backtest')}`",
+            f"- row_hash_matches_backtest: `{summary['data_context'].get('row_hash_matches_backtest')}`",
+            f"- data_context_verdict_flags: `{summary['data_context'].get('data_context_verdict_flags')}`",
+            "",
+            "## Window",
+            "",
+            f"- clean earliest: `{summary['comparison_window']['earliest_paper_signal_timestamp'] if summary.get('comparison_window') else None}`",
+            f"- clean latest: `{summary['comparison_window']['latest_paper_signal_timestamp'] if summary.get('comparison_window') else None}`",
+            f"- backtest scan start: `{summary['comparison_window']['backtest_signal_scan_start'] if summary.get('comparison_window') else None}`",
+            f"- backtest scan end: `{summary['comparison_window']['backtest_signal_scan_end'] if summary.get('comparison_window') else None}`",
+            "",
+            "## Results",
+            "",
+            f"- paper clean detected/accepted/blocked: `{summary.get('paper_detected_count')}/{summary.get('paper_accepted_count')}/{summary.get('paper_blocked_count')}`",
+            f"- backtest detected/accepted/blocked: `{summary.get('backtest_detected_count')}/{summary.get('backtest_accepted_count')}/{summary.get('backtest_blocked_count')}`",
+            f"- all-detected match rate: `{summary.get('match_rate_all_detected')}`",
+            f"- accepted-only match rate: `{summary.get('match_rate_accepted_only')}`",
+            f"- mismatch summary: `{summary.get('mismatch_summary')}`",
+            f"- verdict_flags: `{flags}`",
+            "",
+            "## Interpretation",
+            "",
+            "If the accepted-only rate is at least 95% and the data context matches, this is consistency evidence only. If hashes are missing, mismatched, or segmented, the report remains diagnostic until the comparison policy is tightened for those contexts.",
+            "",
+            "## Next Recommended Branch",
+            "",
+            f"`{summary.get('next_recommended_branch')}`",
+            "",
+        ]
+        (output_dir / "strategy_3_clean_context_shadow_vs_backtest_comparison.md").write_text("\n".join(clean_lines), encoding="utf-8")
 
 
 def write_outputs(output_dir: Path, summary: dict[str, Any], all_detected: dict[str, Any], accepted_only: dict[str, Any], missing_fields: dict[str, Any]) -> None:
@@ -479,6 +665,15 @@ def write_outputs(output_dir: Path, summary: dict[str, Any], all_detected: dict[
     write_csv(output_dir / "comparison_all_detected.csv", all_rows, MATCH_OUTPUT_FIELDS)
     write_csv(output_dir / "comparison_accepted_only.csv", accepted_rows, MATCH_OUTPUT_FIELDS)
     write_csv(output_dir / "mismatch_details.csv", all_rows + accepted_rows, MATCH_OUTPUT_FIELDS)
+    if summary.get("clean_context_only"):
+        (output_dir / "clean_context_comparison_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        (output_dir / "clean_context_data_context_diff.json").write_text(json.dumps(summary["data_context"], indent=2, sort_keys=True), encoding="utf-8")
+        write_csv(output_dir / "clean_context_comparison_all_detected.csv", all_rows, MATCH_OUTPUT_FIELDS)
+        write_csv(output_dir / "clean_context_comparison_accepted_only.csv", accepted_rows, MATCH_OUTPUT_FIELDS)
+        write_csv(output_dir / "clean_context_mismatch_details.csv", all_rows + accepted_rows, MATCH_OUTPUT_FIELDS)
+        excluded = summary.get("excluded_legacy_rows", [])
+        excluded_fields = sorted({key for row in excluded for key in row.keys()})
+        write_csv(output_dir / "clean_context_excluded_legacy_rows.csv", excluded, excluded_fields or ["signal_timestamp"])
     write_report(output_dir, summary)
 
 
@@ -486,30 +681,33 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
     started_perf = perf_counter()
     run_started_at = _utc_now()
     paper_rows, missing_schema = read_paper_signals(cfg.paper_signals_path)
+    segmentation = segment_paper_rows(paper_rows, cfg)
+    comparison_paper_rows = list(segmentation["selected_rows"])
     scanner_summary = read_json(cfg.scanner_summary_path)
     pipeline_summary = read_json(cfg.pipeline_summary_path)
     repair_report = read_json(cfg.h4_repair_report_path)
     post_diag = read_json(cfg.h4_post_repair_diagnostic_path)
     paper_data_context = load_paper_data_context(cfg.scanner_summary_path, cfg.paper_signals_path)
     backtest_data_context = compute_data_context(symbol=cfg.symbol, data_dir=cfg.data_dir, timeframes=DEFAULT_TIMEFRAMES)
-    data_context_diff = diff_contexts(paper_data_context, backtest_data_context)
-    if cfg.allow_data_context_mismatch and not data_context_diff["data_context_match"]:
-        data_context_diff["verdict_flags"] = list(
-            dict.fromkeys([*data_context_diff["verdict_flags"], "DATA_CONTEXT_MISMATCH_ALLOWED_DIAGNOSTIC"])
-        )
-    window = derive_comparison_window(paper_rows, cfg)
+    data_context_diff = clean_context_data_context_diff(
+        paper_context=paper_data_context,
+        backtest_context=backtest_data_context,
+        segmentation=segmentation,
+        cfg=cfg,
+    )
+    window = derive_comparison_window(comparison_paper_rows, cfg)
     backtest_context_rows: list[dict[str, Any]] = []
     backtest_rows: list[dict[str, Any]] = []
-    if window and not missing_schema:
+    if window and not missing_schema and comparison_paper_rows:
         backtest_context_rows, backtest_rows = build_backtest_rows(cfg, window)
 
     all_detected = compare_signals(
-        paper_rows,
+        comparison_paper_rows,
         backtest_rows,
         price_tolerance_usd=cfg.price_tolerance,
         timestamp_tolerance_seconds=cfg.timestamp_tolerance_seconds,
     )
-    accepted_paper = [row for row in paper_rows if _bool(row.get("cooldown_accepted"))]
+    accepted_paper = [row for row in comparison_paper_rows if _bool(row.get("cooldown_accepted"))]
     accepted_backtest = [row for row in backtest_rows if _bool(row.get("cooldown_accepted"))]
     accepted_only = compare_signals(
         accepted_paper,
@@ -533,6 +731,9 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         "runtime_seconds": round(perf_counter() - started_perf, 4),
         "dry_run": cfg.dry_run,
         "allow_data_context_mismatch": cfg.allow_data_context_mismatch,
+        "require_data_context": cfg.require_data_context,
+        "exclude_legacy_without_context": cfg.exclude_legacy_without_context,
+        "clean_context_only": cfg.clean_context_only,
         "symbol": cfg.symbol,
         "strategy": STRATEGY_NAME,
         "data_dir": cfg.data_dir,
@@ -548,10 +749,20 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         },
         "comparison_window": window,
         "backtest_context_detected_count": len(backtest_context_rows),
-        "paper_signals_count": len(paper_rows),
-        "paper_detected_count": len(paper_rows),
+        "total_paper_rows": segmentation["total_paper_rows"],
+        "legacy_without_context_rows": segmentation["legacy_without_context_rows"],
+        "context_tagged_rows": segmentation["context_tagged_rows"],
+        "context_tagged_accepted": segmentation["context_tagged_accepted"],
+        "context_tagged_blocked": segmentation["context_tagged_blocked"],
+        "unique_data_context_hashes": segmentation["unique_data_context_hashes"],
+        "selected_data_context_hash": segmentation["selected_data_context_hash"],
+        "data_context_hash_counts": segmentation["data_context_hash_counts"],
+        "excluded_legacy_window": segmentation["excluded_legacy_window"],
+        "excluded_legacy_rows": segmentation["legacy_rows"],
+        "paper_signals_count": len(comparison_paper_rows),
+        "paper_detected_count": len(comparison_paper_rows),
         "paper_accepted_count": len(accepted_paper),
-        "paper_blocked_count": len(paper_rows) - len(accepted_paper),
+        "paper_blocked_count": len(comparison_paper_rows) - len(accepted_paper),
         "backtest_detected_count": len(backtest_rows),
         "backtest_accepted_count": len(accepted_backtest),
         "backtest_blocked_count": len(backtest_rows) - len(accepted_backtest),
@@ -603,6 +814,14 @@ def run_comparison(cfg: PaperVsBacktestConfig) -> dict[str, Any]:
         "safety": dict(SAFETY),
     }
     summary["verdict_flags"] = verdict_flags(summary)
+    if "CLEAN_CONTEXT_ACCEPTED_MATCH_OK" in summary["verdict_flags"]:
+        summary["next_recommended_branch"] = "feat/strategy-3-vwap-trend-regime-diagnostics"
+    elif "COMPARISON_NOT_CLEAN_VALIDATION" in summary["verdict_flags"] and summary["unique_data_context_hashes"] > 1:
+        summary["next_recommended_branch"] = "fix/strategy-3-data-context-segmentation"
+    elif summary.get("match_rate_accepted_only") is not None and summary["match_rate_accepted_only"] < 0.95:
+        summary["next_recommended_branch"] = "feat/strategy-3-clean-context-runtime-diagnostics"
+    else:
+        summary["next_recommended_branch"] = "feat/strategy-3-clean-context-runtime-diagnostics"
     write_outputs(cfg.output_dir, summary, all_detected, accepted_only, missing_fields)
     return summary
 
@@ -621,6 +840,9 @@ def main(argv: list[str] | None = None) -> int:
         price_tolerance=float(args.price_tolerance),
         dry_run=bool(args.dry_run),
         allow_data_context_mismatch=bool(args.allow_data_context_mismatch),
+        require_data_context=bool(args.require_data_context),
+        exclude_legacy_without_context=bool(args.exclude_legacy_without_context),
+        clean_context_only=bool(args.clean_context_only),
         h4_repair_report_path=Path(args.h4_repair_report_path),
         h4_post_repair_diagnostic_path=Path(args.h4_post_repair_diagnostic_path),
         signal_pre_buffer_minutes=int(args.signal_pre_buffer_minutes),
