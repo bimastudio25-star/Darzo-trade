@@ -1,0 +1,70 @@
+{
+  "plan_only": true,
+  "samples_collected": false,
+  "ohlc_read": false,
+  "h3_h4_proxy_computation_run": false,
+  "proxy_diagnostic_executed": false,
+  "replay_run": false,
+  "backtest_run": false,
+  "matched_control_run": false,
+  "phase_4_unlocked": false,
+  "runtime_logic_modified": false,
+  "strategy_2_modified": false,
+  "strategy_3_modified": false,
+  "data_xauusd_csv_modified": false,
+  "live_trading_enabled": false,
+  "orders_enabled": false,
+  "telegram_enabled": false,
+  "broker_execution_enabled": false,
+  "order_send_used": false,
+  "profitability_claim_made": false,
+  "deployability_claim_made": false,
+  "base_commit_verified": "59b3c8e",
+  "source_availability_audit_decision": "INSUFFICIENT_CONFIDENCE_3_SOURCE_AVAILABILITY",
+  "minimum_total_confidence_3_existing_metadata_samples": 60,
+  "existing_confidence_3_samples_counted_toward_target": 21,
+  "additional_forward_confidence_3_samples_required": 39,
+  "target_lowered": false,
+  "selected_pipeline_relationship": "HYBRID",
+  "manual_evidence_schema_relationship": "Use RAPID_CAPTURE / FULL_REVIEW for capture workflow, but require FULL_REVIEW plus added forward collection metadata before primary eligibility.",
+  "forward_collection_primary_requirement": {
+    "direction_source": "EXISTING_METADATA",
+    "direction_confidence": 3,
+    "decision_timestamp": "DIRECT_METADATA_ONLY",
+    "direction_allowed_values": [
+      "LONG",
+      "SHORT"
+    ],
+    "post_entry_data_used_for_inclusion": false,
+    "h3_h4_state_known_at_collection": false,
+    "outcome_used_for_inclusion": false
+  },
+  "collection_rate_policy": {
+    "actual_rate_recorded_per_batch": true,
+    "abandon_threshold_weeks_without_minimum_progress": 12,
+    "minimum_progress_definition": "At least 1 new eligible confidence-3 sample in the period, unless manually reviewed.",
+    "five_per_week_approx_weeks_for_39": 8,
+    "one_per_week_approx_weeks_for_39": 39
+  },
+  "future_decision_outcomes": [
+    "FORWARD_COLLECTION_READY_FOR_PROXY_EXECUTION",
+    "FORWARD_COLLECTION_IN_PROGRESS",
+    "FORWARD_COLLECTION_SCHEMA_FAILURE",
+    "FORWARD_COLLECTION_BIAS_FAILURE",
+    "PAUSE_H3_H4_PATH"
+  ],
+  "verdict_flags": [
+    "CONFIDENCE_3_FORWARD_COLLECTION_PLAN_CREATED",
+    "PLAN_ONLY",
+    "NO_OHLC_READ",
+    "NO_H3_H4_PROXY_COMPUTATION",
+    "NO_REPLAY_BACKTEST_OR_MATCHED_CONTROL",
+    "PHASE_4_REMAINS_BLOCKED",
+    "EXISTING_21_COUNT_TOWARD_60",
+    "ADDITIONAL_39_CONFIDENCE_3_REQUIRED",
+    "DIRECTION_SOURCE_EXISTING_METADATA_REQUIRED",
+    "FORWARD_COLLECTION_PRE_DECISION_ONLY",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ]
+}

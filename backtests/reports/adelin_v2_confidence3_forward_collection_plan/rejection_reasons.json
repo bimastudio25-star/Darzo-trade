@@ -1,0 +1,121 @@
+{
+  "schema_name": "adelin_v2_confidence3_forward_collection_rejection_reasons",
+  "schema_version": "1.0",
+  "purpose": "Standard rejection and secondary-classification reasons for forward/new confidence-3 sample collection.",
+  "primary_rejection_reasons": [
+    {
+      "code": "DIRECTION_SOURCE_FIELD_ABSENT",
+      "description": "direction_source is missing. Missing direction_source must not be interpreted as EXISTING_METADATA."
+    },
+    {
+      "code": "DIRECTION_CONFIDENCE_FIELD_ABSENT",
+      "description": "direction_confidence is missing."
+    },
+    {
+      "code": "NON_PRIMARY_DIRECTION_SOURCE",
+      "description": "direction_source is present but is not EXISTING_METADATA."
+    },
+    {
+      "code": "DIRECTION_CONFIDENCE_BELOW_3",
+      "description": "direction_confidence is present but lower than 3."
+    },
+    {
+      "code": "INFERRED_OR_RECOVERED_DIRECTION",
+      "description": "Direction was inferred or recovered rather than explicit existing metadata."
+    },
+    {
+      "code": "DIRECTION_MISSING",
+      "description": "Direction is missing."
+    },
+    {
+      "code": "DIRECTION_UNKNOWN",
+      "description": "Direction is UNKNOWN rather than LONG or SHORT."
+    },
+    {
+      "code": "DECISION_TIMESTAMP_MISSING",
+      "description": "Direct decision_timestamp metadata is missing."
+    },
+    {
+      "code": "DECISION_TIMESTAMP_AMBIGUOUS",
+      "description": "decision_timestamp is present but ambiguous."
+    },
+    {
+      "code": "DECISION_TIMESTAMP_RECONSTRUCTED_NOT_PRIMARY_ELIGIBLE",
+      "description": "Timestamp was reconstructed; reconstructed timestamps are not primary-eligible under this forward plan."
+    },
+    {
+      "code": "ID_RESOLUTION_AMBIGUOUS",
+      "description": "Stable ID cannot be resolved without risk of double-counting."
+    },
+    {
+      "code": "SAMPLE_ID_MISSING",
+      "description": "No sample_id or approved stable unique identifier is present."
+    },
+    {
+      "code": "DUPLICATE_SAMPLE",
+      "description": "Sample duplicates an existing analyzed or already collected sample."
+    },
+    {
+      "code": "SOURCE_LINEAGE_MISSING",
+      "description": "Source artifact lineage is missing."
+    },
+    {
+      "code": "SOURCE_LINEAGE_AMBIGUOUS",
+      "description": "Source lineage is ambiguous enough that the row must fail closed."
+    },
+    {
+      "code": "REFERENCE_OR_ENTRY_METADATA_MISSING",
+      "description": "Reference/entry metadata needed for later pre-entry H3/H4 computation is missing."
+    },
+    {
+      "code": "RAPID_CAPTURE_NOT_PROMOTED_TO_FULL_REVIEW",
+      "description": "Manual evidence row remains RAPID_CAPTURE and has not been promoted to FULL_REVIEW with forward collection metadata."
+    },
+    {
+      "code": "POST_ENTRY_DATA_USED_FOR_INCLUSION",
+      "description": "Post-entry data was used to include the sample."
+    },
+    {
+      "code": "H3_H4_STATE_USED_FOR_INCLUSION",
+      "description": "H3/H4 proxy state was used to include or balance the sample."
+    },
+    {
+      "code": "OUTCOME_USED_FOR_INCLUSION",
+      "description": "Outcome, GOOD/FAST group, or result label was used for inclusion."
+    },
+    {
+      "code": "TP_SL_PNL_R_MFE_MAE_USED_FOR_INCLUSION",
+      "description": "TP/SL, PnL, R multiple, future MFE/MAE, or future liquidity behavior was used for inclusion."
+    },
+    {
+      "code": "VISUAL_HINDSIGHT_SELECTION",
+      "description": "Sample was selected because it looked good/bad or worked after the fact."
+    },
+    {
+      "code": "SCHEMA_VERSION_MISSING_OR_MISMATCHED",
+      "description": "Eligibility schema version or commit is missing or does not match the batch rule."
+    }
+  ],
+  "secondary_only_reasons": [
+    {
+      "code": "PRE_DECISION_SWEEP_INFERENCE_CONFIDENCE_2",
+      "description": "May be logged as secondary/sensitivity only; cannot count as primary confidence-3 evidence."
+    },
+    {
+      "code": "NON_XAUUSD_SYMBOL",
+      "description": "Can be logged separately if useful, but this Adelin v2 confidence-3 target is XAUUSD primary evidence."
+    }
+  ],
+  "bias_failure_reasons": [
+    "POST_ENTRY_DATA_USED_FOR_INCLUSION",
+    "H3_H4_STATE_USED_FOR_INCLUSION",
+    "OUTCOME_USED_FOR_INCLUSION",
+    "TP_SL_PNL_R_MFE_MAE_USED_FOR_INCLUSION",
+    "VISUAL_HINDSIGHT_SELECTION"
+  ],
+  "fail_closed_reasons": [
+    "SOURCE_LINEAGE_AMBIGUOUS",
+    "DECISION_TIMESTAMP_AMBIGUOUS",
+    "ID_RESOLUTION_AMBIGUOUS"
+  ]
+}

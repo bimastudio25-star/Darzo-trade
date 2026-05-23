@@ -1,0 +1,306 @@
+{
+  "plan_name": "adelin_v2_confidence3_forward_collection_plan",
+  "plan_version": "1.0",
+  "plan_only": true,
+  "base_commit_verified": "59b3c8e",
+  "created_from_branch": "fix/adelin-v2-larger-confidence-stratified-source-availability-audit",
+  "intended_branch": "feat/adelin-v2-confidence3-forward-collection-plan",
+  "source_availability_context": {
+    "audit_commit": "59b3c8e",
+    "audit_decision": "INSUFFICIENT_CONFIDENCE_3_SOURCE_AVAILABILITY",
+    "artifacts_scanned": 13,
+    "rows_scanned": 2340,
+    "existing_analyzed_confidence_3_samples": 21,
+    "additional_available_confidence_3_samples": 0,
+    "total_confidence_3_if_included": 21,
+    "rejected_rows": 2256,
+    "direction_source_field_absent": 2183,
+    "non_primary_direction_source": 73
+  },
+  "objective": {
+    "minimum_total_confidence_3_existing_metadata_samples": 60,
+    "existing_confidence_3_samples_counted_toward_target": 21,
+    "additional_forward_confidence_3_samples_required": 39,
+    "target_must_not_be_lowered": true,
+    "purpose": "Pre-register forward/new collection rules for enough confidence-3 / EXISTING_METADATA Adelin v2 samples to support a later larger H3/H4 proxy diagnostic plan review.",
+    "not_purpose": [
+      "H3/H4 proxy execution",
+      "OHLC analysis",
+      "replay",
+      "backtest",
+      "matched-control",
+      "Phase 4",
+      "runtime scoring",
+      "live trading",
+      "profitability validation"
+    ]
+  },
+  "forward_collection_definition": {
+    "eligible_only_if_recorded_after_plan_approval": true,
+    "basis": "pre-decision metadata only",
+    "primary_eligibility": {
+      "direction_source": "EXISTING_METADATA",
+      "direction_confidence": 3,
+      "direction_allowed_values": [
+        "LONG",
+        "SHORT"
+      ],
+      "decision_timestamp": "DIRECT_METADATA_REQUIRED",
+      "sample_id_or_stable_unique_identifier_required": true,
+      "source_artifact_lineage_required": true,
+      "reference_or_entry_metadata_required_for_later_h3_h4": true,
+      "collected_without_h3_h4_proxy_result": true,
+      "collected_without_outcome_result": true,
+      "post_entry_data_used_for_inclusion": false
+    },
+    "must_not_use_for_inclusion": [
+      "H3 state",
+      "H4 state",
+      "GOOD/FAST result",
+      "outcome group",
+      "TP hit",
+      "SL hit",
+      "PnL",
+      "R multiple",
+      "future MFE",
+      "future MAE",
+      "future liquidity behavior",
+      "post-entry candles",
+      "visual hindsight",
+      "whether the setup worked",
+      "manual attractiveness"
+    ]
+  },
+  "direction_source_policy": {
+    "direction_source_must_be_explicitly_present": true,
+    "primary_allowed": {
+      "direction_source": "EXISTING_METADATA",
+      "direction_confidence": 3
+    },
+    "not_primary": [
+      "PRE_DECISION_SWEEP_INFERENCE",
+      "any inferred or recovered direction",
+      "missing direction_source",
+      "missing direction_confidence",
+      "direction_confidence below 3"
+    ],
+    "missing_direction_source_rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT",
+    "missing_direction_confidence_rejection_reason": "DIRECTION_CONFIDENCE_FIELD_ABSENT",
+    "non_primary_direction_source_rejection_reason": "NON_PRIMARY_DIRECTION_SOURCE",
+    "confidence_below_3_rejection_reason": "DIRECTION_CONFIDENCE_BELOW_3",
+    "confidence_2_policy": "May be logged as secondary/sensitivity only; never primary evidence."
+  },
+  "timestamp_policy": {
+    "decision_timestamp_required": true,
+    "direct_metadata_required_for_primary_eligibility": true,
+    "reconstructed_timestamps_primary_eligible": false,
+    "infer_timestamps_from_ohlc": false,
+    "infer_timestamps_from_post_entry_outcomes": false,
+    "missing_timestamp_rejection_reason": "DECISION_TIMESTAMP_MISSING",
+    "ambiguous_timestamp_rejection_reason": "DECISION_TIMESTAMP_AMBIGUOUS"
+  },
+  "sample_id_policy": {
+    "stable_unique_identifier_required": true,
+    "preferred_authoritative_id_field": "sample_id",
+    "fallback_authoritative_id_fields": [
+      "candidate_id",
+      "source_artifact_row_id"
+    ],
+    "required_identity_fields": [
+      "sample_id",
+      "source_artifact",
+      "batch_id",
+      "collection_timestamp",
+      "decision_timestamp",
+      "direction",
+      "direction_source",
+      "direction_confidence"
+    ],
+    "duplicate_policy": "Reject or mark duplicate; duplicates do not count toward the 39 additional samples.",
+    "id_resolution_ambiguous_rejection_reason": "ID_RESOLUTION_AMBIGUOUS",
+    "duplicate_rejection_reason": "DUPLICATE_SAMPLE"
+  },
+  "collection_batches": {
+    "batching_required": true,
+    "required_batch_fields": [
+      "batch_id",
+      "collection_start_date",
+      "collection_end_date",
+      "artifact_path",
+      "collector_or_source",
+      "candidate_sample_count",
+      "eligible_confidence_3_sample_count",
+      "rejected_sample_count",
+      "rejection_reasons",
+      "rule_changed",
+      "expected_collection_rate_samples_per_week",
+      "actual_collection_rate_samples_per_week",
+      "cumulative_eligible_confidence_3_count",
+      "cumulative_remaining_to_target",
+      "weeks_without_minimum_progress"
+    ],
+    "rule_change_policy": "If collection rules change, start a new batch and document the change. Do not silently mix batches with different rules.",
+    "silent_batch_mixing_allowed": false
+  },
+  "collection_rate_policy": {
+    "expected_collection_rate_samples_per_week": "record_per_batch",
+    "actual_rate_recorded_per_batch": true,
+    "abandon_threshold_weeks_without_minimum_progress": 12,
+    "minimum_progress_definition": "At least 1 new eligible confidence-3 / EXISTING_METADATA sample in the period, unless manually reviewed.",
+    "feasibility_examples": [
+      {
+        "eligible_samples_per_week": 5,
+        "additional_samples_required": 39,
+        "approximate_weeks_required": 8
+      },
+      {
+        "eligible_samples_per_week": 1,
+        "additional_samples_required": 39,
+        "approximate_weeks_required": 39
+      }
+    ],
+    "no_meaningful_progress_action": "Future review must consider PAUSE_H3_H4_PATH or revise the collection strategy through a new pre-registered plan."
+  },
+  "allowed_selection_criteria": [
+    "sample belongs to Adelin v2 candidate/research workflow",
+    "sample has direct metadata required by schema",
+    "sample was captured according to forward collection rules",
+    "direction was explicitly known at decision time",
+    "no post-entry data used for inclusion"
+  ],
+  "forbidden_selection_criteria": [
+    "H3 state",
+    "H4 state",
+    "GOOD/FAST result",
+    "outcome group",
+    "TP hit",
+    "SL hit",
+    "PnL",
+    "R multiple",
+    "future MFE",
+    "future MAE",
+    "future liquidity behavior",
+    "post-entry candles",
+    "visual hindsight",
+    "whether the setup worked",
+    "only attractive examples",
+    "manual balancing of H3/H4 states",
+    "optimized sample selection"
+  ],
+  "future_collection_output_schema": {
+    "format": [
+      "CSV",
+      "JSON"
+    ],
+    "required_fields": [
+      "sample_id",
+      "batch_id",
+      "source_artifact",
+      "collection_timestamp",
+      "decision_timestamp",
+      "symbol",
+      "timeframe_context",
+      "direction",
+      "direction_source",
+      "direction_confidence",
+      "reference_price",
+      "entry_reference",
+      "source_lineage",
+      "collected_pre_decision_only",
+      "post_entry_data_used_for_inclusion",
+      "h3_h4_state_known_at_collection",
+      "outcome_used_for_inclusion",
+      "collection_pipeline_relationship",
+      "evidence_capture_mode",
+      "eligibility_schema_version",
+      "eligibility_schema_commit",
+      "rejection_reason"
+    ],
+    "required_boolean_values": {
+      "collected_pre_decision_only": true,
+      "post_entry_data_used_for_inclusion": false,
+      "h3_h4_state_known_at_collection": false,
+      "outcome_used_for_inclusion": false
+    }
+  },
+  "acceptance_criteria": {
+    "additional_confidence_3_existing_metadata_samples_minimum": 39,
+    "total_confidence_3_including_existing_21_minimum": 60,
+    "direction_source_present_for_all_primary_samples": true,
+    "direction_confidence_present_for_all_primary_samples": true,
+    "decision_timestamp_direct_metadata_for_all_primary_samples": true,
+    "duplicate_count_documented": true,
+    "rejected_samples_documented": true,
+    "actual_collection_rate_reported_per_batch": true,
+    "eligibility_schema_version_reported_per_batch": true,
+    "h3_h4_proxy_computation_during_collection": false,
+    "ohlc_read_during_collection_without_separate_approval": false,
+    "outcome_based_selection": false,
+    "phase_4_unlocked": false,
+    "matched_control_run": false,
+    "scoring_created": false,
+    "live_order_send_broker_telegram_enabled": false
+  },
+  "decision_outcomes": [
+    {
+      "decision": "FORWARD_COLLECTION_READY_FOR_PROXY_EXECUTION",
+      "meaning": "At least 39 additional confidence-3 samples collected, total confidence-3 >= 60, lineage clean, timestamps direct, no outcome selection, and proxy execution may be planned separately.",
+      "unlocks_phase_4": false,
+      "unlocks_proxy_execution_immediately": false
+    },
+    {
+      "decision": "FORWARD_COLLECTION_IN_PROGRESS",
+      "meaning": "Some valid samples collected, but fewer than 39 additional samples; continue collection and do not execute proxies.",
+      "unlocks_phase_4": false
+    },
+    {
+      "decision": "FORWARD_COLLECTION_SCHEMA_FAILURE",
+      "meaning": "Required metadata is missing or inconsistent; repair collection schema before continuing.",
+      "unlocks_phase_4": false
+    },
+    {
+      "decision": "FORWARD_COLLECTION_BIAS_FAILURE",
+      "meaning": "Samples were selected using outcome, H3/H4 state, hindsight, or post-entry data; invalidate affected batch.",
+      "unlocks_phase_4": false
+    },
+    {
+      "decision": "PAUSE_H3_H4_PATH",
+      "meaning": "Forward collection is too slow or not feasible; keep Adelin research-only and do not proceed to proxy execution.",
+      "unlocks_phase_4": false
+    }
+  ],
+  "safety": {
+    "adelin_level": "Level 0 / Diagnostic Research",
+    "ohlc_read": false,
+    "h3_h4_proxy_computation_run": false,
+    "replay_run": false,
+    "backtest_run": false,
+    "matched_control_run": false,
+    "phase_4_unlocked": false,
+    "runtime_logic_modified": false,
+    "strategy_2_modified": false,
+    "strategy_3_modified": false,
+    "data_xauusd_csv_modified": false,
+    "live_trading_enabled": false,
+    "orders_enabled": false,
+    "telegram_enabled": false,
+    "broker_execution_enabled": false,
+    "order_send_used": false,
+    "profitability_claim_made": false,
+    "deployability_claim_made": false
+  },
+  "verdict_flags": [
+    "CONFIDENCE_3_FORWARD_COLLECTION_PLAN_CREATED",
+    "PLAN_ONLY",
+    "NO_OHLC_READ",
+    "NO_H3_H4_PROXY_COMPUTATION",
+    "NO_REPLAY_BACKTEST_OR_MATCHED_CONTROL",
+    "PHASE_4_REMAINS_BLOCKED",
+    "EXISTING_21_COUNT_TOWARD_60",
+    "ADDITIONAL_39_CONFIDENCE_3_REQUIRED",
+    "DIRECTION_SOURCE_EXISTING_METADATA_REQUIRED",
+    "FORWARD_COLLECTION_PRE_DECISION_ONLY",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ]
+}

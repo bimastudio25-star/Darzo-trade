@@ -1,0 +1,245 @@
+{
+  "schema_name": "adelin_v2_confidence3_forward_collection_eligibility",
+  "schema_version": "1.0",
+  "schema_purpose": "Freeze primary eligibility for forward/new Adelin v2 confidence-3 / EXISTING_METADATA sample collection.",
+  "eligibility_schema_frozen_at_plan_commit": true,
+  "plan_base_commit": "59b3c8e",
+  "plan_commit_expected": "59b3c8e",
+  "plan_final_commit_recorded_by_git_history": true,
+  "any_change_requires_new_pre_registered_plan_branch": true,
+  "do_not_change_eligibility_during_collection": true,
+  "do_not_retroactively_apply_changed_eligibility_without_methodology_review": true,
+  "do_not_silently_mix_samples_collected_under_different_eligibility_schemas": true,
+  "target": {
+    "minimum_total_confidence_3_existing_metadata_samples": 60,
+    "existing_confidence_3_samples_already_analyzed": 21,
+    "additional_forward_confidence_3_samples_required": 39
+  },
+  "collection_pipeline_relationship_to_manual_evidence_schema_allowed_values": [
+    "SHARED",
+    "SEPARATE",
+    "HYBRID"
+  ],
+  "selected_pipeline_relationship": "HYBRID",
+  "selected_pipeline_relationship_justification": "Use the existing manual trade evidence RAPID_CAPTURE / FULL_REVIEW workflow for human capture ergonomics, but add strict forward-collection metadata fields before any row can become primary confidence-3 evidence. This avoids schema drift while keeping primary eligibility narrower than manual qualitative evidence.",
+  "manual_evidence_schema_reference": {
+    "schema_name": "adelin_v2_manual_trade_evidence_schema",
+    "schema_version": "1.1",
+    "rapid_capture_commit": "57defb7",
+    "rapid_capture_role": "Draft human capture only; not primary-eligible until promoted.",
+    "full_review_role": "Required before primary eligibility, with additional forward-collection fields completed."
+  },
+  "hybrid_promotion_rules": {
+    "rapid_capture_primary_eligible": false,
+    "full_review_required_for_primary_eligibility": true,
+    "direction_source_required_before_primary_eligibility": true,
+    "direction_confidence_required_before_primary_eligibility": true,
+    "decision_timestamp_required_before_primary_eligibility": true,
+    "missing_direction_source_rejects_primary_eligibility": true,
+    "missing_direction_confidence_rejects_primary_eligibility": true
+  },
+  "primary_eligible_required_values": {
+    "symbol": "XAUUSD",
+    "direction_source": "EXISTING_METADATA",
+    "direction_confidence": 3,
+    "direction_allowed_values": [
+      "LONG",
+      "SHORT"
+    ],
+    "decision_timestamp_source": "DIRECT_METADATA",
+    "collected_pre_decision_only": true,
+    "post_entry_data_used_for_inclusion": false,
+    "h3_h4_state_known_at_collection": false,
+    "outcome_used_for_inclusion": false,
+    "evidence_capture_mode": "FULL_REVIEW",
+    "collection_pipeline_relationship": "HYBRID"
+  },
+  "required_primary_fields": [
+    "sample_id",
+    "batch_id",
+    "source_artifact",
+    "collection_timestamp",
+    "decision_timestamp",
+    "symbol",
+    "timeframe_context",
+    "direction",
+    "direction_source",
+    "direction_confidence",
+    "reference_price",
+    "entry_reference",
+    "source_lineage",
+    "collected_pre_decision_only",
+    "post_entry_data_used_for_inclusion",
+    "h3_h4_state_known_at_collection",
+    "outcome_used_for_inclusion",
+    "collection_pipeline_relationship",
+    "evidence_capture_mode",
+    "eligibility_schema_version",
+    "eligibility_schema_commit"
+  ],
+  "field_definitions": [
+    {
+      "name": "sample_id",
+      "required": true,
+      "description": "Stable unique identifier for the collected sample."
+    },
+    {
+      "name": "batch_id",
+      "required": true,
+      "description": "Collection batch identifier; batches must not silently mix rule versions."
+    },
+    {
+      "name": "source_artifact",
+      "required": true,
+      "description": "Path or durable reference to the artifact that records the sample."
+    },
+    {
+      "name": "collection_timestamp",
+      "required": true,
+      "description": "Timestamp when the row was collected or promoted to forward collection."
+    },
+    {
+      "name": "decision_timestamp",
+      "required": true,
+      "description": "Direct pre-decision timestamp metadata; reconstruction is not primary-eligible."
+    },
+    {
+      "name": "symbol",
+      "required": true,
+      "allowed_values": [
+        "XAUUSD"
+      ]
+    },
+    {
+      "name": "timeframe_context",
+      "required": true,
+      "description": "Timeframe context if available; use UNKNOWN only when explicitly reviewed."
+    },
+    {
+      "name": "direction",
+      "required": true,
+      "allowed_values": [
+        "LONG",
+        "SHORT"
+      ]
+    },
+    {
+      "name": "direction_source",
+      "required": true,
+      "allowed_values": [
+        "EXISTING_METADATA"
+      ]
+    },
+    {
+      "name": "direction_confidence",
+      "required": true,
+      "allowed_values": [
+        3
+      ]
+    },
+    {
+      "name": "reference_price",
+      "required": true,
+      "description": "Reference price if available for later H3/H4 computation; if unavailable, entry_reference must be available."
+    },
+    {
+      "name": "entry_reference",
+      "required": true,
+      "description": "Entry/reference metadata if available for later H3/H4 computation; one of reference_price or entry_reference must be populated."
+    },
+    {
+      "name": "source_lineage",
+      "required": true,
+      "description": "Clear source lineage for the sample and batch."
+    },
+    {
+      "name": "collected_pre_decision_only",
+      "required": true,
+      "allowed_values": [
+        true
+      ]
+    },
+    {
+      "name": "post_entry_data_used_for_inclusion",
+      "required": true,
+      "allowed_values": [
+        false
+      ]
+    },
+    {
+      "name": "h3_h4_state_known_at_collection",
+      "required": true,
+      "allowed_values": [
+        false
+      ]
+    },
+    {
+      "name": "outcome_used_for_inclusion",
+      "required": true,
+      "allowed_values": [
+        false
+      ]
+    },
+    {
+      "name": "collection_pipeline_relationship",
+      "required": true,
+      "allowed_values": [
+        "HYBRID"
+      ]
+    },
+    {
+      "name": "evidence_capture_mode",
+      "required": true,
+      "allowed_values": [
+        "FULL_REVIEW"
+      ]
+    },
+    {
+      "name": "eligibility_schema_version",
+      "required": true,
+      "allowed_values": [
+        "1.0"
+      ]
+    },
+    {
+      "name": "eligibility_schema_commit",
+      "required": true,
+      "description": "Branch commit or reviewed schema commit used by the collection batch."
+    },
+    {
+      "name": "rejection_reason",
+      "required": false,
+      "description": "Required for rejected rows."
+    }
+  ],
+  "primary_exclusion_rules": [
+    "direction_source missing",
+    "direction_confidence missing",
+    "direction_source not EXISTING_METADATA",
+    "direction_confidence below 3",
+    "direction inferred or recovered",
+    "decision_timestamp missing",
+    "decision_timestamp reconstructed",
+    "decision_timestamp ambiguous",
+    "direction missing",
+    "direction UNKNOWN",
+    "stable ID missing",
+    "ID resolution ambiguous",
+    "duplicate sample",
+    "source lineage missing or ambiguous",
+    "reference/entry metadata missing",
+    "post-entry data used for inclusion",
+    "H3/H4 state used for inclusion",
+    "outcome used for inclusion",
+    "RAPID_CAPTURE not promoted to FULL_REVIEW",
+    "manual hindsight or attractive-example selection"
+  ],
+  "future_validation_expectations": {
+    "primary_sample_counting_requires_all_required_fields": true,
+    "missing_direction_source_is_rejected_not_interpreted": "DIRECTION_SOURCE_FIELD_ABSENT",
+    "missing_direction_confidence_is_rejected": "DIRECTION_CONFIDENCE_FIELD_ABSENT",
+    "reconstructed_timestamp_is_rejected_for_primary": "DECISION_TIMESTAMP_RECONSTRUCTED_NOT_PRIMARY_ELIGIBLE",
+    "rapid_capture_not_primary_eligible": true,
+    "full_review_with_forward_fields_required": true
+  }
+}
