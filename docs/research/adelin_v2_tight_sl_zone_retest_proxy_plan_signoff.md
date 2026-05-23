@@ -37,23 +37,23 @@ H4:
 
 ## Checklist
 
-* [ ] I approve the H3 tight-SL proxy formula.
-* [ ] I approve the fixed H3 thresholds 0.25 and 0.50.
-* [ ] I understand percentile thresholds are forbidden.
-* [ ] I understand threshold tuning from GOOD/FAST results is forbidden.
-* [ ] I approve the H3 missing-data states:
+* [x] I approve the H3 tight-SL proxy formula.
+* [x] I approve the fixed H3 thresholds 0.25 and 0.50.
+* [x] I understand percentile thresholds are forbidden.
+* [x] I understand threshold tuning from GOOD/FAST results is forbidden.
+* [x] I approve the H3 missing-data states:
 
   * UNKNOWN_REFERENCE_PRICE
   * NO_VALID_INVALIDATION_EXTREME
   * INVALID_GEOMETRY
   * INSUFFICIENT_PRE_DECISION_RANGE
 
-* [ ] I approve the H4 categorical pre-entry states.
-* [ ] I understand future execution must use pre-entry candles only.
-* [ ] I understand post-entry candles are forbidden.
-* [ ] I understand TP/SL hit, PnL, R multiple, future MFE/MAE, future liquidity behavior, outcome-derived thresholds, and non-directional max-move replay are forbidden.
-* [ ] I understand the next branch may run only a bounded H3/H4 proxy diagnostic execution if this signoff is approved.
-* [ ] I understand this signoff does not approve Phase 4, matched-control replay, live trading, runtime changes, scoring, tuning, Telegram alerts, orders, broker execution, order_send, or profitability claims.
+* [x] I approve the H4 categorical pre-entry states.
+* [x] I understand future execution must use pre-entry candles only.
+* [x] I understand post-entry candles are forbidden.
+* [x] I understand TP/SL hit, PnL, R multiple, future MFE/MAE, future liquidity behavior, outcome-derived thresholds, and non-directional max-move replay are forbidden.
+* [x] I understand the next branch may run only a bounded H3/H4 proxy diagnostic execution if this signoff is approved.
+* [x] I understand this signoff does not approve Phase 4, matched-control replay, live trading, runtime changes, scoring, tuning, Telegram alerts, orders, broker execution, order_send, or profitability claims.
 
 ## Decision
 
@@ -61,14 +61,14 @@ Reviewer: Adelin Bivol
 
 Date: 2026-05-23
 
-Decision: PENDING — human reviewer must manually change this to APPROVE or REJECT.
+Decision: APPROVE
 
 ## Notes
 
-If and only if Decision is manually changed to APPROVE, the H3/H4 proxy plan may proceed to a separate bounded proxy diagnostic execution branch.
+Human reviewer approves bounded H3/H4 proxy diagnostic execution only.
 
-If Decision remains PENDING or is changed to REJECT, no H3/H4 proxy execution is approved.
+H3 coverage verified: TIGHT_SL_BEHIND_SPIKE_OR_SWING, formula frozen at commit 56dcff0, M1 30-candle primary normalizer, M5 12-candle fallback, fixed thresholds 0.25/0.50, all four missing-data states present.
 
-Phase 4 remains blocked.
+H4 coverage verified: ZONE_RETEST_OR_RECLAIM, all five pre-entry categorical states present.
 
-No live trading, no order_send, no broker execution, no scoring, no profitability claim, no Telegram alerting, and no runtime change are approved by this document.
+This approval does not approve Phase 4, matched-control replay, runtime changes, scoring, tuning, Telegram alerts, live trading, broker execution, order_send, or profitability claims. Phase 4 remains blocked.
