@@ -150,16 +150,47 @@ Evidence: references are blocking or negative language, including:
 
 ### 5. Is schema freeze enforced?
 
-Answer: DOCUMENTED_AND_TESTED.
+Answer: PROCEDURAL_AND_TEST_GUARDED. See the Schema Freeze Clarification section below for the full breakdown.
 
-Evidence: `eligibility_schema.json` declares:
+## Schema Freeze Clarification
 
-- `eligibility_schema_frozen_at_plan_commit: true`
-- `any_change_requires_new_pre_registered_plan_branch: true`
+Classification: PROCEDURAL_AND_TEST_GUARDED, not TECHNICALLY_ENFORCED.
 
-Test coverage asserts this in:
+Evidence inspected:
 
-- `test_eligibility_schema_freeze_and_hybrid_manual_pipeline`
+- `backtests/reports/adelin_v2_confidence3_forward_collection_plan/eligibility_schema.json`
+- `backtests/reports/adelin_v2_confidence3_forward_collection_plan/collection_plan.json`
+- `backtests/reports/adelin_v2_confidence3_forward_collection_plan/rejection_reasons.json`
+- `tests/test_adelin_v2_confidence3_forward_collection_plan.py`
+
+What exists:
+
+- `eligibility_schema.json` declares `schema_version: "1.0"` at the root of the eligibility schema.
+- `eligibility_schema.json` declares `eligibility_schema_frozen_at_plan_commit: true`.
+- `eligibility_schema.json` declares `any_change_requires_new_pre_registered_plan_branch: true`.
+- `eligibility_schema.json` declares `plan_base_commit: "59b3c8e"` as a commit pointer.
+- `manual_evidence_schema_reference.schema_version: "1.1"` is a cross-link to the referenced manual trade evidence schema and is not an alternate version of the eligibility schema itself.
+- `rejection_reasons.json` includes a `SCHEMA_VERSION_MISSING_OR_MISMATCHED` rejection code for future collected samples.
+- `test_eligibility_schema_freeze_and_hybrid_manual_pipeline` asserts the freeze flags (`eligibility_schema_frozen_at_plan_commit`, `any_change_requires_new_pre_registered_plan_branch`) and the HYBRID promotion rules.
+
+What does not exist in this branch:
+
+- No `schema_hash`, `checksum`, `fingerprint`, `sha256`, `md5`, or `digest` field in any plan JSON.
+- No `hashlib` import or hash assertion in `tests/test_adelin_v2_confidence3_forward_collection_plan.py`.
+- No test asserts the exact value of `schema_version` ("1.0") or compares the schema content to a canonical fingerprint.
+
+Final interpretation:
+
+- The freeze is procedural and test-guarded: the JSON declares the freeze policy, and tests assert the freeze policy flags and the eligibility rules.
+- The freeze is not technically immutable: there is no schema hash or fingerprint that a test asserts byte-for-byte, so the JSON content could in principle change without breaking the current tests if the asserted flags and rule values remain in place.
+- This is acceptable for a Level 0 / Diagnostic Research plan-only approval and must not be overstated as technical immutability.
+- Adding a schema hash or canonical fingerprint enforcement is deferred and would require a separate pre-registered branch defining canonicalization rules (key order, whitespace) and the assertion mechanism.
+
+Scope of this clarification:
+
+- This clarification does not change the eligibility schema, the rejection reasons, the collection plan, the tests, or the runtime.
+- This clarification does not approve OHLC reads, H3/H4 proxy computation, proxy diagnostic execution, replay, backtest, matched-control, Phase 4, scoring, tuning, runtime changes, live trading, Telegram alerts, broker execution, `order_send`, profitability claims, or deployability claims.
+- Approval remains collection-only under the frozen eligibility schema.
 
 ## Forward Collection Conditions
 
