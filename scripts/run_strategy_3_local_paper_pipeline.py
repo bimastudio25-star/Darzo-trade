@@ -139,6 +139,54 @@ def _parse_iso_datetime(value: Any) -> datetime:
         return datetime.now(timezone.utc)
 
 
+def _summary_consistency(summary: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+    issues: list[dict[str, str]] = []
+    scanner_status = summary.get("scanner_status")
+    scanner_blocked = bool(summary.get("scanner_blocked_due_to_stale_htf"))
+    paper_clean = bool(summary.get("paper_signals_clean_for_validation"))
+    htf_status = summary.get("htf_freshness_status_for_scanner") or summary.get("htf_freshness_status")
+    scanner_htf_status = summary.get("scanner_htf_blocking_status")
+
+    if scanner_status == "no_new_driver_candles_to_process" and scanner_blocked:
+        issues.append(
+            {
+                "severity": "blocking",
+                "code": "SCANNER_STATUS_CONTRADICTS_STALE_HTF_BLOCK",
+                "message": "Scanner reported no new driver candles, but pipeline summary marked scanner as blocked by stale HTF.",
+            }
+        )
+    if paper_clean and htf_status == "stale_blocking":
+        issues.append(
+            {
+                "severity": "blocking",
+                "code": "CLEAN_VALIDATION_CONTRADICTS_STALE_BLOCKING_HTF",
+                "message": "Paper signals cannot be clean for validation while scanner HTF freshness is stale_blocking.",
+            }
+        )
+    if paper_clean and scanner_htf_status == "blocked":
+        issues.append(
+            {
+                "severity": "blocking",
+                "code": "CLEAN_VALIDATION_CONTRADICTS_SCANNER_BLOCK",
+                "message": "Paper signals cannot be clean for validation while scanner HTF status is blocked.",
+            }
+        )
+    if summary.get("h4_quarantine_status") == "stale_blocking" and not scanner_blocked:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "H4_FETCH_STATUS_DIFFERS_FROM_SCANNER_STATUS",
+                "message": "H4 fetch/quarantine status differs from scanner gating status; fetch warnings should not be treated as scanner blocks unless existing HTF data is stale.",
+            }
+        )
+
+    if any(issue["severity"] == "blocking" for issue in issues):
+        return "inconsistent_blocking", issues
+    if issues:
+        return "inconsistent_warning", issues
+    return "consistent", []
+
+
 def _lock_path(cfg: PipelineConfig) -> Path:
     return cfg.reports_dir / "pipeline.lock"
 
@@ -348,6 +396,24 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         item["timeframe"]: item.get("last_timestamp")
         for item in audit.get("timeframes", [])
     }
+    scanner_status = scanner.get("no_signal_reason") if scanner else None
+    if scanner is not None:
+        scanner_blocked_due_to_stale_htf = bool(scanner.get("scanner_blocked_due_to_stale_htf"))
+        paper_signals_clean_for_validation = bool(scanner.get("paper_signals_clean_for_validation", False))
+        htf_freshness_status_for_scanner = scanner.get("htf_freshness_status") or htf_diagnostic.get("htf_freshness_status")
+        scanner_stale_timeframes = scanner.get("stale_timeframes", htf_diagnostic.get("stale_timeframes", []))
+    else:
+        scanner_blocked_due_to_stale_htf = bool(htf_diagnostic.get("scanner_blocked_due_to_stale_htf"))
+        paper_signals_clean_for_validation = bool(htf_diagnostic.get("paper_signals_clean_for_validation", False))
+        htf_freshness_status_for_scanner = htf_diagnostic.get("htf_freshness_status")
+        scanner_stale_timeframes = htf_diagnostic.get("stale_timeframes", [])
+    scanner_htf_blocking_status = "blocked" if scanner_blocked_due_to_stale_htf else ("not_blocked" if scanner is not None else "not_run")
+    fetch_h4_warning = "H4" in set(fetch.get("timeframes_quarantined_by_overlap", []) or [])
+    clean_reason = (
+        "scanner_summary_htf_clean_or_warning_only"
+        if paper_signals_clean_for_validation
+        else "blocked_by_scanner_or_htf_freshness"
+    )
     summary = {
         "run_started_at": run_started_at,
         "run_finished_at": datetime.now(timezone.utc).isoformat(),
@@ -374,9 +440,20 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         "one_drive_warning": _onedrive_warning(Path.cwd()),
         "duplicate_pipeline_warning": None,
         "audit_status": audit.get("verdict_flags"),
-        "scanner_status": scanner.get("no_signal_reason") if scanner else None,
+        "scanner_status": scanner_status,
         "htf_freshness_status": htf_diagnostic.get("htf_freshness_status"),
+        "htf_freshness_status_for_scanner": htf_freshness_status_for_scanner,
+        "fetch_h4_warning": fetch_h4_warning,
+        "scanner_htf_blocking_status": scanner_htf_blocking_status,
+        "now_utc": htf_diagnostic.get("now_utc"),
+        "latest_m1_timestamp": htf_diagnostic.get("latest_m1_timestamp"),
+        "latest_m15_timestamp": htf_diagnostic.get("latest_m15_timestamp"),
+        "market_reference_timestamp": htf_diagnostic.get("market_reference_timestamp"),
+        "market_open_assumed": htf_diagnostic.get("market_open_assumed"),
+        "freshness_reference_mode": htf_diagnostic.get("freshness_reference_mode"),
+        "expected_latest_closed_timestamp_by_timeframe": htf_diagnostic.get("expected_latest_closed_timestamp_by_timeframe"),
         "stale_timeframes": htf_diagnostic.get("stale_timeframes", []),
+        "scanner_stale_timeframes": scanner_stale_timeframes,
         "quarantined_timeframes": htf_diagnostic.get("quarantined_timeframes", []),
         "h4_quarantine_status": htf_diagnostic.get("h4_quarantine_status"),
         "h4_latest_existing_timestamp": htf_diagnostic.get("h4_latest_existing_timestamp"),
@@ -384,16 +461,9 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         "h4_stale_by_bars": htf_diagnostic.get("h4_stale_by_bars"),
         "h4_quarantine_reason": htf_diagnostic.get("h4_quarantine_reason"),
         "h4_recommended_action": htf_diagnostic.get("h4_recommended_action"),
-        "scanner_blocked_due_to_stale_htf": bool(
-            (scanner or {}).get("scanner_blocked_due_to_stale_htf")
-            or htf_diagnostic.get("scanner_blocked_due_to_stale_htf")
-        ),
-        "paper_signals_clean_for_validation": bool(
-            (scanner or {}).get(
-                "paper_signals_clean_for_validation",
-                htf_diagnostic.get("paper_signals_clean_for_validation", False),
-            )
-        ),
+        "scanner_blocked_due_to_stale_htf": scanner_blocked_due_to_stale_htf,
+        "paper_signals_clean_for_validation": paper_signals_clean_for_validation,
+        "paper_signals_clean_for_validation_reason": clean_reason,
         "d1_closed_candle_lag_expected": htf_diagnostic.get("d1_closed_candle_lag_expected"),
         "rows_added_by_timeframe": rows_added,
         "latest_timestamp_by_timeframe": latest_by_tf,
@@ -402,6 +472,12 @@ def run_pipeline_once(cfg: PipelineConfig) -> dict[str, Any]:
         "verdict_flags": list(dict.fromkeys(flags)),
         "safety": dict(SAFETY),
     }
+    consistency_status, consistency_issues = _summary_consistency(summary)
+    summary["summary_consistency_status"] = consistency_status
+    summary["summary_consistency_issues"] = consistency_issues
+    if consistency_status == "inconsistent_blocking":
+        summary["paper_signals_clean_for_validation"] = False
+        summary["paper_signals_clean_for_validation_reason"] = "blocked_by_summary_consistency_issues"
     (cfg.reports_dir / "pipeline_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
     (cfg.reports_dir / "pipeline_run.md").write_text(_pipeline_markdown(summary), encoding="utf-8")
     return summary
@@ -424,13 +500,21 @@ def _pipeline_markdown(summary: dict[str, Any]) -> str:
             f"- temp_path_preserved: `{summary.get('temp_path_preserved')}`",
             f"- scanner_skipped_due_to_ingestion_failure: `{summary.get('scanner_skipped_due_to_ingestion_failure')}`",
             f"- htf_freshness_status: `{summary.get('htf_freshness_status')}`",
+            f"- htf_freshness_status_for_scanner: `{summary.get('htf_freshness_status_for_scanner')}`",
+            f"- freshness_reference_mode: `{summary.get('freshness_reference_mode')}`",
+            f"- market_reference_timestamp: `{summary.get('market_reference_timestamp')}`",
+            f"- market_open_assumed: `{summary.get('market_open_assumed')}`",
             f"- stale_timeframes: `{', '.join(summary.get('stale_timeframes', []))}`",
+            f"- scanner_stale_timeframes: `{', '.join(summary.get('scanner_stale_timeframes', []))}`",
             f"- h4_quarantine_status: `{summary.get('h4_quarantine_status')}`",
             f"- h4_latest_existing_timestamp: `{summary.get('h4_latest_existing_timestamp')}`",
             f"- h4_expected_latest_closed_timestamp: `{summary.get('h4_expected_latest_closed_timestamp')}`",
             f"- h4_stale_by_bars: `{summary.get('h4_stale_by_bars')}`",
             f"- scanner_blocked_due_to_stale_htf: `{summary.get('scanner_blocked_due_to_stale_htf')}`",
+            f"- scanner_htf_blocking_status: `{summary.get('scanner_htf_blocking_status')}`",
             f"- paper_signals_clean_for_validation: `{summary.get('paper_signals_clean_for_validation')}`",
+            f"- paper_signals_clean_for_validation_reason: `{summary.get('paper_signals_clean_for_validation_reason')}`",
+            f"- summary_consistency_status: `{summary.get('summary_consistency_status')}`",
             f"- d1_closed_candle_lag_expected: `{summary.get('d1_closed_candle_lag_expected')}`",
             f"- one_drive_warning: `{summary.get('one_drive_warning')}`",
             f"- new_paper_signals_this_run: `{summary['new_paper_signals_this_run']}`",

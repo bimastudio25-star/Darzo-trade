@@ -16,6 +16,8 @@ from scripts.audit_xauusd_data import TIMEFRAME_INTERVALS, read_candle_csv, vali
 from scripts.fetch_xauusd_mt5_candles import _existing_overlap
 
 HTF_TIMEFRAMES = ["D1", "H4", "H1"]
+LOWER_TF_REFERENCE_TIMEFRAMES = ["M1", "M5", "M15"]
+MARKET_CLOSED_REFERENCE_LAG = pd.Timedelta(hours=2)
 
 
 def _as_utc_timestamp(value: Any) -> pd.Timestamp | None:
@@ -39,6 +41,65 @@ def _latest_timestamp(frame: pd.DataFrame) -> pd.Timestamp | None:
         return None
     times = pd.to_datetime(frame["time"], utc=True, errors="coerce").dropna()
     return times.max() if not times.empty else None
+
+
+def _load_reference_frame(
+    *,
+    data_dir: Path,
+    symbol: str,
+    timeframe: str,
+    market_data: dict[str, pd.DataFrame] | None,
+) -> pd.DataFrame:
+    if market_data and timeframe in market_data:
+        return market_data[timeframe].copy()
+    frame, _, _ = _read_frame(data_dir / symbol / f"{timeframe}.csv")
+    return frame
+
+
+def _market_reference_context(
+    *,
+    data_dir: Path,
+    symbol: str,
+    market_data: dict[str, pd.DataFrame] | None,
+    now_ts: pd.Timestamp,
+) -> dict[str, Any]:
+    lower_tf_latest: dict[str, pd.Timestamp | None] = {}
+    for timeframe in LOWER_TF_REFERENCE_TIMEFRAMES:
+        lower_tf_latest[timeframe] = _latest_timestamp(
+            _load_reference_frame(
+                data_dir=data_dir,
+                symbol=symbol,
+                timeframe=timeframe,
+                market_data=market_data,
+            )
+        )
+
+    available = [ts for ts in lower_tf_latest.values() if ts is not None]
+    if not available:
+        return {
+            "latest_m1_timestamp": None,
+            "latest_m15_timestamp": None,
+            "market_reference_timestamp": now_ts,
+            "market_open_assumed": None,
+            "freshness_reference_mode": "WALL_CLOCK",
+        }
+
+    market_reference = max(available)
+    lag = now_ts - market_reference
+    if lag > MARKET_CLOSED_REFERENCE_LAG:
+        mode = "MARKET_CLOSED_LAST_AVAILABLE"
+        market_open_assumed: bool | None = False
+    else:
+        mode = "LATEST_LOWER_TF"
+        market_open_assumed = True
+
+    return {
+        "latest_m1_timestamp": lower_tf_latest.get("M1"),
+        "latest_m15_timestamp": lower_tf_latest.get("M15"),
+        "market_reference_timestamp": market_reference,
+        "market_open_assumed": market_open_assumed,
+        "freshness_reference_mode": mode,
+    }
 
 
 def _floor_to_timeframe(ts: pd.Timestamp, timeframe: str) -> pd.Timestamp:
@@ -135,8 +196,6 @@ def _freshness_status(
         return "missing"
     if quarantined and stale_by_bars and stale_by_bars > 0:
         return "stale_blocking"
-    if quarantined:
-        return "quarantined"
     if stale_by_bars and stale_by_bars > 0:
         return "stale_blocking" if timeframe in {"H4", "H1"} else "stale_warning"
     if timeframe == "D1" and latest_existing == expected_closed:
@@ -175,6 +234,13 @@ def analyze_htf_freshness(
     now_ts = _as_utc_timestamp(now_utc)
     if now_ts is None:
         raise ValueError("now_utc_required")
+    reference_context = _market_reference_context(
+        data_dir=data_dir,
+        symbol=symbol,
+        market_data=market_data,
+        now_ts=now_ts,
+    )
+    freshness_reference_ts = reference_context["market_reference_timestamp"]
 
     quarantined = set((collector_summary or {}).get("timeframes_quarantined_by_overlap", []) or [])
     latest_closed_from_collector = (collector_summary or {}).get("latest_closed_timestamp_by_timeframe", {}) or {}
@@ -199,7 +265,10 @@ def analyze_htf_freshness(
         latest_existing = _latest_timestamp(existing)
         latest_incoming = _latest_timestamp(incoming)
         latest_closed_incoming = _as_utc_timestamp(latest_closed_from_collector.get(tf)) or latest_incoming
-        expected_closed = expected_latest_closed_timestamp(now_ts, tf, grace_seconds)
+        if reference_context["freshness_reference_mode"] == "MARKET_CLOSED_LAST_AVAILABLE":
+            expected_closed = _floor_to_timeframe(freshness_reference_ts, tf)
+        else:
+            expected_closed = expected_latest_closed_timestamp(freshness_reference_ts, tf, grace_seconds)
         stale_by_bars = _stale_bar_count(latest_existing, expected_closed, tf)
         is_stale = stale_by_bars is not None and stale_by_bars > 0
         if is_stale:
@@ -229,6 +298,8 @@ def analyze_htf_freshness(
             "latest_incoming_timestamp": _iso(latest_incoming),
             "latest_closed_incoming_timestamp": _iso(latest_closed_incoming),
             "expected_latest_closed_timestamp": _iso(expected_closed),
+            "freshness_reference_timestamp": _iso(freshness_reference_ts),
+            "freshness_reference_mode": reference_context["freshness_reference_mode"],
             "forming_candles_skipped": int(skipped_from_collector.get(tf, 0) or 0),
             "overlap_window_size": overlap.get("overlap_rows_existing"),
             "overlap_matches": overlap.get("overlap_matched_rows"),
@@ -242,6 +313,7 @@ def analyze_htf_freshness(
             "worst_ohlc_diff": overlap.get("worst_ohlc_diff"),
             "material_ohlc_mismatch": material_mismatch,
             "quarantine_reason": quarantine_reason,
+            "fetch_quarantine_warning": quarantine_reason if tf in quarantined else None,
             "is_stale": is_stale,
             "stale_by_seconds": float((expected_closed - latest_existing).total_seconds()) if latest_existing is not None and latest_existing < expected_closed else 0.0,
             "stale_by_bars": stale_by_bars,
@@ -257,13 +329,29 @@ def analyze_htf_freshness(
         items.append(item)
 
     h4_item = next((item for item in items if item["timeframe"] == "H4"), {})
+    h1_item = next((item for item in items if item["timeframe"] == "H1"), {})
     d1_item = next((item for item in items if item["timeframe"] == "D1"), {})
-    h4_blocking = h4_item.get("freshness_status") in {"stale_blocking", "missing"} or bool(h4_item.get("quarantine_reason"))
-    summary_status = "stale_blocking" if h4_blocking else ("stale_warning" if stale_timeframes else "fresh")
+    blocking_items = [
+        item
+        for item in (h4_item, h1_item)
+        if item and item.get("freshness_status") in {"stale_blocking", "missing"}
+    ]
+    scanner_blocking = bool(blocking_items)
+    summary_status = "stale_blocking" if scanner_blocking else ("stale_warning" if stale_timeframes else "fresh")
+    expected_by_timeframe = {
+        item["timeframe"]: item.get("expected_latest_closed_timestamp")
+        for item in items
+    }
     return {
         "run_started_at": datetime.now(timezone.utc).isoformat(),
         "symbol": symbol,
         "now_utc": now_ts.isoformat(),
+        "latest_m1_timestamp": _iso(reference_context.get("latest_m1_timestamp")),
+        "latest_m15_timestamp": _iso(reference_context.get("latest_m15_timestamp")),
+        "market_reference_timestamp": _iso(reference_context.get("market_reference_timestamp")),
+        "market_open_assumed": reference_context.get("market_open_assumed"),
+        "freshness_reference_mode": reference_context.get("freshness_reference_mode"),
+        "expected_latest_closed_timestamp_by_timeframe": expected_by_timeframe,
         "timeframes": items,
         "htf_freshness_status": summary_status,
         "stale_timeframes": stale_timeframes,
@@ -275,8 +363,9 @@ def analyze_htf_freshness(
         "h4_quarantine_reason": h4_item.get("quarantine_reason"),
         "h4_recommended_action": h4_item.get("recommended_action"),
         "d1_closed_candle_lag_expected": bool(d1_item.get("closed_candle_lag_expected")),
-        "scanner_blocked_due_to_stale_htf": bool(h4_blocking),
-        "paper_signals_clean_for_validation": not bool(h4_blocking),
+        "scanner_blocked_due_to_stale_htf": bool(scanner_blocking),
+        "scanner_blocking_timeframes": [item["timeframe"] for item in blocking_items],
+        "paper_signals_clean_for_validation": not bool(scanner_blocking),
         "safety": {
             "data_modified": False,
             "live_trading_enabled": False,
@@ -303,6 +392,11 @@ def write_h4_quarantine_report(diagnostic: dict[str, Any], output_dir: Path) -> 
         "",
         f"- symbol: `{diagnostic.get('symbol')}`",
         f"- now_utc: `{diagnostic.get('now_utc')}`",
+        f"- freshness_reference_mode: `{diagnostic.get('freshness_reference_mode')}`",
+        f"- market_reference_timestamp: `{diagnostic.get('market_reference_timestamp')}`",
+        f"- market_open_assumed: `{diagnostic.get('market_open_assumed')}`",
+        f"- latest_m1_timestamp: `{diagnostic.get('latest_m1_timestamp')}`",
+        f"- latest_m15_timestamp: `{diagnostic.get('latest_m15_timestamp')}`",
         f"- htf_freshness_status: `{diagnostic.get('htf_freshness_status')}`",
         f"- stale_timeframes: `{', '.join(diagnostic.get('stale_timeframes', []))}`",
         f"- quarantined_timeframes: `{', '.join(diagnostic.get('quarantined_timeframes', []))}`",
