@@ -1,0 +1,20 @@
+sample_id,batch_id,source_artifact,rejection_reason,rejection_category,rejection_detail,reviewer_notes
+,REJECTION_REASON_CATALOG,,DIRECTION_SOURCE_FIELD_ABSENT,direction_source,Required direction_source is missing. Missing direction_source must not be interpreted as EXISTING_METADATA.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,DIRECTION_CONFIDENCE_FIELD_ABSENT,direction_confidence,Required direction_confidence is missing.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,NON_PRIMARY_DIRECTION_SOURCE,direction_source,direction_source is present but is not EXISTING_METADATA.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,NON_PRIMARY_DIRECTION_CONFIDENCE,direction_confidence,direction_confidence is present but is not 3.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,DECISION_TIMESTAMP_MISSING,timestamp,Direct decision_timestamp metadata is missing.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,DECISION_TIMESTAMP_AMBIGUOUS,timestamp,decision_timestamp is present but ambiguous or not directly auditable.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,SAMPLE_ID_MISSING,identity,No sample_id or approved stable unique identifier is present.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,ID_RESOLUTION_AMBIGUOUS,identity,Stable ID cannot be resolved without risk of double-counting.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,DUPLICATE_SAMPLE,identity,Sample duplicates an existing analyzed or already collected sample.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,RAPID_CAPTURE_NOT_PRIMARY_ELIGIBLE,capture_mode,RAPID_CAPTURE rows are draft rows only and are not primary-eligible.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,SOURCE_LINEAGE_MISSING,lineage,Source artifact lineage is missing.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,REFERENCE_PRICE_MISSING,reference_metadata,Reference/entry metadata needed for later pre-entry H3/H4 computation is missing.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,POST_ENTRY_DATA_USED_FOR_INCLUSION,bias_or_leakage,Post-entry data was used to include the sample.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,OUTCOME_USED_FOR_INCLUSION,bias_or_leakage,Outcome or result was used to include the sample.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,H3_H4_STATE_USED_FOR_SELECTION,bias_or_leakage,H3/H4 proxy state was used to include or balance the sample.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,VISUAL_HINDSIGHT_SELECTION,bias_or_leakage,Sample was selected because it looked good or bad after the fact.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,SCHEMA_VERSION_MISMATCH,schema,Eligibility schema version or commit does not match the batch rule.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,SCHEMA_RULE_CHANGED_WITHOUT_NEW_PLAN,schema,Collection or eligibility rule changed without a new pre-registered plan branch.,Template reason catalog row; not a collected sample.
+,REJECTION_REASON_CATALOG,,UNKNOWN_REJECTION_REASON,unknown,Rejection reason is not in the approved catalog and requires review.,Template reason catalog row; not a collected sample.
