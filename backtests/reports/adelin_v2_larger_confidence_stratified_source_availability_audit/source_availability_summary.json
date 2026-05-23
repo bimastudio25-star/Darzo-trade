@@ -1,0 +1,224 @@
+{
+  "audit_only": true,
+  "ohlc_read": false,
+  "h3_h4_proxy_computation_run": false,
+  "replay_run": false,
+  "backtest_run": false,
+  "matched_control_run": false,
+  "phase_4_unlocked": false,
+  "runtime_logic_modified": false,
+  "strategy_2_modified": false,
+  "strategy_3_modified": false,
+  "data_xauusd_csv_modified": false,
+  "live_trading_enabled": false,
+  "orders_enabled": false,
+  "telegram_enabled": false,
+  "broker_execution_enabled": false,
+  "order_send_used": false,
+  "profitability_claim_made": false,
+  "deployability_claim_made": false,
+  "approved_plan_commit": "2e6b686",
+  "approval_commit": "051d732",
+  "audit_question": "Can the approved larger confidence-stratified H3/H4 proxy diagnostic reach at least 60 total confidence-3 / EXISTING_METADATA samples, including the existing 21 already analyzed, without reading OHLC and without changing sampling rules?",
+  "decision": "INSUFFICIENT_CONFIDENCE_3_SOURCE_AVAILABILITY",
+  "decision_reason": "Only the existing 21 confidence-3 / EXISTING_METADATA samples are cleanly available. No additional confidence-3 / EXISTING_METADATA samples were found under the approved source rules.",
+  "existing_analyzed_confidence_3_count": 21,
+  "additional_available_confidence_3_count": 0,
+  "total_confidence_3_if_included": 21,
+  "required_total_confidence_3_count": 60,
+  "required_additional_confidence_3_count": 39,
+  "target_60_confidence_3_met": false,
+  "source_artifacts_scanned_count": 13,
+  "rows_scanned_total": 2340,
+  "source_artifacts_scanned": [
+    {
+      "artifact": "backtests/reports/adelin_v2_h3_h4_proxy_diagnostic_execution/h3_h4_proxy_per_sample.csv",
+      "rows_scanned": 40,
+      "has_direction_source": true,
+      "has_direction_confidence": true,
+      "existing_analyzed_confidence_3_count": 21,
+      "additional_available_confidence_3_count": 0,
+      "rejected_count": 19,
+      "duplicate_existing_count": 0,
+      "ambiguous_count": 0
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_direction_metadata_recovery/direction_recovery.csv",
+      "rows_scanned": 40,
+      "has_direction_source": true,
+      "has_direction_confidence": true,
+      "existing_analyzed_confidence_3_count": 0,
+      "additional_available_confidence_3_count": 0,
+      "rejected_count": 19,
+      "duplicate_existing_count": 21,
+      "ambiguous_count": 0
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_good_vs_fast_failure_diagnostic_execution/comparison_results.csv",
+      "rows_scanned": 37,
+      "has_direction_source": true,
+      "has_direction_confidence": true,
+      "existing_analyzed_confidence_3_count": 0,
+      "additional_available_confidence_3_count": 0,
+      "rejected_count": 16,
+      "duplicate_existing_count": 21,
+      "ambiguous_count": 0
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_good_vs_fast_failure_diagnostic_execution/human_review_priority.csv",
+      "rows_scanned": 40,
+      "has_direction_source": true,
+      "has_direction_confidence": true,
+      "existing_analyzed_confidence_3_count": 0,
+      "additional_available_confidence_3_count": 0,
+      "rejected_count": 19,
+      "duplicate_existing_count": 21,
+      "ambiguous_count": 0
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_preentry_outcome_diagnostics_direction_recovered/sample_diagnostics.csv",
+      "rows_scanned": 40,
+      "has_direction_source": false,
+      "has_direction_confidence": false,
+      "rejected_count": 40,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_preentry_outcome_diagnostics/sample_diagnostics.csv",
+      "rows_scanned": 40,
+      "has_direction_source": false,
+      "has_direction_confidence": false,
+      "rejected_count": 40,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_expanded_candidate_window_pack/manual_labels_template.csv",
+      "rows_scanned": 300,
+      "has_direction_source": false,
+      "has_direction_confidence": true,
+      "rejected_count": 300,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_expanded_objective_outcome_replay/enriched_manual_labels_template.csv",
+      "rows_scanned": 300,
+      "has_direction_source": false,
+      "has_direction_confidence": true,
+      "rejected_count": 300,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_expanded_objective_outcome_replay/objective_outcome_replay.csv",
+      "rows_scanned": 857,
+      "has_direction_source": false,
+      "has_direction_confidence": true,
+      "rejected_count": 857,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_objective_outcome_replay/enriched_manual_labels_template.csv",
+      "rows_scanned": 40,
+      "has_direction_source": false,
+      "has_direction_confidence": false,
+      "rejected_count": 40,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_objective_outcome_replay/objective_outcome_replay.csv",
+      "rows_scanned": 526,
+      "has_direction_source": false,
+      "has_direction_confidence": true,
+      "rejected_count": 526,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_visual_review_pack/manual_labels_template.csv",
+      "rows_scanned": 40,
+      "has_direction_source": false,
+      "has_direction_confidence": false,
+      "rejected_count": 40,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    },
+    {
+      "artifact": "backtests/reports/adelin_v2_phase_3_visual_review_labels/manual_labels_template.csv",
+      "rows_scanned": 40,
+      "has_direction_source": false,
+      "has_direction_confidence": false,
+      "rejected_count": 40,
+      "rejection_reason": "DIRECTION_SOURCE_FIELD_ABSENT"
+    }
+  ],
+  "eligible_samples_by_artifact": {
+    "backtests/reports/adelin_v2_h3_h4_proxy_diagnostic_execution/h3_h4_proxy_per_sample.csv": {
+      "existing_analyzed_confidence_3_count": 21,
+      "additional_available_confidence_3_count": 0
+    }
+  },
+  "duplicate_samples_detected": {
+    "unique_duplicate_existing_sample_count": 21,
+    "duplicate_rows_detected": 63,
+    "sample_ids": [
+      "sample_002",
+      "sample_003",
+      "sample_004",
+      "sample_005",
+      "sample_010",
+      "sample_011",
+      "sample_012",
+      "sample_013",
+      "sample_018",
+      "sample_019",
+      "sample_020",
+      "sample_021",
+      "sample_026",
+      "sample_027",
+      "sample_028",
+      "sample_029",
+      "sample_033",
+      "sample_034",
+      "sample_035",
+      "sample_036",
+      "sample_037"
+    ]
+  },
+  "ambiguous_samples_count": 0,
+  "ambiguous_samples": [],
+  "rejected_samples_count": 2256,
+  "rejected_samples_with_reasons": {
+    "DIRECTION_SOURCE_FIELD_ABSENT": 2183,
+    "NON_PRIMARY_DIRECTION_SOURCE": 73
+  },
+  "timestamp_audit": {
+    "direct_timestamp_count": 21,
+    "reconstructed_timestamp_count": 0,
+    "ambiguous_timestamp_count": 0,
+    "reconstructed_timestamps_flagged_in_output": true,
+    "reconstruction_method_documented_per_sample": true,
+    "timestamp_reconstruction_policy": "No timestamp reconstruction was used in this audit. Direct decision_time / decision_timestamp metadata was required for eligible rows."
+  },
+  "direction_source_absent_count": 2183,
+  "missing_direction_source_rejected_instead_of_treated_as_existing_metadata": true,
+  "authoritative_id_field": "sample_id",
+  "id_resolution_rule": "Use sample_id as authoritative when present. Use candidate_id only if sample_id is absent. If neither stable identifier exists, mark the row ambiguous. Additional samples are duplicate-rejected when sample_id already appears in the existing 21 or when sample_id + timestamp + direction + source + confidence repeats.",
+  "ambiguous_id_resolution_count": 0,
+  "selection_rules_observed": {
+    "h3_h4_states_used_for_selection": false,
+    "outcomes_used_for_selection": false,
+    "tp_sl_pnl_r_mfe_mae_used_for_selection": false,
+    "confidence_2_treated_as_primary": false,
+    "missing_direction_source_treated_as_existing_metadata": false,
+    "duplicates_double_counted": false
+  },
+  "verdict_flags": [
+    "SOURCE_AVAILABILITY_AUDIT_COMPLETE",
+    "INSUFFICIENT_CONFIDENCE_3_SOURCE_AVAILABILITY",
+    "NO_OHLC_READ",
+    "NO_H3_H4_PROXY_COMPUTATION",
+    "NO_REPLAY_BACKTEST_OR_MATCHED_CONTROL",
+    "PHASE_4_REMAINS_BLOCKED",
+    "MISSING_DIRECTION_SOURCE_REJECTED",
+    "DUPLICATES_NOT_DOUBLE_COUNTED",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ]
+}
