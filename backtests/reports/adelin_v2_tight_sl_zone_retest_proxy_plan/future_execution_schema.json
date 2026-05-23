@@ -1,0 +1,25 @@
+{
+  "allowed_future_actions": [
+    "load the signed proxy specs",
+    "compute H3/H4 on pre-decision OHLC only",
+    "write computability and leakage reports",
+    "produce descriptive diagnostic tables only"
+  ],
+  "forbidden_future_actions": [
+    "matched-control replay",
+    "Phase 4",
+    "runtime integration",
+    "threshold optimization",
+    "scoring",
+    "live-entry filters",
+    "profitability claims"
+  ],
+  "future_execution_required_in_separate_branch": true,
+  "required_outputs": [
+    "proxy_computability_report",
+    "h3_tight_sl_proxy_results",
+    "h4_zone_retest_proxy_results",
+    "leakage_check_report",
+    "threshold_policy_compliance_report"
+  ]
+}

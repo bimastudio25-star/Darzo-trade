@@ -1,0 +1,35 @@
+{
+  "outcomes": [
+    {
+      "allowed_next_action": "bounded diagnostic execution only",
+      "condition": "Proxy can be computed consistently and leakage checks pass.",
+      "decision_code": "PROXY_MEASURABLE_AND_STABLE",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_action": "reject or defer concept",
+      "condition": "Proxy requires unclear zone definitions or missing data.",
+      "decision_code": "PROXY_NOT_COMPUTABLE_RELIABLY",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_action": "reject as leakage",
+      "condition": "Proxy works only with post-entry information.",
+      "decision_code": "POST_ENTRY_LEAKAGE_DETECTED",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_action": "reject or require new plan",
+      "condition": "Proxy depends on choosing thresholds after seeing results.",
+      "decision_code": "ARBITRARY_THRESHOLD_TUNING_REQUIRED",
+      "phase_4_status": "blocked"
+    },
+    {
+      "allowed_next_action": "keep research-only or redefine in new plan",
+      "condition": "Proxy has high disagreement with manual evidence.",
+      "decision_code": "HIGH_MANUAL_DISAGREEMENT",
+      "phase_4_status": "blocked"
+    }
+  ],
+  "phase_4_blocked": true
+}

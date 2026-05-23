@@ -1,0 +1,28 @@
+{
+  "broker_execution_enabled": false,
+  "live_trading_enabled": false,
+  "matched_control_replay_run": false,
+  "ohlc_read": false,
+  "phase_4_blocked": true,
+  "plan_only": true,
+  "primary_proxy_concepts": [
+    "TIGHT_SL_BEHIND_SPIKE_OR_SWING",
+    "ZONE_RETEST_OR_RECLAIM"
+  ],
+  "profitability_claim_made": false,
+  "proxy_execution_required_future_branch": true,
+  "replay_run": false,
+  "runtime_logic_modified": false,
+  "samples_collected": false,
+  "telegram_enabled": false,
+  "verdict_flags": [
+    "OHLC_PROXY_PLAN_CREATED",
+    "PROXY_FORMULAS_PRE_REGISTERED",
+    "NO_PROXY_EXECUTION",
+    "NO_OHLC_READ",
+    "NO_PHASE_4",
+    "ADELIN_REMAINS_RESEARCH_ONLY",
+    "NO_LIVE_DEPLOYMENT_DECISION"
+  ],
+  "volume_profile_deferred": true
+}

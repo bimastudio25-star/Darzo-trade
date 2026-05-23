@@ -1,0 +1,26 @@
+{
+  "fields": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "timestamp",
+    "candidate_reference_price",
+    "decision_timestamp",
+    "direction",
+    "source/session metadata for stratification"
+  ],
+  "global_rules": [
+    "Use only candles and metadata with timestamp strictly before decision_timestamp.",
+    "Use completed candles only.",
+    "Use candidate reference price from existing candidate metadata or a separately pre-registered reference-price rule.",
+    "Use existing OHLC timeframes only in the future execution branch.",
+    "Do not use result labels, TP/SL hit, future excursion, or future swing formation."
+  ],
+  "timeframes": [
+    "M1",
+    "M5",
+    "M15",
+    "H1"
+  ]
+}

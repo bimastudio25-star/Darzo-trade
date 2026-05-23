@@ -1,0 +1,27 @@
+{
+  "forbidden_inputs": [
+    "post_entry_candles",
+    "tp_hit",
+    "sl_hit",
+    "pnl",
+    "r_multiple",
+    "future_mfe",
+    "future_mae",
+    "outcome_derived_thresholds",
+    "later_swing_levels_created_after_decision",
+    "future_liquidity_behavior",
+    "manual_cherry_picking",
+    "non_directional_max_move_replay",
+    "good_fast_outcome_group_for_threshold_selection",
+    "fast_failure_outcome_group_for_threshold_selection"
+  ],
+  "future_execution_must_record": {
+    "leakage_check_passed": true,
+    "post_entry_data_used": false,
+    "pre_entry_only": true
+  },
+  "manual_cherry_picking_forbidden": true,
+  "phase_4_blocked": true,
+  "pre_entry_only_required": true,
+  "threshold_tuning_from_results_forbidden": true
+}

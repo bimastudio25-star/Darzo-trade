@@ -1,0 +1,89 @@
+{
+  "allowed_inputs": [
+    "numeric level zones from locked grid",
+    "completed swing high/low zones",
+    "completed FVG/iFVG zone boundaries",
+    "completed pre-decision closes and wicks",
+    "touch count before decision_timestamp"
+  ],
+  "allowed_timeframes": [
+    "M1",
+    "M5",
+    "M15",
+    "H1"
+  ],
+  "candidate_reference_price_definition": "Use the existing candidate entry/reference price when present; do not infer zone membership from future outcome.",
+  "concept_id": "ZONE_RETEST_OR_RECLAIM",
+  "deterministic_formula_description": "Freeze zone boundaries before decision_timestamp. Candidate zones may come from numeric levels, completed swing zones, or completed FVG/iFVG zones. A retest occurs when a completed pre-decision M1/M5 candle touches the zone after the first interaction and closes without invalidating the side implied by direction. A reclaim occurs when price moves through a zone boundary and a completed pre-decision candle closes back on the trade side of that boundary.",
+  "forbidden_inputs": [
+    "post_entry_candles",
+    "tp_hit",
+    "sl_hit",
+    "pnl",
+    "r_multiple",
+    "future_mfe",
+    "future_mae",
+    "outcome_derived_thresholds",
+    "later_swing_levels_created_after_decision",
+    "future_liquidity_behavior",
+    "manual_cherry_picking",
+    "non_directional_max_move_replay",
+    "good_fast_outcome_group_for_threshold_selection",
+    "fast_failure_outcome_group_for_threshold_selection"
+  ],
+  "future_execution_outputs": [
+    "zone_retest_reclaim_category",
+    "zone_source",
+    "zone_low",
+    "zone_high",
+    "zone_width_pips",
+    "distance_to_zone_pips",
+    "pre_decision_touch_count",
+    "last_pre_decision_close_relation",
+    "proxy_computable",
+    "proxy_limitations"
+  ],
+  "human_concept_description": "A discretionary entry may improve when price reclaims, retests, or holds a pre-defined zone/level before the decision.",
+  "leakage_risks": [
+    "Using post-entry retest/reclaim candles.",
+    "Creating zone boundaries from future swings.",
+    "Using later target or SL behavior to decide whether a retest held."
+  ],
+  "normalization_method": {
+    "distance_to_zone": "Distance from candidate reference price to nearest zone boundary, signed by whether price is inside or outside the zone.",
+    "touch_count": "Count completed pre-decision touches only.",
+    "zone_width": "Record zone width in USD/pips and as a ratio to recent pre-decision M1/M5 range."
+  },
+  "pre_decision_only_rule": "All zone definitions, touches, closes, retests, and reclaims must occur before decision_timestamp.",
+  "proxy_id": "H4",
+  "proxy_name": "pre_decision_zone_retest_reclaim_proxy",
+  "required_inputs": [
+    "decision_timestamp",
+    "candidate_reference_price",
+    "direction",
+    "pre-defined zone boundaries",
+    "completed pre-decision M1/M5 OHLC"
+  ],
+  "threshold_policy": {
+    "categories": [
+      "NO_ZONE_AVAILABLE",
+      "INSIDE_ZONE",
+      "RETEST_HELD",
+      "RECLAIM_CONFIRMED",
+      "RETEST_FAILED_PRE_DECISION"
+    ],
+    "forbidden": [
+      "Do not tune zone width after seeing outcomes.",
+      "Do not promote the best category to a rule after execution.",
+      "Do not redefine zones mid-run."
+    ],
+    "type": "categorical_descriptive_pre_registered"
+  },
+  "validation_requirements": [
+    "Report zone-source distribution.",
+    "Report category distribution.",
+    "Report pre_entry_only=true and post_entry_data_used=false.",
+    "Report rows rejected due unclear zone definitions.",
+    "Treat all outputs as descriptive diagnostics only."
+  ]
+}
