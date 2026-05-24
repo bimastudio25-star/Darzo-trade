@@ -3,6 +3,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
+import platform
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,6 +43,7 @@ ALLOWED_STATUSES = {
     "FEED_LIVE_WAITING_H1_CLOSE",
     "FEED_LIVE_SETUP_DETECTED",
     "FEED_STALE",
+    "FEED_STALE_RUNTIME_MISMATCH_POSSIBLE",
     "MT5_UNAVAILABLE",
     "SYMBOL_UNAVAILABLE",
     "LIVE_SCANNER_BLOCKED_BY_MISSING_RUNTIME_LOGIC",
@@ -135,6 +139,16 @@ HEARTBEAT_FIELDS = [
     "latest_closed_m15_time",
     "latest_closed_h1_time",
     "server_offset_hours_estimate",
+    "runtime_platform",
+    "python_executable",
+    "is_wsl_detected",
+    "mt5_terminal_info_available",
+    "mt5_terminal_path_detected",
+    "mt5_version",
+    "feed_staleness_reason",
+    "feed_freshness_diagnostic",
+    "recommended_runtime",
+    "recommended_command",
     "scanner_status",
     "no_live_confirmation",
     "broker_execution_allowed",
@@ -155,6 +169,24 @@ class ClosedCandle:
 
 
 @dataclass(frozen=True)
+class RuntimeDiagnostics:
+    runtime_platform: str
+    python_executable: str
+    cwd: str
+    python_version: str
+    is_wsl_detected: bool
+    mt5_terminal_info_available: bool = False
+    mt5_terminal_path_detected: str | None = None
+    mt5_terminal_info: dict[str, Any] | None = None
+    mt5_version: str | None = None
+    recommended_runtime: str = "Windows native Python connected to the running MT5 terminal"
+    recommended_command: str = (
+        'cd "C:\\Users\\90NA00VIX\\OneDrive\\Documenti\\LAVORO\\darzo trade human-mgmt"; '
+        "python scripts\\run_strategy_2_live_observation_scanner.py --symbol XAUUSD"
+    )
+
+
+@dataclass(frozen=True)
 class MarketSnapshot:
     symbol: str
     mt5_initialized: bool
@@ -163,13 +195,22 @@ class MarketSnapshot:
     latest_tick_bid: float | None
     latest_tick_ask: float | None
     spread_usd: float | None
+    latest_forming: dict[str, ClosedCandle]
     latest_closed: dict[str, ClosedCandle]
     server_offset_hours_estimate: float | None
     feed_live_by_internal_consistency: bool
+    feed_status: str
+    feed_staleness_reason: str | None
+    feed_freshness_diagnostic: dict[str, Any]
+    runtime: RuntimeDiagnostics
     error: str | None = None
 
     def latest_closed_time(self, timeframe: str) -> str | None:
         candle = self.latest_closed.get(timeframe)
+        return candle.time if candle else None
+
+    def latest_forming_time(self, timeframe: str) -> str | None:
+        candle = self.latest_forming.get(timeframe)
         return candle.time if candle else None
 
 
@@ -193,6 +234,55 @@ def isoformat_z(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def detect_wsl() -> bool:
+    if platform.system().lower() != "linux":
+        return False
+    if "WSL_DISTRO_NAME" in os.environ:
+        return True
+    try:
+        version_text = Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        version_text = ""
+    return "microsoft" in version_text or "wsl" in version_text
+
+
+def build_runtime_diagnostics(
+    *,
+    terminal_info: Any | None = None,
+    mt5_version: Any | None = None,
+) -> RuntimeDiagnostics:
+    path = None
+    terminal_info_dict = None
+    if terminal_info is not None:
+        if hasattr(terminal_info, "_asdict"):
+            terminal_info_dict = dict(terminal_info._asdict())
+            path = terminal_info_dict.get("path")
+        elif isinstance(terminal_info, dict):
+            terminal_info_dict = dict(terminal_info)
+            path = terminal_info.get("path")
+        else:
+            path = getattr(terminal_info, "path", None)
+            terminal_info_dict = {
+                key: getattr(terminal_info, key)
+                for key in dir(terminal_info)
+                if not key.startswith("_") and isinstance(getattr(terminal_info, key), (str, int, float, bool, type(None)))
+            }
+    version_text = None
+    if mt5_version is not None:
+        version_text = ".".join(str(part) for part in mt5_version) if isinstance(mt5_version, (tuple, list)) else str(mt5_version)
+    return RuntimeDiagnostics(
+        runtime_platform=platform.system(),
+        python_executable=sys.executable,
+        cwd=str(Path.cwd()),
+        python_version=platform.python_version(),
+        is_wsl_detected=detect_wsl(),
+        mt5_terminal_info_available=terminal_info is not None,
+        mt5_terminal_path_detected=str(path) if path else None,
+        mt5_terminal_info=terminal_info_dict,
+        mt5_version=version_text,
+    )
 
 
 def parse_max_bars(value: str | None) -> dict[str, int]:
@@ -267,8 +357,7 @@ def _timestamp_from_epoch(value: Any) -> str | None:
     return isoformat_z(datetime.fromtimestamp(number, tz=UTC))
 
 
-def _closed_candle_from_rates(rates: Any, timeframe: str, *, closed_candle_only: bool) -> ClosedCandle:
-    position = 1 if closed_candle_only else 0
+def _candle_from_rates(rates: Any, timeframe: str, *, position: int) -> ClosedCandle:
     if rates is None or len(rates) <= position:
         return ClosedCandle(timeframe, None, None, None, None, None, None)
     rate = rates[position]
@@ -280,6 +369,28 @@ def _closed_candle_from_rates(rates: Any, timeframe: str, *, closed_candle_only:
         low=_as_float(_rate_value(rate, "low")),
         close=_as_float(_rate_value(rate, "close")),
         source_position_used=position,
+    )
+
+
+def _latest_forming_and_closed_from_rates(rates: Any, timeframe: str, *, closed_candle_only: bool) -> tuple[ClosedCandle, ClosedCandle]:
+    if rates is None or len(rates) == 0:
+        empty = ClosedCandle(timeframe, None, None, None, None, None, None)
+        return empty, empty
+    indexed_rates = []
+    for index, rate in enumerate(rates):
+        timestamp = _as_float(_rate_value(rate, "time"))
+        if timestamp is None:
+            continue
+        indexed_rates.append((timestamp, index, rate))
+    if not indexed_rates:
+        empty = ClosedCandle(timeframe, None, None, None, None, None, None)
+        return empty, empty
+    indexed_rates.sort(key=lambda item: item[0])
+    forming_index = indexed_rates[-1][1]
+    closed_index = indexed_rates[-2][1] if closed_candle_only and len(indexed_rates) >= 2 else forming_index
+    return (
+        _candle_from_rates(rates, timeframe, position=forming_index),
+        _candle_from_rates(rates, timeframe, position=closed_index),
     )
 
 
@@ -330,17 +441,71 @@ def _is_recent(
     return age <= max_age_seconds
 
 
-def _feed_live_by_internal_consistency(snapshot: MarketSnapshot, now_utc: datetime) -> bool:
-    if not snapshot.latest_tick_server_time:
-        return False
-    offset = snapshot.server_offset_hours_estimate
-    checks = [
-        _is_recent(snapshot.latest_tick_server_time, now_utc, 20 * 60, server_offset_hours_estimate=offset),
-        _is_recent(snapshot.latest_closed_time("M1"), now_utc, 20 * 60, server_offset_hours_estimate=offset),
-        _is_recent(snapshot.latest_closed_time("M5"), now_utc, 45 * 60, server_offset_hours_estimate=offset),
-        _is_recent(snapshot.latest_closed_time("M15"), now_utc, 120 * 60, server_offset_hours_estimate=offset),
-    ]
-    return all(checks)
+def _parse_iso_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _delta_seconds(left: str | None, right: str | None) -> float | None:
+    left_dt = _parse_iso_utc(left)
+    right_dt = _parse_iso_utc(right)
+    if left_dt is None or right_dt is None:
+        return None
+    return abs((left_dt - right_dt).total_seconds())
+
+
+def _freshness_status_from_internal_times(snapshot: MarketSnapshot) -> tuple[str, str | None, dict[str, Any]]:
+    tick_time = snapshot.latest_tick_server_time
+    m1_forming_time = snapshot.latest_forming_time("M1")
+    m1_closed_time = snapshot.latest_closed_time("M1")
+    m5_closed_time = snapshot.latest_closed_time("M5")
+    m15_closed_time = snapshot.latest_closed_time("M15")
+    h1_closed_time = snapshot.latest_closed_time("H1")
+
+    tick_to_m1_forming = _delta_seconds(tick_time, m1_forming_time)
+    tick_to_m1_closed = _delta_seconds(tick_time, m1_closed_time)
+    tick_to_m5_closed = _delta_seconds(tick_time, m5_closed_time)
+    tick_to_m15_closed = _delta_seconds(tick_time, m15_closed_time)
+    tick_to_h1_closed = _delta_seconds(tick_time, h1_closed_time)
+
+    diagnostic = {
+        "tick_vs_current_forming_m1_seconds": tick_to_m1_forming,
+        "tick_vs_latest_m1_seconds": tick_to_m1_closed,
+        "tick_vs_latest_m5_seconds": tick_to_m5_closed,
+        "tick_vs_latest_m15_seconds": tick_to_m15_closed,
+        "tick_vs_latest_h1_seconds": tick_to_h1_closed,
+        "current_forming_m1_time": m1_forming_time,
+        "current_forming_m5_time": snapshot.latest_forming_time("M5"),
+        "current_forming_m15_time": snapshot.latest_forming_time("M15"),
+        "current_forming_h1_time": snapshot.latest_forming_time("H1"),
+        "latest_closed_m1_time": m1_closed_time,
+        "latest_closed_m5_time": m5_closed_time,
+        "latest_closed_m15_time": m15_closed_time,
+        "latest_closed_h1_time": h1_closed_time,
+        "h1_old_is_not_feed_stale_by_itself": True,
+    }
+
+    if not tick_time:
+        return "FEED_STALE", "TICK_MISSING", diagnostic
+    if tick_to_m1_closed is None:
+        return "FEED_STALE", "M1_CLOSED_CANDLE_MISSING", diagnostic
+    if tick_to_m1_closed > 10 * 60:
+        return "FEED_STALE", "M1_STALE_RELATIVE_TO_TICK", diagnostic
+    if m5_closed_time is None:
+        return "FEED_LIVE_WAITING_M15_CLOSE", "M5_CLOSED_CANDLE_MISSING_WAITING", diagnostic
+    if tick_to_m5_closed is not None and tick_to_m5_closed > 20 * 60:
+        return "FEED_STALE", "M5_STALE_RELATIVE_TO_TICK", diagnostic
+    if m15_closed_time is None:
+        return "FEED_LIVE_WAITING_M15_CLOSE", "M15_CLOSED_CANDLE_NOT_AVAILABLE_YET", diagnostic
+    if tick_to_m15_closed is not None and tick_to_m15_closed > 60 * 60:
+        return "FEED_LIVE_WAITING_M15_CLOSE", "M15_NOT_FRESH_WAITING_FOR_FIRST_RECENT_CLOSE", diagnostic
+    if h1_closed_time is None or (tick_to_h1_closed is not None and tick_to_h1_closed > 3 * 3600):
+        return "FEED_LIVE_WAITING_H1_CLOSE", "H1_OLD_BUT_M1_M5_M15_FRESH", diagnostic
+    return "FEED_LIVE", None, diagnostic
 
 
 def read_mt5_snapshot(
@@ -348,10 +513,12 @@ def read_mt5_snapshot(
     symbol: str,
     max_bars: dict[str, int],
     closed_candle_only: bool = True,
+    mt5_terminal_path: str | None = None,
     mt5_module: Any | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> MarketSnapshot:
     current_time = now()
+    fallback_runtime = build_runtime_diagnostics()
     try:
         mt5 = mt5_module if mt5_module is not None else import_mt5_module()
     except RuntimeError as exc:
@@ -363,13 +530,18 @@ def read_mt5_snapshot(
             latest_tick_bid=None,
             latest_tick_ask=None,
             spread_usd=None,
+            latest_forming={},
             latest_closed={},
             server_offset_hours_estimate=None,
             feed_live_by_internal_consistency=False,
+            feed_status="MT5_UNAVAILABLE",
+            feed_staleness_reason="MT5_IMPORT_FAILED",
+            feed_freshness_diagnostic={"error": str(exc)},
+            runtime=fallback_runtime,
             error=str(exc),
         )
 
-    initialized = bool(mt5.initialize())
+    initialized = bool(mt5.initialize(path=str(mt5_terminal_path))) if mt5_terminal_path else bool(mt5.initialize())
     if not initialized:
         return MarketSnapshot(
             symbol=symbol,
@@ -379,13 +551,21 @@ def read_mt5_snapshot(
             latest_tick_bid=None,
             latest_tick_ask=None,
             spread_usd=None,
+            latest_forming={},
             latest_closed={},
             server_offset_hours_estimate=None,
             feed_live_by_internal_consistency=False,
+            feed_status="MT5_UNAVAILABLE",
+            feed_staleness_reason="MT5_INITIALIZE_FAILED",
+            feed_freshness_diagnostic={"mt5_terminal_path_argument": mt5_terminal_path},
+            runtime=fallback_runtime,
             error="mt5.initialize returned false",
         )
 
     try:
+        terminal_info = mt5.terminal_info() if callable(getattr(mt5, "terminal_info", None)) else None
+        mt5_version = mt5.version() if callable(getattr(mt5, "version", None)) else None
+        runtime = build_runtime_diagnostics(terminal_info=terminal_info, mt5_version=mt5_version)
         info = mt5.symbol_info(symbol)
         symbol_available = info is not None
         if symbol_available:
@@ -400,9 +580,14 @@ def read_mt5_snapshot(
                 latest_tick_bid=None,
                 latest_tick_ask=None,
                 spread_usd=None,
+                latest_forming={},
                 latest_closed={},
                 server_offset_hours_estimate=None,
                 feed_live_by_internal_consistency=False,
+                feed_status="SYMBOL_UNAVAILABLE",
+                feed_staleness_reason="SYMBOL_UNAVAILABLE_OR_SELECT_FAILED",
+                feed_freshness_diagnostic={"symbol": symbol},
+                runtime=runtime,
                 error="symbol unavailable or could not be selected",
             )
 
@@ -412,14 +597,17 @@ def read_mt5_snapshot(
         tick_ask = _as_float(_tick_value(tick, "ask"))
         spread = round(tick_ask - tick_bid, 5) if tick_bid is not None and tick_ask is not None else None
 
+        latest_forming: dict[str, ClosedCandle] = {}
         latest_closed: dict[str, ClosedCandle] = {}
         for timeframe, mt5_timeframe in _timeframe_constants(mt5).items():
             rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, max_bars.get(timeframe, DEFAULT_MAX_BARS[timeframe]))
-            latest_closed[timeframe] = _closed_candle_from_rates(
+            forming, closed = _latest_forming_and_closed_from_rates(
                 rates,
                 timeframe,
                 closed_candle_only=closed_candle_only,
             )
+            latest_forming[timeframe] = forming
+            latest_closed[timeframe] = closed
 
         snapshot = MarketSnapshot(
             symbol=symbol,
@@ -429,11 +617,20 @@ def read_mt5_snapshot(
             latest_tick_bid=tick_bid,
             latest_tick_ask=tick_ask,
             spread_usd=spread,
+            latest_forming=latest_forming,
             latest_closed=latest_closed,
             server_offset_hours_estimate=_estimate_server_offset_hours(tick_time, current_time),
             feed_live_by_internal_consistency=False,
+            feed_status="FEED_STALE",
+            feed_staleness_reason=None,
+            feed_freshness_diagnostic={},
+            runtime=runtime,
             error=None,
         )
+        feed_status, stale_reason, freshness_diagnostic = _freshness_status_from_internal_times(snapshot)
+        if feed_status == "FEED_STALE" and runtime.is_wsl_detected:
+            feed_status = "FEED_STALE_RUNTIME_MISMATCH_POSSIBLE"
+            stale_reason = f"{stale_reason}; RUNTIME_ENVIRONMENT_MISMATCH_POSSIBLE"
         return MarketSnapshot(
             symbol=snapshot.symbol,
             mt5_initialized=snapshot.mt5_initialized,
@@ -442,9 +639,18 @@ def read_mt5_snapshot(
             latest_tick_bid=snapshot.latest_tick_bid,
             latest_tick_ask=snapshot.latest_tick_ask,
             spread_usd=snapshot.spread_usd,
+            latest_forming=snapshot.latest_forming,
             latest_closed=snapshot.latest_closed,
             server_offset_hours_estimate=snapshot.server_offset_hours_estimate,
-            feed_live_by_internal_consistency=_feed_live_by_internal_consistency(snapshot, current_time),
+            feed_live_by_internal_consistency=feed_status in {
+                "FEED_LIVE",
+                "FEED_LIVE_WAITING_M15_CLOSE",
+                "FEED_LIVE_WAITING_H1_CLOSE",
+            },
+            feed_status=feed_status,
+            feed_staleness_reason=stale_reason,
+            feed_freshness_diagnostic=freshness_diagnostic,
+            runtime=snapshot.runtime,
             error=snapshot.error,
         )
     finally:
@@ -604,6 +810,16 @@ def build_heartbeat(symbol: str, snapshot: MarketSnapshot, scanner_status: str, 
         "latest_closed_m15_time": snapshot.latest_closed_time("M15"),
         "latest_closed_h1_time": snapshot.latest_closed_time("H1"),
         "server_offset_hours_estimate": snapshot.server_offset_hours_estimate,
+        "runtime_platform": snapshot.runtime.runtime_platform,
+        "python_executable": snapshot.runtime.python_executable,
+        "is_wsl_detected": snapshot.runtime.is_wsl_detected,
+        "mt5_terminal_info_available": snapshot.runtime.mt5_terminal_info_available,
+        "mt5_terminal_path_detected": snapshot.runtime.mt5_terminal_path_detected,
+        "mt5_version": snapshot.runtime.mt5_version,
+        "feed_staleness_reason": snapshot.feed_staleness_reason,
+        "feed_freshness_diagnostic": snapshot.feed_freshness_diagnostic,
+        "recommended_runtime": snapshot.runtime.recommended_runtime,
+        "recommended_command": snapshot.runtime.recommended_command,
         "scanner_status": scanner_status,
         "no_live_confirmation": NO_LIVE_CONFIRMATION,
         "broker_execution_allowed": False,
@@ -629,6 +845,80 @@ def safety_audit(generated_at: str) -> dict[str, Any]:
         "broker_execution_allowed": False,
         "order_send_allowed": False,
         "real_money_allowed": False,
+    }
+
+
+def _candle_payload(candle: ClosedCandle | None) -> dict[str, Any] | None:
+    if candle is None:
+        return None
+    return {
+        "time": candle.time,
+        "open": candle.open,
+        "high": candle.high,
+        "low": candle.low,
+        "close": candle.close,
+        "source_position_used": candle.source_position_used,
+    }
+
+
+def diagnose_mt5_feed(
+    *,
+    symbol: str = "XAUUSD",
+    max_bars: dict[str, int] | None = None,
+    mt5_terminal_path: str | None = None,
+    mt5_module: Any | None = None,
+    now: Callable[[], datetime] = utc_now,
+) -> dict[str, Any]:
+    snapshot = read_mt5_snapshot(
+        symbol=symbol,
+        max_bars=max_bars or dict(DEFAULT_MAX_BARS),
+        closed_candle_only=True,
+        mt5_terminal_path=mt5_terminal_path,
+        mt5_module=mt5_module,
+        now=now,
+    )
+    return {
+        "platform_system": snapshot.runtime.runtime_platform,
+        "sys_executable": snapshot.runtime.python_executable,
+        "cwd": snapshot.runtime.cwd,
+        "python_version": snapshot.runtime.python_version,
+        "is_wsl_detected": snapshot.runtime.is_wsl_detected,
+        "mt5_import_ok": snapshot.mt5_initialized or snapshot.feed_staleness_reason != "MT5_IMPORT_FAILED",
+        "mt5_initialized": snapshot.mt5_initialized,
+        "mt5_terminal_info": snapshot.runtime.mt5_terminal_info,
+        "mt5_terminal_info_available": snapshot.runtime.mt5_terminal_info_available,
+        "mt5_terminal_path_detected": snapshot.runtime.mt5_terminal_path_detected,
+        "mt5_version": snapshot.runtime.mt5_version,
+        "symbol": symbol,
+        "symbol_info_available": snapshot.mt5_symbol_available,
+        "symbol_selected": snapshot.mt5_symbol_available,
+        "tick": {
+            "time": snapshot.latest_tick_server_time,
+            "bid": snapshot.latest_tick_bid,
+            "ask": snapshot.latest_tick_ask,
+            "spread_usd": snapshot.spread_usd,
+        },
+        "tick_vs_latest_m1_seconds": snapshot.feed_freshness_diagnostic.get("tick_vs_latest_m1_seconds"),
+        "estimated_server_offset_hours": snapshot.server_offset_hours_estimate,
+        "current_forming": {
+            timeframe: _candle_payload(snapshot.latest_forming.get(timeframe)) for timeframe in DEFAULT_MAX_BARS
+        },
+        "last_closed": {
+            timeframe: _candle_payload(snapshot.latest_closed.get(timeframe)) for timeframe in DEFAULT_MAX_BARS
+        },
+        "feed_live_by_internal_consistency": snapshot.feed_live_by_internal_consistency,
+        "feed_status": snapshot.feed_status,
+        "feed_staleness_reason": snapshot.feed_staleness_reason,
+        "feed_freshness_diagnostic": snapshot.feed_freshness_diagnostic,
+        "recommendation": snapshot.runtime.recommended_command
+        if snapshot.feed_status == "FEED_STALE_RUNTIME_MISMATCH_POSSIBLE"
+        else snapshot.runtime.recommended_runtime,
+        "safety": {
+            "mt5_read_only": True,
+            "no_order_send": True,
+            "no_broker_execution": True,
+            "no_live_trading": True,
+        },
     }
 
 
@@ -780,6 +1070,16 @@ def latest_state_payload(
         "latest_closed_m5_time": snapshot.latest_closed_time("M5"),
         "latest_closed_m15_time": snapshot.latest_closed_time("M15"),
         "latest_closed_h1_time": snapshot.latest_closed_time("H1"),
+        "runtime_platform": snapshot.runtime.runtime_platform,
+        "python_executable": snapshot.runtime.python_executable,
+        "is_wsl_detected": snapshot.runtime.is_wsl_detected,
+        "mt5_terminal_info_available": snapshot.runtime.mt5_terminal_info_available,
+        "mt5_terminal_path_detected": snapshot.runtime.mt5_terminal_path_detected,
+        "mt5_version": snapshot.runtime.mt5_version,
+        "feed_staleness_reason": snapshot.feed_staleness_reason,
+        "feed_freshness_diagnostic": snapshot.feed_freshness_diagnostic,
+        "recommended_runtime": snapshot.runtime.recommended_runtime,
+        "recommended_command": snapshot.runtime.recommended_command,
         "latest_live_event_time": latest_event.get("created_at_utc"),
         "latest_live_signal_id": latest_event.get("signal_id"),
         "total_live_events": len(live_events),
@@ -824,6 +1124,22 @@ It does not trade, place orders, call broker execution, send operational Telegra
 
 The scanner treats MT5 position 0 as the forming candle and position 1 as the last closed candle. Strategy 2 decisions must use closed candles only.
 
+## Feed freshness diagnostics
+
+Feed freshness is checked with MT5-internal consistency:
+
+- tick time versus current and closed M1 bars
+- tick time versus closed M5 and M15 bars
+- H1 is allowed to be old during the first hour after market open; old H1 alone becomes `FEED_LIVE_WAITING_H1_CLOSE`, not hard stale
+
+If MT5 initializes but the candles are stale under WSL/Linux, the scanner reports `FEED_STALE_RUNTIME_MISMATCH_POSSIBLE`. Run the scanner from Windows PowerShell connected to the active MT5 terminal:
+
+```powershell
+cd "C:\\Users\\90NA00VIX\\OneDrive\\Documenti\\LAVORO\\darzo trade human-mgmt"
+python scripts\\diagnose_strategy_2_mt5_feed.py --symbol XAUUSD
+python scripts\\run_strategy_2_live_observation_scanner.py --symbol XAUUSD
+```
+
 ## Run
 
 ```bash
@@ -848,7 +1164,7 @@ def _summary_payload(
     snapshot: MarketSnapshot,
     event_appended: bool,
     duplicate_event_blocked: bool,
-    missing_runtime_logic: str | None,
+    scanner_block_reason: str | None,
     live_events: list[dict[str, Any]],
     heartbeat: dict[str, Any],
     dry_run: bool,
@@ -863,6 +1179,17 @@ def _summary_payload(
         "mt5_initialized": snapshot.mt5_initialized,
         "mt5_symbol_available": snapshot.mt5_symbol_available,
         "feed_live_by_internal_consistency": snapshot.feed_live_by_internal_consistency,
+        "feed_status": snapshot.feed_status,
+        "feed_staleness_reason": snapshot.feed_staleness_reason,
+        "feed_freshness_diagnostic": snapshot.feed_freshness_diagnostic,
+        "runtime_platform": snapshot.runtime.runtime_platform,
+        "python_executable": snapshot.runtime.python_executable,
+        "is_wsl_detected": snapshot.runtime.is_wsl_detected,
+        "mt5_terminal_info_available": snapshot.runtime.mt5_terminal_info_available,
+        "mt5_terminal_path_detected": snapshot.runtime.mt5_terminal_path_detected,
+        "mt5_version": snapshot.runtime.mt5_version,
+        "recommended_runtime": snapshot.runtime.recommended_runtime,
+        "recommended_command": snapshot.runtime.recommended_command,
         "latest_closed_m1_time": snapshot.latest_closed_time("M1"),
         "latest_closed_m5_time": snapshot.latest_closed_time("M5"),
         "latest_closed_m15_time": snapshot.latest_closed_time("M15"),
@@ -873,7 +1200,10 @@ def _summary_payload(
         "heartbeat_id": heartbeat.get("heartbeat_id"),
         "dry_run": dry_run,
         "dry_run_writes_report_outputs": True,
-        "missing_runtime_logic_reason": missing_runtime_logic,
+        "scanner_block_reason": scanner_block_reason,
+        "missing_runtime_logic_reason": scanner_block_reason
+        if scanner_status == "LIVE_SCANNER_BLOCKED_BY_MISSING_RUNTIME_LOGIC"
+        else None,
         "historical_events_blocked_from_live_alerts": True,
         "no_live_confirmation": NO_LIVE_CONFIRMATION,
     }
@@ -916,8 +1246,14 @@ def _scanner_status_for_snapshot(snapshot: MarketSnapshot, *, heartbeat_only: bo
         return "MT5_UNAVAILABLE", snapshot.error
     if not snapshot.mt5_symbol_available:
         return "SYMBOL_UNAVAILABLE", snapshot.error
-    if not snapshot.feed_live_by_internal_consistency:
-        return "FEED_STALE", snapshot.error
+    if snapshot.feed_status == "FEED_STALE_RUNTIME_MISMATCH_POSSIBLE":
+        return "FEED_STALE_RUNTIME_MISMATCH_POSSIBLE", snapshot.feed_staleness_reason
+    if snapshot.feed_status == "FEED_STALE":
+        return "FEED_STALE", snapshot.feed_staleness_reason or snapshot.error
+    if snapshot.feed_status == "FEED_LIVE_WAITING_M15_CLOSE":
+        return "FEED_LIVE_WAITING_M15_CLOSE", snapshot.feed_staleness_reason
+    if snapshot.feed_status == "FEED_LIVE_WAITING_H1_CLOSE":
+        return "FEED_LIVE_WAITING_H1_CLOSE", snapshot.feed_staleness_reason
     if not snapshot.latest_closed_time("M15"):
         return "FEED_LIVE_WAITING_M15_CLOSE", None
     if not snapshot.latest_closed_time("H1"):
@@ -937,6 +1273,7 @@ def run_live_observation_scanner(
     closed_candle_only: bool = True,
     heartbeat_only: bool = False,
     dry_run: bool = False,
+    mt5_terminal_path: str | None = None,
     mt5_module: Any | None = None,
     setup_detector: Callable[[MarketSnapshot], dict[str, Any] | None] | None = None,
     now: Callable[[], datetime] = utc_now,
@@ -948,11 +1285,12 @@ def run_live_observation_scanner(
         symbol=symbol,
         max_bars=max_bars,
         closed_candle_only=closed_candle_only,
+        mt5_terminal_path=mt5_terminal_path,
         mt5_module=mt5_module,
         now=now,
     )
     runtime_logic_available = setup_detector is not None
-    scanner_status, missing_runtime = _scanner_status_for_snapshot(
+    scanner_status, scanner_block_reason = _scanner_status_for_snapshot(
         snapshot,
         heartbeat_only=heartbeat_only,
         runtime_logic_available=runtime_logic_available,
@@ -1007,7 +1345,7 @@ def run_live_observation_scanner(
         snapshot=snapshot,
         event_appended=event_appended,
         duplicate_event_blocked=duplicate_event_blocked,
-        missing_runtime_logic=missing_runtime,
+        scanner_block_reason=scanner_block_reason,
         live_events=live_events,
         heartbeat=heartbeat,
         dry_run=dry_run,

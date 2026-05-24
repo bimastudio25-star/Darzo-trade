@@ -7,11 +7,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+from dazro_trade.analytics import strategy_2_live_observation_scanner as scanner
 from dazro_trade.analytics.strategy_2_live_observation_scanner import (
     DEFAULT_MAX_BARS,
     MarketSnapshot,
     build_live_observation_event,
     ensure_compatibility_files,
+    diagnose_mt5_feed,
     read_mt5_snapshot,
     run_live_observation_scanner,
 )
@@ -26,13 +28,29 @@ class FakeMT5:
     TIMEFRAME_M15 = "M15"
     TIMEFRAME_H1 = "H1"
 
-    def __init__(self, *, symbol_available: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        symbol_available: bool = True,
+        closed_offsets: dict[str, int] | None = None,
+        missing_timeframes: set[str] | None = None,
+        chronological_order: bool = False,
+    ) -> None:
         self.symbol_available = symbol_available
+        self.closed_offsets = closed_offsets or {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+        self.missing_timeframes = missing_timeframes or set()
+        self.chronological_order = chronological_order
         self.shutdown_called = False
         self.copied: list[tuple[str, str, int, int]] = []
 
-    def initialize(self) -> bool:
+    def initialize(self, *args, **kwargs) -> bool:
         return True
+
+    def terminal_info(self):
+        return SimpleNamespace(path="C:\\Program Files\\MetaTrader 5\\terminal64.exe", trade_allowed=False)
+
+    def version(self):
+        return (500, 1, "test")
 
     def shutdown(self) -> None:
         self.shutdown_called = True
@@ -48,13 +66,23 @@ class FakeMT5:
 
     def copy_rates_from_pos(self, symbol: str, timeframe: str, start_pos: int, count: int):
         self.copied.append((symbol, timeframe, start_pos, count))
-        seconds = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}[timeframe]
+        if timeframe in self.missing_timeframes:
+            return []
+        seconds = self.closed_offsets[timeframe]
         forming_time = int(FIXED_NOW.timestamp())
         closed_time = int((FIXED_NOW - timedelta(seconds=seconds)).timestamp())
-        return [
+        stale_time = int((FIXED_NOW - timedelta(days=7)).timestamp())
+        rows = [
             {"time": forming_time, "open": 11.0, "high": 12.0, "low": 10.0, "close": 11.5},
             {"time": closed_time, "open": 21.0, "high": 22.0, "low": 20.0, "close": 21.5},
         ]
+        if self.chronological_order:
+            return [
+                {"time": stale_time, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5},
+                rows[1],
+                rows[0],
+            ]
+        return rows
 
 
 def fixed_now() -> datetime:
@@ -157,6 +185,23 @@ def test_strategy_2_live_scanner_closed_candle_only():
     assert snapshot.latest_closed["M15"].open == 21.0
     assert snapshot.latest_closed["H1"].open == 21.0
     assert all(call[2] == 0 for call in mt5.copied)
+
+
+def test_strategy_2_live_scanner_selects_latest_timestamps_not_array_start():
+    mt5 = FakeMT5(chronological_order=True)
+    snapshot = read_mt5_snapshot(
+        symbol="XAUUSD",
+        max_bars=dict(DEFAULT_MAX_BARS),
+        closed_candle_only=True,
+        mt5_module=mt5,
+        now=fixed_now,
+    )
+
+    assert snapshot.latest_forming["M1"].open == 11.0
+    assert snapshot.latest_closed["M1"].open == 21.0
+    assert snapshot.latest_forming["M1"].source_position_used == 2
+    assert snapshot.latest_closed["M1"].source_position_used == 1
+    assert snapshot.feed_live_by_internal_consistency is True
 
 
 def test_strategy_2_live_scanner_stale_historical_not_alert_eligible(tmp_path: Path):
@@ -265,3 +310,103 @@ def test_strategy_2_live_scanner_safety_audit(tmp_path: Path):
     assert audit["no_data_xauusd_modification"] is True
     assert audit["no_parameter_tuning"] is True
     assert audit["strategy_status"] == "OBSERVATION_ONLY"
+
+
+def test_strategy_2_live_scanner_platform_diagnostic_fields_present(tmp_path: Path):
+    result = run_live_observation_scanner(
+        symbol="XAUUSD",
+        output_dir=tmp_path,
+        mt5_module=FakeMT5(),
+        now=fixed_now,
+    )
+
+    latest = result.latest_state
+    heartbeat = result.heartbeat
+    for payload in (latest, heartbeat):
+        assert "runtime_platform" in payload
+        assert "python_executable" in payload
+        assert "is_wsl_detected" in payload
+        assert "mt5_terminal_info_available" in payload
+        assert "mt5_terminal_path_detected" in payload
+        assert "mt5_version" in payload
+        assert "feed_staleness_reason" in payload
+        assert "feed_freshness_diagnostic" in payload
+        assert "recommended_command" in payload
+    assert latest["recommended_command"].endswith("python scripts\\run_strategy_2_live_observation_scanner.py --symbol XAUUSD")
+
+
+def test_strategy_2_live_scanner_h1_old_alone_waits_not_stale(tmp_path: Path):
+    mt5 = FakeMT5(closed_offsets={"M1": 60, "M5": 300, "M15": 900, "H1": 5 * 3600})
+    result = run_live_observation_scanner(
+        symbol="XAUUSD",
+        output_dir=tmp_path,
+        mt5_module=mt5,
+        setup_detector=lambda _snapshot: None,
+        now=fixed_now,
+    )
+
+    assert result.scanner_status == "FEED_LIVE_WAITING_H1_CLOSE"
+    assert result.latest_state["feed_staleness_reason"] == "H1_OLD_BUT_M1_M5_M15_FRESH"
+    assert result.latest_state["feed_live_by_internal_consistency"] is True
+
+
+def test_strategy_2_live_scanner_m1_stale_makes_feed_stale(tmp_path: Path):
+    mt5 = FakeMT5(closed_offsets={"M1": 20 * 60, "M5": 300, "M15": 900, "H1": 3600})
+    result = run_live_observation_scanner(
+        symbol="XAUUSD",
+        output_dir=tmp_path,
+        mt5_module=mt5,
+        setup_detector=lambda _snapshot: None,
+        now=fixed_now,
+    )
+
+    assert result.scanner_status == "FEED_STALE"
+    assert result.latest_state["feed_staleness_reason"] == "M1_STALE_RELATIVE_TO_TICK"
+
+
+def test_strategy_2_live_scanner_m15_absent_waiting_m15_not_stale(tmp_path: Path):
+    mt5 = FakeMT5(missing_timeframes={"M15"})
+    result = run_live_observation_scanner(
+        symbol="XAUUSD",
+        output_dir=tmp_path,
+        mt5_module=mt5,
+        setup_detector=lambda _snapshot: None,
+        now=fixed_now,
+    )
+
+    assert result.scanner_status == "FEED_LIVE_WAITING_M15_CLOSE"
+    assert result.latest_state["feed_staleness_reason"] == "M15_CLOSED_CANDLE_NOT_AVAILABLE_YET"
+    assert result.latest_state["feed_live_by_internal_consistency"] is True
+
+
+def test_strategy_2_live_scanner_wsl_stale_runtime_mismatch_status(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(scanner.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    mt5 = FakeMT5(closed_offsets={"M1": 20 * 60, "M5": 300, "M15": 900, "H1": 3600})
+
+    result = run_live_observation_scanner(
+        symbol="XAUUSD",
+        output_dir=tmp_path,
+        mt5_module=mt5,
+        setup_detector=lambda _snapshot: None,
+        now=fixed_now,
+    )
+
+    assert result.scanner_status == "FEED_STALE_RUNTIME_MISMATCH_POSSIBLE"
+    assert result.latest_state["is_wsl_detected"] is True
+    assert "RUNTIME_ENVIRONMENT_MISMATCH_POSSIBLE" in result.latest_state["feed_staleness_reason"]
+
+
+def test_strategy_2_mt5_feed_diagnostic_script_read_only():
+    path = Path("scripts/diagnose_strategy_2_mt5_feed.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            assert not (isinstance(func, ast.Attribute) and func.attr == "order_send")
+            assert not (isinstance(func, ast.Name) and func.id == "order_send")
+
+    result = diagnose_mt5_feed(symbol="XAUUSD", mt5_module=FakeMT5(), now=fixed_now)
+    assert result["safety"]["mt5_read_only"] is True
+    assert result["safety"]["no_order_send"] is True
+    assert result["symbol_selected"] is True
