@@ -17,6 +17,11 @@ from dazro_trade.analytics.strategy_2_live_observation_scanner import (
     read_mt5_snapshot,
     run_live_observation_scanner,
 )
+from dazro_trade.analytics.strategy_2_runtime_detector import (
+    RuntimeCandidate,
+    RuntimeDetectionResult,
+    RuntimeDetectorStatus,
+)
 
 
 FIXED_NOW = datetime(2026, 5, 25, 9, 30, tzinfo=UTC)
@@ -127,6 +132,38 @@ def fake_candidate() -> dict[str, object]:
         "strategy_2_reason_code": "TEST_EXISTING_RUNTIME_LOGIC",
         "setup_description": "Synthetic Strategy 2 observation fixture.",
     }
+
+
+def fake_runtime_candidate() -> RuntimeCandidate:
+    return RuntimeCandidate(
+        symbol="XAUUSD",
+        direction="LONG",
+        candidate_time="2026-05-25T09:15:00Z",
+        H1_reference_level=2344.0,
+        H1_reference_candle_time="2026-05-25T08:00:00Z",
+        H1_dominant_flag=False,
+        M15_reference_level=2350.0,
+        M15_invalidation_level=2350.0,
+        M15_invalidation_happened_first=False,
+        liquidity_side="LOW",
+        sweep_distance=1.0,
+        MAE_entry_candidate=2343.0,
+        MAE_reached=True,
+        reentry_confirmed=True,
+        reentry_inside_H1_range_pips=1.0,
+        strategy_2_reason_code="TEST_RUNTIME_CANDIDATE",
+        setup_description="Synthetic runtime candidate.",
+        theoretical_entry=2344.1,
+        theoretical_SL=2342.0,
+        theoretical_TP1=2345.0,
+        theoretical_TP2=2346.0,
+        theoretical_TP3=2347.0,
+        theoretical_TP4=2348.0,
+        theoretical_RR_TP1=0.4286,
+        theoretical_RR_TP2=0.9048,
+        theoretical_RR_TP3=1.381,
+        theoretical_RR_TP4=1.8571,
+    )
 
 
 def test_strategy_2_live_scanner_no_order_send(tmp_path: Path):
@@ -252,8 +289,11 @@ def test_strategy_2_live_scanner_fresh_event_schema():
 
 
 def test_strategy_2_live_scanner_duplicate_protection(tmp_path: Path):
-    def detector(_snapshot: MarketSnapshot) -> dict[str, object]:
-        return fake_candidate()
+    def detector(_snapshot: MarketSnapshot) -> RuntimeDetectionResult:
+        return RuntimeDetectionResult(
+            RuntimeDetectorStatus.RUNTIME_SETUP_CANDIDATE,
+            candidates=[fake_runtime_candidate()],
+        )
 
     first = run_live_observation_scanner(
         symbol="XAUUSD",
@@ -279,19 +319,41 @@ def test_strategy_2_live_scanner_duplicate_protection(tmp_path: Path):
     assert latest["duplicate_events_blocked"] == 1
 
 
-def test_strategy_2_live_scanner_missing_runtime_logic(tmp_path: Path):
+def test_strategy_2_live_scanner_runtime_no_setup_maps_to_feed_live_no_setup(tmp_path: Path):
     result = run_live_observation_scanner(
         symbol="XAUUSD",
         output_dir=tmp_path,
         mt5_module=FakeMT5(),
+        setup_detector=lambda _snapshot: RuntimeDetectionResult(
+            RuntimeDetectorStatus.RUNTIME_NO_SETUP,
+            block_reason="NO_VALID_CONTAINING_MODEL_RUNTIME_SETUP",
+        ),
+        now=fixed_now,
+    )
+
+    assert result.scanner_status == "FEED_LIVE_NO_SETUP"
+    assert result.event_appended is False
+    assert result.summary["fresh_live_event_generated"] is False
+    assert result.summary["runtime_detector_status"] == "RUNTIME_NO_SETUP"
+    assert (tmp_path / "strategy_2_live_latest_state.json").exists()
+
+
+def test_strategy_2_live_scanner_blocked_runtime_maps_to_missing_runtime_logic(tmp_path: Path):
+    result = run_live_observation_scanner(
+        symbol="XAUUSD",
+        output_dir=tmp_path,
+        mt5_module=FakeMT5(),
+        setup_detector=lambda _snapshot: RuntimeDetectionResult(
+            RuntimeDetectorStatus.RUNTIME_BLOCKED_UNSUPPORTED_CURRENT_LOGIC,
+            block_reason="M1_CLOSED_CANDLES_REQUIRED_FOR_EXISTING_MAE_REENTRY_LOGIC",
+        ),
         now=fixed_now,
     )
 
     assert result.scanner_status == "LIVE_SCANNER_BLOCKED_BY_MISSING_RUNTIME_LOGIC"
     assert result.event_appended is False
-    assert result.summary["fresh_live_event_generated"] is False
-    assert "No existing Strategy 2 runtime detector" in result.summary["missing_runtime_logic_reason"]
-    assert (tmp_path / "strategy_2_live_latest_state.json").exists()
+    assert result.summary["runtime_detector_status"] == "RUNTIME_BLOCKED_UNSUPPORTED_CURRENT_LOGIC"
+    assert result.summary["missing_runtime_logic_reason"] == "M1_CLOSED_CANDLES_REQUIRED_FOR_EXISTING_MAE_REENTRY_LOGIC"
 
 
 def test_strategy_2_live_scanner_safety_audit(tmp_path: Path):

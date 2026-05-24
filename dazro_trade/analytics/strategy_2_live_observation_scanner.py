@@ -12,6 +12,14 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from dazro_trade.analytics.strategy_2_runtime_detector import (
+    RuntimeDetectionResult,
+    RuntimeDetectorStatus,
+    build_runtime_observation_event,
+    detect_strategy_2_runtime_candidates,
+    explain_runtime_block_reason,
+)
+
 
 SCANNER_VERSION = "1.0.0"
 STRATEGY_ID = "strategy_2"
@@ -149,6 +157,8 @@ HEARTBEAT_FIELDS = [
     "feed_freshness_diagnostic",
     "recommended_runtime",
     "recommended_command",
+    "runtime_detector_status",
+    "runtime_block_reason",
     "scanner_status",
     "no_live_confirmation",
     "broker_execution_allowed",
@@ -197,6 +207,7 @@ class MarketSnapshot:
     spread_usd: float | None
     latest_forming: dict[str, ClosedCandle]
     latest_closed: dict[str, ClosedCandle]
+    closed_history: dict[str, list[dict[str, Any]]]
     server_offset_hours_estimate: float | None
     feed_live_by_internal_consistency: bool
     feed_status: str
@@ -394,6 +405,36 @@ def _latest_forming_and_closed_from_rates(rates: Any, timeframe: str, *, closed_
     )
 
 
+def _closed_history_from_rates(rates: Any, timeframe: str, *, closed_candle_only: bool) -> list[dict[str, Any]]:
+    if rates is None or len(rates) == 0:
+        return []
+    indexed_rates = []
+    for index, rate in enumerate(rates):
+        timestamp = _as_float(_rate_value(rate, "time"))
+        if timestamp is None:
+            continue
+        indexed_rates.append((timestamp, index))
+    indexed_rates.sort(key=lambda item: item[0])
+    if closed_candle_only and indexed_rates:
+        indexed_rates = indexed_rates[:-1]
+    history: list[dict[str, Any]] = []
+    for _, index in indexed_rates:
+        candle = _candle_from_rates(rates, timeframe, position=index)
+        if candle.time is None:
+            continue
+        history.append(
+            {
+                "time": candle.time,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "source_position_used": candle.source_position_used,
+            }
+        )
+    return history
+
+
 def _timeframe_constants(mt5_module: Any) -> dict[str, Any]:
     return {
         "M1": getattr(mt5_module, "TIMEFRAME_M1"),
@@ -532,6 +573,7 @@ def read_mt5_snapshot(
             spread_usd=None,
             latest_forming={},
             latest_closed={},
+            closed_history={},
             server_offset_hours_estimate=None,
             feed_live_by_internal_consistency=False,
             feed_status="MT5_UNAVAILABLE",
@@ -553,6 +595,7 @@ def read_mt5_snapshot(
             spread_usd=None,
             latest_forming={},
             latest_closed={},
+            closed_history={},
             server_offset_hours_estimate=None,
             feed_live_by_internal_consistency=False,
             feed_status="MT5_UNAVAILABLE",
@@ -582,6 +625,7 @@ def read_mt5_snapshot(
                 spread_usd=None,
                 latest_forming={},
                 latest_closed={},
+                closed_history={},
                 server_offset_hours_estimate=None,
                 feed_live_by_internal_consistency=False,
                 feed_status="SYMBOL_UNAVAILABLE",
@@ -599,6 +643,7 @@ def read_mt5_snapshot(
 
         latest_forming: dict[str, ClosedCandle] = {}
         latest_closed: dict[str, ClosedCandle] = {}
+        closed_history: dict[str, list[dict[str, Any]]] = {}
         for timeframe, mt5_timeframe in _timeframe_constants(mt5).items():
             rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, max_bars.get(timeframe, DEFAULT_MAX_BARS[timeframe]))
             forming, closed = _latest_forming_and_closed_from_rates(
@@ -608,6 +653,7 @@ def read_mt5_snapshot(
             )
             latest_forming[timeframe] = forming
             latest_closed[timeframe] = closed
+            closed_history[timeframe] = _closed_history_from_rates(rates, timeframe, closed_candle_only=closed_candle_only)
 
         snapshot = MarketSnapshot(
             symbol=symbol,
@@ -619,6 +665,7 @@ def read_mt5_snapshot(
             spread_usd=spread,
             latest_forming=latest_forming,
             latest_closed=latest_closed,
+            closed_history=closed_history,
             server_offset_hours_estimate=_estimate_server_offset_hours(tick_time, current_time),
             feed_live_by_internal_consistency=False,
             feed_status="FEED_STALE",
@@ -641,6 +688,7 @@ def read_mt5_snapshot(
             spread_usd=snapshot.spread_usd,
             latest_forming=snapshot.latest_forming,
             latest_closed=snapshot.latest_closed,
+            closed_history=snapshot.closed_history,
             server_offset_hours_estimate=snapshot.server_offset_hours_estimate,
             feed_live_by_internal_consistency=feed_status in {
                 "FEED_LIVE",
@@ -787,7 +835,15 @@ def build_live_observation_event(
     return {field: event.get(field) for field in LIVE_EVENT_FIELDS}
 
 
-def build_heartbeat(symbol: str, snapshot: MarketSnapshot, scanner_status: str, generated_at: datetime | None = None) -> dict[str, Any]:
+def build_heartbeat(
+    symbol: str,
+    snapshot: MarketSnapshot,
+    scanner_status: str,
+    generated_at: datetime | None = None,
+    *,
+    runtime_detector_status: str | None = None,
+    runtime_block_reason: str | None = None,
+) -> dict[str, Any]:
     if scanner_status not in ALLOWED_STATUSES:
         raise ValueError(f"Unsupported scanner_status: {scanner_status}")
     generated = generated_at or utc_now()
@@ -820,6 +876,8 @@ def build_heartbeat(symbol: str, snapshot: MarketSnapshot, scanner_status: str, 
         "feed_freshness_diagnostic": snapshot.feed_freshness_diagnostic,
         "recommended_runtime": snapshot.runtime.recommended_runtime,
         "recommended_command": snapshot.runtime.recommended_command,
+        "runtime_detector_status": runtime_detector_status,
+        "runtime_block_reason": runtime_block_reason,
         "scanner_status": scanner_status,
         "no_live_confirmation": NO_LIVE_CONFIRMATION,
         "broker_execution_allowed": False,
@@ -1053,6 +1111,8 @@ def latest_state_payload(
     live_events: list[dict[str, Any]],
     total_heartbeats: int,
     duplicate_events_blocked: int,
+    runtime_detector_status: str | None = None,
+    runtime_block_reason: str | None = None,
 ) -> dict[str, Any]:
     latest_event = live_events[-1] if live_events else {}
     return {
@@ -1080,6 +1140,8 @@ def latest_state_payload(
         "feed_freshness_diagnostic": snapshot.feed_freshness_diagnostic,
         "recommended_runtime": snapshot.runtime.recommended_runtime,
         "recommended_command": snapshot.runtime.recommended_command,
+        "runtime_detector_status": runtime_detector_status,
+        "runtime_block_reason": runtime_block_reason,
         "latest_live_event_time": latest_event.get("created_at_utc"),
         "latest_live_signal_id": latest_event.get("signal_id"),
         "total_live_events": len(live_events),
@@ -1168,6 +1230,8 @@ def _summary_payload(
     live_events: list[dict[str, Any]],
     heartbeat: dict[str, Any],
     dry_run: bool,
+    runtime_detector_status: str | None = None,
+    runtime_block_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "generated_at_utc": isoformat_z(generated_at),
@@ -1190,6 +1254,8 @@ def _summary_payload(
         "mt5_version": snapshot.runtime.mt5_version,
         "recommended_runtime": snapshot.runtime.recommended_runtime,
         "recommended_command": snapshot.runtime.recommended_command,
+        "runtime_detector_status": runtime_detector_status,
+        "runtime_block_reason": runtime_block_reason,
         "latest_closed_m1_time": snapshot.latest_closed_time("M1"),
         "latest_closed_m5_time": snapshot.latest_closed_time("M5"),
         "latest_closed_m15_time": snapshot.latest_closed_time("M15"),
@@ -1241,7 +1307,7 @@ def _write_outputs(
     }
 
 
-def _scanner_status_for_snapshot(snapshot: MarketSnapshot, *, heartbeat_only: bool, runtime_logic_available: bool) -> tuple[str, str | None]:
+def _scanner_status_for_snapshot(snapshot: MarketSnapshot, *, heartbeat_only: bool) -> tuple[str, str | None]:
     if not snapshot.mt5_initialized:
         return "MT5_UNAVAILABLE", snapshot.error
     if not snapshot.mt5_symbol_available:
@@ -1260,9 +1326,43 @@ def _scanner_status_for_snapshot(snapshot: MarketSnapshot, *, heartbeat_only: bo
         return "FEED_LIVE_WAITING_H1_CLOSE", None
     if heartbeat_only:
         return "FEED_LIVE_NO_SETUP", None
-    if not runtime_logic_available:
-        return "LIVE_SCANNER_BLOCKED_BY_MISSING_RUNTIME_LOGIC", missing_runtime_logic_reason()
     return "FEED_LIVE_NO_SETUP", None
+
+
+def _normalize_runtime_result(value: Any) -> RuntimeDetectionResult:
+    if isinstance(value, RuntimeDetectionResult):
+        return value
+    if isinstance(value, dict):
+        return RuntimeDetectionResult(
+            RuntimeDetectorStatus.RUNTIME_BLOCKED_UNSUPPORTED_CURRENT_LOGIC,
+            block_reason="LEGACY_DICT_RUNTIME_DETECTOR_RETURN_UNSUPPORTED",
+            diagnostics={"legacy_candidate": value},
+        )
+    if value is None:
+        return RuntimeDetectionResult(RuntimeDetectorStatus.RUNTIME_NO_SETUP, block_reason="NO_RUNTIME_SETUP_CANDIDATE")
+    return RuntimeDetectionResult(
+        RuntimeDetectorStatus.RUNTIME_BLOCKED_UNSUPPORTED_CURRENT_LOGIC,
+        block_reason=f"UNSUPPORTED_RUNTIME_DETECTOR_RETURN_TYPE:{type(value).__name__}",
+    )
+
+
+def _run_runtime_detector(
+    snapshot: MarketSnapshot,
+    *,
+    symbol: str,
+    setup_detector: Callable[[MarketSnapshot], Any] | None,
+) -> RuntimeDetectionResult:
+    if setup_detector is not None:
+        raw = setup_detector(snapshot)
+        return _normalize_runtime_result(raw)
+    return detect_strategy_2_runtime_candidates(
+        symbol=symbol,
+        closed_h1=snapshot.closed_history.get("H1", []),
+        closed_m15=snapshot.closed_history.get("M15", []),
+        closed_m5=snapshot.closed_history.get("M5", []),
+        closed_m1=snapshot.closed_history.get("M1", []),
+        now_context={"as_of_time": snapshot.latest_closed_time("M1") or snapshot.latest_closed_time("M15")},
+    )
 
 
 def run_live_observation_scanner(
@@ -1289,36 +1389,58 @@ def run_live_observation_scanner(
         mt5_module=mt5_module,
         now=now,
     )
-    runtime_logic_available = setup_detector is not None
     scanner_status, scanner_block_reason = _scanner_status_for_snapshot(
         snapshot,
         heartbeat_only=heartbeat_only,
-        runtime_logic_available=runtime_logic_available,
     )
 
     event_appended = False
     duplicate_event_blocked = False
+    runtime_detector_status: str | None = None
+    runtime_block_reason: str | None = None
     live_events = _load_live_events(output_path) if output_path.exists() else []
 
-    if scanner_status == "FEED_LIVE_NO_SETUP" and not heartbeat_only and setup_detector is not None:
-        candidate = setup_detector(snapshot)
-        if candidate:
-            event = build_live_observation_event(
-                symbol=symbol,
-                direction=str(candidate.get("direction") or ""),
-                snapshot=snapshot,
-                candidate=candidate,
-                created_at=generated_at,
-            )
+    if scanner_status == "FEED_LIVE_NO_SETUP" and not heartbeat_only:
+        runtime_result = _run_runtime_detector(snapshot, symbol=symbol, setup_detector=setup_detector)
+        runtime_detector_status = runtime_result.status.value
+        runtime_block_reason = explain_runtime_block_reason(runtime_result)
+        if runtime_result.status == RuntimeDetectorStatus.RUNTIME_SETUP_CANDIDATE:
             existing_ids = _existing_live_signal_ids(output_path) if output_path.exists() else set()
-            if event["signal_id"] in existing_ids:
-                duplicate_event_blocked = True
-            else:
+            for runtime_candidate in runtime_result.candidates:
+                candidate = build_runtime_observation_event(runtime_candidate)
+                event = build_live_observation_event(
+                    symbol=symbol,
+                    direction=str(candidate.get("direction") or runtime_candidate.direction),
+                    snapshot=snapshot,
+                    candidate=candidate,
+                    created_at=generated_at,
+                )
+                if event["signal_id"] in existing_ids:
+                    duplicate_event_blocked = True
+                    continue
                 live_events.append(event)
+                existing_ids.add(str(event["signal_id"]))
                 event_appended = True
-                scanner_status = "FEED_LIVE_SETUP_DETECTED"
+            scanner_status = "FEED_LIVE_SETUP_DETECTED" if event_appended else "FEED_LIVE_NO_SETUP"
+            runtime_block_reason = None if event_appended else runtime_block_reason
+        elif runtime_result.status == RuntimeDetectorStatus.RUNTIME_NO_SETUP:
+            scanner_status = "FEED_LIVE_NO_SETUP"
+        elif runtime_result.status == RuntimeDetectorStatus.RUNTIME_WAITING_M15_CONFIRMATION:
+            scanner_status = "FEED_LIVE_WAITING_M15_CLOSE"
+        elif runtime_result.status == RuntimeDetectorStatus.RUNTIME_WAITING_H1_CONTEXT:
+            scanner_status = "FEED_LIVE_WAITING_H1_CLOSE"
+        else:
+            scanner_status = "LIVE_SCANNER_BLOCKED_BY_MISSING_RUNTIME_LOGIC"
+            scanner_block_reason = runtime_block_reason
 
-    heartbeat = build_heartbeat(symbol, snapshot, scanner_status, generated_at)
+    heartbeat = build_heartbeat(
+        symbol,
+        snapshot,
+        scanner_status,
+        generated_at,
+        runtime_detector_status=runtime_detector_status,
+        runtime_block_reason=runtime_block_reason,
+    )
     total_heartbeats = len(_read_jsonl(output_path / "strategy_2_live_heartbeat.jsonl")) + 1 if output_path.exists() else 1
     duplicate_count_prior = 0
     prior_latest = output_path / "strategy_2_live_latest_state.json"
@@ -1336,6 +1458,8 @@ def run_live_observation_scanner(
         live_events=live_events,
         total_heartbeats=total_heartbeats,
         duplicate_events_blocked=duplicate_count,
+        runtime_detector_status=runtime_detector_status,
+        runtime_block_reason=runtime_block_reason,
     )
     safety = safety_audit(isoformat_z(generated_at) or "")
     summary = _summary_payload(
@@ -1349,6 +1473,8 @@ def run_live_observation_scanner(
         live_events=live_events,
         heartbeat=heartbeat,
         dry_run=dry_run,
+        runtime_detector_status=runtime_detector_status,
+        runtime_block_reason=runtime_block_reason,
     )
     paths: dict[str, str] = {}
     paths = _write_outputs(
